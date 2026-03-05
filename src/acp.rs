@@ -4,9 +4,11 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 /// ACP client for managing agent sessions
 pub struct AcpClient {
@@ -16,6 +18,10 @@ pub struct AcpClient {
     response_rx: mpsc::Receiver<Value>,
     /// Channel for JSON-RPC notifications (messages without an "id" field)
     notification_rx: mpsc::Receiver<Value>,
+    /// Handle to the stdin writer task
+    stdin_task: Option<JoinHandle<()>>,
+    /// Handle to the stdout reader task
+    stdout_task: Option<JoinHandle<()>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,7 +64,7 @@ impl AcpClient {
         let (tx_notifications, notification_rx) = mpsc::channel::<Value>(100);
 
         // Spawn task to write to stdin
-        tokio::spawn(async move {
+        let stdin_task = tokio::spawn(async move {
             let mut stdin = stdin;
             while let Some(line) = rx_commands.recv().await {
                 if let Err(e) = stdin.write_all(line.as_bytes()).await {
@@ -70,10 +76,12 @@ impl AcpClient {
                     break;
                 }
             }
+            // Explicitly drop stdin to close it, signaling EOF to the child process
+            drop(stdin);
         });
 
         // Spawn task to read from stdout and route messages to appropriate channels
-        tokio::spawn(async move {
+        let stdout_task = tokio::spawn(async move {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -96,7 +104,14 @@ impl AcpClient {
             }
         });
 
-        Ok(Self { child, tx, response_rx, notification_rx })
+        Ok(Self {
+            child,
+            tx,
+            response_rx,
+            notification_rx,
+            stdin_task: Some(stdin_task),
+            stdout_task: Some(stdout_task),
+        })
     }
 
     /// Send a JSON-RPC request and wait for response
@@ -216,10 +231,73 @@ impl AcpClient {
     pub async fn recv(&mut self) -> Result<Value> {
         self.notification_rx.recv().await.context("Failed to receive notification")
     }
+
+    /// Gracefully shutdown the ACP client.
+    ///
+    /// This closes stdin (signaling EOF to the child), waits for the child process
+    /// to exit (with a timeout), and cleans up background tasks.
+    pub async fn shutdown(&mut self) -> Result<()> {
+        tracing::debug!("Shutting down ACP client");
+
+        // Drop the sender to close the stdin channel, which will cause the stdin
+        // task to close stdin, signaling EOF to the child process
+        // Note: We can't actually drop self.tx since we only have &mut self,
+        // but we can close it by dropping a clone after sending nothing
+        // Actually, let's just abort the tasks and kill the process
+
+        // Abort the stdin and stdout tasks
+        if let Some(task) = self.stdin_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.stdout_task.take() {
+            task.abort();
+        }
+
+        // Try to kill the child process gracefully first, then forcefully
+        // First, try SIGTERM via start_kill()
+        if let Err(e) = self.child.start_kill() {
+            tracing::warn!("Failed to send kill signal to child: {}", e);
+        }
+
+        // Wait for the child to exit with a timeout
+        let wait_result = tokio::time::timeout(
+            Duration::from_secs(5),
+            self.child.wait()
+        ).await;
+
+        match wait_result {
+            Ok(Ok(status)) => {
+                tracing::debug!("ACP child process exited with status: {}", status);
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Error waiting for ACP child process: {}", e);
+            }
+            Err(_) => {
+                // Timeout - process didn't exit, try to kill it more forcefully
+                tracing::warn!("ACP child process did not exit within timeout, killing forcefully");
+                if let Err(e) = self.child.kill().await {
+                    tracing::error!("Failed to forcefully kill ACP child: {}", e);
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Drop for AcpClient {
     fn drop(&mut self) {
-        let _ = self.child.start_kill();
+        // Abort background tasks to prevent them from running after drop
+        if let Some(task) = self.stdin_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.stdout_task.take() {
+            task.abort();
+        }
+
+        // Initiate process termination (can't wait in Drop since it's not async)
+        if let Err(e) = self.child.start_kill() {
+            tracing::warn!("Failed to initiate kill of ACP child process: {}", e);
+        }
     }
 }

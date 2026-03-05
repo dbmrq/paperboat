@@ -3,6 +3,69 @@
 //! This module contains shared types used by the MCP server for communication
 //! between the orchestrator agent and the main application.
 
+/// Request sent from MCP server to the app via Unix socket.
+///
+/// Wraps a tool call with a unique request ID for response correlation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolRequest {
+    /// Unique identifier for correlating responses
+    pub request_id: String,
+    /// The actual tool call
+    pub tool_call: ToolCall,
+}
+
+/// Response sent from the app back to the MCP server via Unix socket.
+///
+/// Contains the result of executing a tool call, correlated by request ID.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolResponse {
+    /// Request ID this response corresponds to
+    pub request_id: String,
+    /// Whether the operation succeeded
+    pub success: bool,
+    /// Human-readable summary of what was done
+    pub summary: String,
+    /// Optional list of files that were modified
+    pub files_modified: Option<Vec<String>>,
+    /// Optional error message if the operation failed
+    pub error: Option<String>,
+}
+
+impl ToolResponse {
+    /// Create a successful response
+    pub fn success(request_id: String, summary: String) -> Self {
+        Self {
+            request_id,
+            success: true,
+            summary,
+            files_modified: None,
+            error: None,
+        }
+    }
+
+    /// Create a successful response with file list
+    pub fn success_with_files(request_id: String, summary: String, files: Vec<String>) -> Self {
+        Self {
+            request_id,
+            success: true,
+            summary,
+            files_modified: Some(files),
+            error: None,
+        }
+    }
+
+    /// Create a failure response
+    pub fn failure(request_id: String, error: String) -> Self {
+        Self {
+            request_id,
+            success: false,
+            summary: String::new(),
+            files_modified: None,
+            error: Some(error),
+        }
+    }
+}
+
 /// Tool call from the orchestrator agent.
 ///
 /// Represents the different operations that can be requested by the orchestrator

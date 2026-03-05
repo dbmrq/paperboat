@@ -3,17 +3,15 @@
 use super::error::{
     internal_error, invalid_params_error, invalid_request_error, method_not_found_error,
 };
-use super::socket::send_to_socket_with_reconnect;
-use super::types::ToolCall;
+use super::socket::send_request_and_wait;
+use super::types::{ToolCall, ToolRequest};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use tokio::net::UnixStream;
 
 /// Handle a JSON-RPC request
 pub(crate) async fn handle_request(
     request: &Value,
-    socket: &mut UnixStream,
     socket_path: &PathBuf,
 ) -> Result<Option<Value>> {
     let id = request.get("id").cloned();
@@ -104,7 +102,7 @@ pub(crate) async fn handle_request(
                 "result": tools
             })))
         }
-        "tools/call" => handle_tool_call(request, id, socket, socket_path).await,
+        "tools/call" => handle_tool_call(request, id, socket_path).await,
         // Handle notifications (no id) - just log and ignore
         _ if id.is_none() => {
             tracing::debug!("Ignoring notification with method: {}", method);
@@ -126,7 +124,6 @@ pub(crate) async fn handle_request(
 async fn handle_tool_call(
     request: &Value,
     id: Option<Value>,
-    socket: &mut UnixStream,
     socket_path: &PathBuf,
 ) -> Result<Option<Value>> {
     // Validate params structure
@@ -227,41 +224,28 @@ async fn handle_tool_call(
 
     eprintln!("🔧 MCP Tool call: {:?}", tool_call);
 
-    // Send the tool call to the app via Unix socket with error handling
-    let message = serde_json::to_string(&tool_call)?;
-    eprintln!("📨 Sending to app: {}", message);
+    // Create request with unique ID for correlation
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let tool_request = ToolRequest {
+        request_id: request_id.clone(),
+        tool_call: tool_call.clone(),
+    };
 
-    if let Err(e) = send_to_socket_with_reconnect(socket, socket_path, &message).await {
-        tracing::error!("Failed to send tool call to socket: {}", e);
-        return Ok(Some(internal_error(
-            id,
-            "socket communication",
-            &e.to_string(),
-        )));
-    }
-
-    // Return helpful response that guides the next step
-    let response_text = match &tool_call {
-        ToolCall::Decompose { task } => {
-            format!("✓ Spawned planner agent to break down task: \"{}\"\n\nThe planner will create a detailed plan with subtasks. Once the plan is ready, use implement() for each subtask.", task)
-        }
-        ToolCall::Implement { task } => {
-            format!("✓ Spawned implementer agent for task: \"{}\"\n\nThe implementer has full code editing access and will complete this task. You can continue with other tasks or call complete() when all work is done.", task)
-        }
-        ToolCall::Complete { success, message } => {
-            if *success {
-                format!(
-                    "✓ All tasks completed successfully!\n\nSummary: {}",
-                    message.as_deref().unwrap_or("Work finished")
-                )
-            } else {
-                format!(
-                    "✗ Tasks completed with failures.\n\nDetails: {}",
-                    message.as_deref().unwrap_or("Some tasks failed")
-                )
-            }
+    // Send request and wait for response from the app
+    let response = match send_request_and_wait(socket_path, &tool_request).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!("Failed to get response from app: {}", e);
+            return Ok(Some(internal_error(
+                id,
+                "socket communication",
+                &e.to_string(),
+            )));
         }
     };
+
+    // Build response text based on actual result from the app
+    let response_text = build_response_text(&tool_call, &response);
 
     let result = json!({
         "content": [
@@ -277,5 +261,92 @@ async fn handle_tool_call(
         "id": id,
         "result": result
     })))
+}
+
+/// Build a helpful response message based on the tool call and app response
+fn build_response_text(
+    tool_call: &ToolCall,
+    response: &super::types::ToolResponse,
+) -> String {
+    match tool_call {
+        ToolCall::Decompose { task } => {
+            if response.success {
+                format!(
+                    "✅ Decomposition complete for: \"{}\"\n\n\
+                     ## Summary\n\
+                     {}\n\n\
+                     ## Next Steps\n\
+                     The subtasks have been planned and executed. \
+                     Continue with any remaining tasks or call complete() when done.",
+                    task, response.summary
+                )
+            } else {
+                format!(
+                    "❌ Decomposition failed for: \"{}\"\n\n\
+                     ## Error\n\
+                     {}\n\n\
+                     ## Next Steps\n\
+                     Review the error and decide whether to retry or call complete(success=false).",
+                    task,
+                    response.error.as_deref().unwrap_or("Unknown error")
+                )
+            }
+        }
+        ToolCall::Implement { task } => {
+            if response.success {
+                let files_section = if let Some(files) = &response.files_modified {
+                    if files.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "\n\n## Files Modified\n{}",
+                            files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
+                        )
+                    }
+                } else {
+                    String::new()
+                };
+
+                format!(
+                    "✅ Implementation complete: \"{}\"\n\n\
+                     ## Summary\n\
+                     {}{}\n\n\
+                     ## Next Steps\n\
+                     If you have more independent tasks, call implement() for each. \
+                     You can call multiple implement() tools in the same turn to run them concurrently. \
+                     When all work is done, call complete(success=true).",
+                    task, response.summary, files_section
+                )
+            } else {
+                format!(
+                    "❌ Implementation failed: \"{}\"\n\n\
+                     ## Error\n\
+                     {}\n\n\
+                     ## Next Steps\n\
+                     Review the error and decide whether to retry, decompose the task, \
+                     or call complete(success=false).",
+                    task,
+                    response.error.as_deref().unwrap_or("Unknown error")
+                )
+            }
+        }
+        ToolCall::Complete { success, message } => {
+            if *success {
+                format!(
+                    "✅ All tasks completed successfully!\n\n\
+                     ## Summary\n\
+                     {}",
+                    message.as_deref().unwrap_or("Work finished")
+                )
+            } else {
+                format!(
+                    "⚠️ Tasks completed with issues.\n\n\
+                     ## Details\n\
+                     {}",
+                    message.as_deref().unwrap_or("Some tasks encountered problems")
+                )
+            }
+        }
+    }
 }
 

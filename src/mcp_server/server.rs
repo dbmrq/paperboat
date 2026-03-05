@@ -2,37 +2,43 @@
 //!
 //! Provides decompose, implement, and complete tools via JSON-RPC over stdin/stdout.
 //! Communicates tool calls back to the main app via a Unix socket.
+//!
+//! The server supports concurrent tool calls: each tool call opens its own socket
+//! connection to the app, sends the request, and waits for a response. This allows
+//! the orchestrator to make multiple parallel tool calls.
 
 use super::error::{internal_error, parse_error};
 use super::handlers::handle_request;
-use super::socket::{connect_with_retry, send_response};
-use anyhow::{Context, Result};
+use super::socket::send_response;
+use anyhow::Result;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::Mutex;
 
 /// Run the MCP server in stdio mode
 ///
 /// This is called when the binary is invoked with --mcp-server flag.
 /// It reads JSON-RPC requests from stdin, writes responses to stdout,
 /// and sends tool calls to the app via a Unix socket.
+///
+/// Tool calls are handled concurrently - each spawns a task that opens its own
+/// socket connection, sends the request, waits for the response, and sends
+/// the MCP response back to stdout.
 pub async fn run_stdio_server(socket_path: PathBuf) -> Result<()> {
     eprintln!(
-        "🔌 MCP server starting, connecting to socket: {:?}",
+        "🔌 MCP server starting with socket path: {:?}",
         socket_path
     );
 
-    // Connect to the app's Unix socket with retry logic
-    let mut socket = connect_with_retry(&socket_path)
-        .await
-        .context("Failed to connect to app socket after retries")?;
-
     let stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
+    let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
     let reader = BufReader::new(stdin);
     let mut lines = reader.lines();
+    let socket_path = Arc::new(socket_path);
 
-    eprintln!("✅ MCP server started and connected");
+    eprintln!("✅ MCP server started");
 
     loop {
         // Read the next line, handling stdin errors gracefully
@@ -66,37 +72,45 @@ pub async fn run_stdio_server(socket_path: PathBuf) -> Result<()> {
                     input_preview
                 );
                 let error_response = parse_error(&e.to_string(), Some(input_preview));
-                if let Err(send_err) = send_response(&mut stdout, &error_response).await {
+                let mut stdout = stdout.lock().await;
+                if let Err(send_err) = send_response(&mut *stdout, &error_response).await {
                     tracing::error!("❌ Failed to send parse error response: {}", send_err);
                 }
                 continue;
             }
         };
 
-        // Handle the request, catching any errors
-        let response = match handle_request(&request, &mut socket, &socket_path).await {
-            Ok(resp) => resp,
-            Err(e) => {
-                let id = request.get("id").cloned();
-                let method = request
-                    .get("method")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("unknown");
-                tracing::error!("❌ Error handling request: {}. Method: {}", e, method);
-                Some(internal_error(
-                    id,
-                    &format!("handling {} request", method),
-                    &e.to_string(),
-                ))
-            }
-        };
+        // Spawn a task to handle the request concurrently
+        // This allows multiple tool calls to be processed in parallel
+        let stdout_clone = Arc::clone(&stdout);
+        let socket_path_clone = Arc::clone(&socket_path);
+        tokio::spawn(async move {
+            // Handle the request, catching any errors
+            let response = match handle_request(&request, &socket_path_clone).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let id = request.get("id").cloned();
+                    let method = request
+                        .get("method")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("unknown");
+                    tracing::error!("❌ Error handling request: {}. Method: {}", e, method);
+                    Some(internal_error(
+                        id,
+                        &format!("handling {} request", method),
+                        &e.to_string(),
+                    ))
+                }
+            };
 
-        // Send the response if there is one
-        if let Some(resp) = response {
-            if let Err(e) = send_response(&mut stdout, &resp).await {
-                tracing::error!("❌ Failed to send response: {}. Continuing...", e);
+            // Send the response if there is one
+            if let Some(resp) = response {
+                let mut stdout = stdout_clone.lock().await;
+                if let Err(e) = send_response(&mut *stdout, &resp).await {
+                    tracing::error!("❌ Failed to send response: {}. Continuing...", e);
+                }
             }
-        }
+        });
     }
 
     Ok(())
@@ -271,24 +285,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_initialize_returns_correct_protocol_version() {
-        // Create a mock socket path and socket
+        // For non-tool-call methods, we don't need a real socket - just a dummy path
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        // Spawn a task to accept the connection
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        // Give listener time to start
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         let request = make_json_rpc_request(1, "initialize", json!({}));
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
@@ -298,9 +300,6 @@ mod tests {
         assert_eq!(resp["result"]["protocolVersion"], "2024-11-05");
         assert!(resp["result"]["capabilities"]["tools"].is_object());
         assert_eq!(resp["result"]["serverInfo"]["name"], "villalobos-orchestrator");
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     // ========================================================================
@@ -311,19 +310,9 @@ mod tests {
     async fn test_tools_list_returns_all_three_tools() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         let request = make_json_rpc_request(2, "tools/list", json!({}));
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
@@ -340,28 +329,15 @@ mod tests {
         assert!(tool_names.contains(&"decompose"));
         assert!(tool_names.contains(&"implement"));
         assert!(tool_names.contains(&"complete"));
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[tokio::test]
     async fn test_tools_list_has_correct_schemas() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         let request = make_json_rpc_request(3, "tools/list", json!({}));
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
@@ -384,9 +360,6 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("success")));
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     // ========================================================================
@@ -397,19 +370,9 @@ mod tests {
     async fn test_unknown_method_with_id_returns_error() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         let request = make_json_rpc_request(4, "nonexistent/method", json!({}));
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
@@ -419,25 +382,12 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("nonexistent/method"));
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[tokio::test]
     async fn test_notification_without_id_is_ignored() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         // Notification (no id field)
         let request = json!({
@@ -445,67 +395,43 @@ mod tests {
             "method": "some/notification",
             "params": {}
         });
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
         // Notifications should return None
         assert!(response.is_none());
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[tokio::test]
     async fn test_request_missing_method_returns_error() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         let request = json!({
             "jsonrpc": "2.0",
             "id": 5,
             "params": {}
         });
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_REQUEST);
         assert!(resp["error"]["message"].as_str().unwrap().contains("method"));
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     // ========================================================================
     // Tool Call Validation Tests
+    // Note: These tests validate parameter parsing BEFORE socket communication,
+    // so they don't need a real socket - validation errors are returned directly.
     // ========================================================================
 
     #[tokio::test]
     async fn test_tools_call_missing_params_returns_error() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         // tools/call without params
         let request = json!({
@@ -513,31 +439,18 @@ mod tests {
             "id": 10,
             "method": "tools/call"
         });
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_REQUEST);
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[tokio::test]
     async fn test_tools_call_missing_name_returns_error() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         let request = make_json_rpc_request(
             11,
@@ -546,31 +459,18 @@ mod tests {
                 "arguments": {"task": "test"}
             }),
         );
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_PARAMS);
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[tokio::test]
     async fn test_tools_call_missing_arguments_returns_error() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         let request = make_json_rpc_request(
             12,
@@ -579,87 +479,48 @@ mod tests {
                 "name": "decompose"
             }),
         );
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_PARAMS);
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[tokio::test]
     async fn test_decompose_missing_task_returns_error() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         let request = make_tool_call_request(13, "decompose", json!({}));
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_PARAMS);
         assert!(resp["error"]["data"]["tool"].as_str().unwrap() == "decompose");
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[tokio::test]
     async fn test_implement_missing_task_returns_error() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         let request = make_tool_call_request(14, "implement", json!({}));
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_PARAMS);
         assert!(resp["error"]["data"]["tool"].as_str().unwrap() == "implement");
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[tokio::test]
     async fn test_complete_missing_success_returns_error() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         let request = make_tool_call_request(
             15,
@@ -668,32 +529,19 @@ mod tests {
                 "message": "done"
             }),
         );
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_PARAMS);
         assert!(resp["error"]["data"]["tool"].as_str().unwrap() == "complete");
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[tokio::test]
     async fn test_unknown_tool_returns_error() {
         let socket_path =
             std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-
-        let socket_path_clone = socket_path.clone();
-        tokio::spawn(async move {
-            let _ = listener.accept().await;
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let mut socket = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
 
         let request = make_tool_call_request(
             16,
@@ -702,7 +550,7 @@ mod tests {
                 "arg": "value"
             }),
         );
-        let response = handle_request(&request, &mut socket, &socket_path_clone)
+        let response = handle_request(&request, &socket_path)
             .await
             .unwrap();
 
@@ -714,9 +562,6 @@ mod tests {
                 .unwrap()
                 == "nonexistent_tool"
         );
-
-        // Cleanup
-        let _ = std::fs::remove_file(&socket_path);
     }
 }
 

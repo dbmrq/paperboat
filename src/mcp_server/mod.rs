@@ -10,5 +10,5 @@ mod types;
 
 // Re-export for backward compatibility and easy access
 pub use server::run_stdio_server;
-pub use types::ToolCall;
+pub use types::{ToolCall, ToolRequest, ToolResponse};
 

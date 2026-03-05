@@ -1,9 +1,13 @@
 mod acp;
 mod app;
+mod config;
+mod error;
 mod mcp_server;
+mod models;
 mod types;
 
 use anyhow::Result;
+use models::{discover_models, ModelConfig};
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -55,9 +59,30 @@ async fn main() -> Result<()> {
 
     tracing::info!("Starting orchestrator with goal: {}", goal);
 
+    // Discover available models from auggie
+    tracing::info!("🔍 Discovering available models...");
+    let available_models = discover_models().await?;
+    tracing::info!(
+        "📋 Available models: {:?}",
+        available_models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>()
+    );
+
+    // Create model configuration with sensible defaults
+    let model_config = ModelConfig::new(available_models);
+    model_config.validate()?;
+    tracing::info!(
+        "🎯 Model configuration: orchestrator={}, planner={}, implementer={}",
+        model_config.orchestrator_model,
+        model_config.planner_model,
+        model_config.implementer_model
+    );
+
     // Run the orchestrator
-    let mut app = app::App::new().await?;
+    let mut app = app::App::new(model_config).await?;
     let result = app.run(&goal).await?;
+
+    // Gracefully shutdown all processes
+    app.shutdown().await?;
 
     if result.success {
         println!("\n✅ Task completed successfully!");

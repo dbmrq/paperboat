@@ -1,10 +1,11 @@
 //! Unix socket communication utilities for the MCP server.
 
-use anyhow::Result;
+use super::types::{ToolRequest, ToolResponse};
+use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 /// Connect to Unix socket with retry logic
@@ -43,27 +44,37 @@ pub(crate) async fn send_response(stdout: &mut tokio::io::Stdout, response: &Val
     Ok(())
 }
 
-/// Send data to socket, attempting reconnection on failure
-pub(crate) async fn send_to_socket_with_reconnect(
-    socket: &mut UnixStream,
+/// Send a tool request to the app and wait for the response.
+///
+/// This opens a new connection for each request to allow concurrent tool calls.
+/// The app will process the request and send back a ToolResponse.
+pub(crate) async fn send_request_and_wait(
     socket_path: &PathBuf,
-    message: &str,
-) -> Result<()> {
-    // First attempt
-    if send_to_socket(socket, message).await.is_ok() {
-        return Ok(());
-    }
+    request: &ToolRequest,
+) -> Result<ToolResponse> {
+    // Connect to app socket
+    let mut stream = connect_with_retry(socket_path).await?;
 
-    // Reconnect and retry
-    tracing::warn!("Socket write failed, reconnecting...");
-    *socket = UnixStream::connect(socket_path).await?;
-    send_to_socket(socket, message).await
-}
+    // Send the request
+    let request_json = serde_json::to_string(request)?;
+    eprintln!("📨 Sending to app: {}", request_json);
+    stream.write_all(request_json.as_bytes()).await?;
+    stream.write_all(b"\n").await?;
+    stream.flush().await?;
 
-pub(crate) async fn send_to_socket(socket: &mut UnixStream, message: &str) -> Result<()> {
-    socket.write_all(message.as_bytes()).await?;
-    socket.write_all(b"\n").await?;
-    socket.flush().await?;
-    Ok(())
+    // Wait for response
+    let mut reader = BufReader::new(stream);
+    let mut response_line = String::new();
+    reader
+        .read_line(&mut response_line)
+        .await
+        .context("Failed to read response from app")?;
+
+    eprintln!("📥 Received from app: {}", response_line.trim());
+
+    let response: ToolResponse =
+        serde_json::from_str(&response_line).context("Failed to parse ToolResponse from app")?;
+
+    Ok(response)
 }
 
