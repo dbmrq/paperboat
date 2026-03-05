@@ -66,9 +66,9 @@ impl ToolResponse {
     }
 }
 
-/// Tool call from the orchestrator agent.
+/// Tool call from an agent.
 ///
-/// Represents the different operations that can be requested by the orchestrator
+/// Represents the different operations that can be requested by agents
 /// via the MCP protocol. These calls are sent from the MCP server to the main
 /// application via a Unix socket.
 ///
@@ -77,6 +77,7 @@ impl ToolResponse {
 /// - `Decompose` - Request to break down a task into smaller subtasks
 /// - `Implement` - Request to implement a specific task
 /// - `Complete` - Signal that the orchestrator has finished processing
+/// - `WritePlan` - Write a structured plan (planner agent only)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ToolCall {
     /// Request to decompose a task into subtasks.
@@ -89,12 +90,30 @@ pub enum ToolCall {
         /// The task description to implement.
         task: String,
     },
-    /// Signal completion of the orchestrator's work.
+    /// Signal completion of an agent's work.
     Complete {
-        /// Whether the orchestration was successful.
+        /// Whether the work was successful.
         success: bool,
         /// Optional message providing details about the completion.
         message: Option<String>,
     },
+    /// Write a structured plan (used by planner agents).
+    /// This stores the plan for the orchestrator to retrieve.
+    WritePlan {
+        /// The structured plan content.
+        plan: String,
+    },
+}
+
+impl ToolCall {
+    /// Returns the type of tool call as a string.
+    pub fn tool_type(&self) -> &'static str {
+        match self {
+            ToolCall::Decompose { .. } => "decompose",
+            ToolCall::Implement { .. } => "implement",
+            ToolCall::Complete { .. } => "complete",
+            ToolCall::WritePlan { .. } => "write_plan",
+        }
+    }
 }
 

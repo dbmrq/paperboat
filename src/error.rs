@@ -25,17 +25,17 @@ pub enum OrchestratorError {
 /// Types of operations that can time out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeoutOperation {
-    /// Waiting for a plan from a planner session.
-    WaitForPlan,
-    /// Waiting for a session to complete (implementer finishing work).
-    WaitForSessionComplete,
+    /// Waiting for a session to complete (any agent type).
+    WaitForSession,
+    /// Waiting for an ACP request/response (e.g., session/new, initialize).
+    AcpRequest,
 }
 
 impl fmt::Display for TimeoutOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TimeoutOperation::WaitForPlan => write!(f, "waiting for plan"),
-            TimeoutOperation::WaitForSessionComplete => write!(f, "waiting for session completion"),
+            TimeoutOperation::WaitForSession => write!(f, "waiting for session"),
+            TimeoutOperation::AcpRequest => write!(f, "waiting for ACP response"),
         }
     }
 }
@@ -81,29 +81,57 @@ impl From<anyhow::Error> for OrchestratorError {
 /// Configuration for timeout durations.
 #[derive(Debug, Clone)]
 pub struct TimeoutConfig {
-    /// Timeout for waiting for a plan from a planner session.
-    /// Default: 5 minutes.
-    pub plan_timeout: Duration,
-    /// Timeout for waiting for a session to complete (e.g., implementer finishing).
-    /// Default: 30 minutes.
-    pub session_complete_timeout: Duration,
+    /// Timeout for waiting for any session to complete.
+    /// Default: 30 minutes. Env: VILLALOBOS_SESSION_TIMEOUT
+    pub session_timeout: Duration,
+
+    /// Timeout for ACP request/response (e.g., session/new, initialize).
+    /// Default: 60 seconds. Env: VILLALOBOS_REQUEST_TIMEOUT
+    pub request_timeout: Duration,
 }
 
 impl Default for TimeoutConfig {
     fn default() -> Self {
-        Self {
-            plan_timeout: Duration::from_secs(5 * 60),           // 5 minutes
-            session_complete_timeout: Duration::from_secs(30 * 60), // 30 minutes
-        }
+        Self::from_env()
     }
 }
 
 impl TimeoutConfig {
+    /// Default session timeout in seconds (30 minutes)
+    const DEFAULT_SESSION_TIMEOUT_SECS: u64 = 30 * 60;
+
+    /// Default request timeout in seconds (60 seconds)
+    const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
+
     /// Create a new TimeoutConfig with custom durations.
-    pub fn new(plan_timeout: Duration, session_complete_timeout: Duration) -> Self {
+    pub fn new(session_timeout: Duration, request_timeout: Duration) -> Self {
         Self {
-            plan_timeout,
-            session_complete_timeout,
+            session_timeout,
+            request_timeout,
+        }
+    }
+
+    /// Create a TimeoutConfig from environment variables.
+    ///
+    /// Supported environment variables:
+    /// - `VILLALOBOS_SESSION_TIMEOUT`: Session timeout in seconds (default: 1800)
+    /// - `VILLALOBOS_REQUEST_TIMEOUT`: ACP request timeout in seconds (default: 60)
+    pub fn from_env() -> Self {
+        let session_timeout = std::env::var("VILLALOBOS_SESSION_TIMEOUT")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(Duration::from_secs)
+            .unwrap_or_else(|| Duration::from_secs(Self::DEFAULT_SESSION_TIMEOUT_SECS));
+
+        let request_timeout = std::env::var("VILLALOBOS_REQUEST_TIMEOUT")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(Duration::from_secs)
+            .unwrap_or_else(|| Duration::from_secs(Self::DEFAULT_REQUEST_TIMEOUT_SECS));
+
+        Self {
+            session_timeout,
+            request_timeout,
         }
     }
 
@@ -111,8 +139,8 @@ impl TimeoutConfig {
     /// Useful for debugging or long-running tasks.
     pub fn no_timeout() -> Self {
         Self {
-            plan_timeout: Duration::MAX,
-            session_complete_timeout: Duration::MAX,
+            session_timeout: Duration::MAX,
+            request_timeout: Duration::MAX,
         }
     }
 }
@@ -123,48 +151,56 @@ mod tests {
 
     #[test]
     fn test_timeout_config_default() {
+        // Note: This tests the from_env() path; env vars may affect this
         let config = TimeoutConfig::default();
-        assert_eq!(config.plan_timeout, Duration::from_secs(300));
-        assert_eq!(config.session_complete_timeout, Duration::from_secs(1800));
+        // Defaults without env vars set
+        assert!(config.session_timeout.as_secs() > 0);
+        assert!(config.request_timeout.as_secs() > 0);
     }
 
     #[test]
     fn test_timeout_config_custom() {
         let config = TimeoutConfig::new(
-            Duration::from_secs(60),
             Duration::from_secs(120),
+            Duration::from_secs(30),
         );
-        assert_eq!(config.plan_timeout, Duration::from_secs(60));
-        assert_eq!(config.session_complete_timeout, Duration::from_secs(120));
+        assert_eq!(config.session_timeout, Duration::from_secs(120));
+        assert_eq!(config.request_timeout, Duration::from_secs(30));
     }
 
     #[test]
     fn test_timeout_config_no_timeout() {
         let config = TimeoutConfig::no_timeout();
-        assert_eq!(config.plan_timeout, Duration::MAX);
-        assert_eq!(config.session_complete_timeout, Duration::MAX);
+        assert_eq!(config.session_timeout, Duration::MAX);
+        assert_eq!(config.request_timeout, Duration::MAX);
     }
 
     #[test]
     fn test_timeout_error_display() {
         let error = OrchestratorError::Timeout {
-            operation: TimeoutOperation::WaitForPlan,
+            operation: TimeoutOperation::WaitForSession,
             duration: Duration::from_secs(300),
             context: Some("session-123".to_string()),
         };
         let display = format!("{}", error);
         assert!(display.contains("300"));
-        assert!(display.contains("waiting for plan"));
+        assert!(display.contains("waiting for session"));
         assert!(display.contains("session-123"));
     }
 
     #[test]
     fn test_timeout_operation_display() {
-        assert_eq!(format!("{}", TimeoutOperation::WaitForPlan), "waiting for plan");
         assert_eq!(
-            format!("{}", TimeoutOperation::WaitForSessionComplete),
-            "waiting for session completion"
+            format!("{}", TimeoutOperation::WaitForSession),
+            "waiting for session"
         );
+    }
+
+    #[test]
+    fn test_timeout_config_constants() {
+        // Verify the default constants are reasonable
+        assert_eq!(TimeoutConfig::DEFAULT_SESSION_TIMEOUT_SECS, 30 * 60);
+        assert_eq!(TimeoutConfig::DEFAULT_REQUEST_TIMEOUT_SECS, 60);
     }
 }
 

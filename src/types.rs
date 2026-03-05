@@ -9,18 +9,28 @@ pub struct TaskResult {
     pub message: Option<String>,
 }
 
-/// A plan entry from ACP plan updates
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PlanEntry {
-    pub content: String,
-    pub priority: String,
-    pub status: String,
+/// Output collected from an agent session (planner, implementer, etc.)
+/// Contains all message chunks concatenated together.
+#[derive(Debug, Clone, Default)]
+pub struct SessionOutput {
+    /// The full text output from the agent
+    pub text: String,
 }
 
-/// A complete plan from ACP
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Plan {
-    pub entries: Vec<PlanEntry>,
+impl SessionOutput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append a message chunk to the output
+    pub fn append(&mut self, chunk: &str) {
+        self.text.push_str(chunk);
+    }
+
+    /// Check if there's any output
+    pub fn is_empty(&self) -> bool {
+        self.text.trim().is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -105,128 +115,29 @@ mod tests {
     }
 
     // ========================================================================
-    // PlanEntry Tests
+    // SessionOutput Tests
     // ========================================================================
 
     #[test]
-    fn test_plan_entry_deserialization() {
-        let json = json!({
-            "content": "Implement user authentication",
-            "priority": "high",
-            "status": "not_started"
-        });
-        let entry: PlanEntry = serde_json::from_value(json).unwrap();
-
-        assert_eq!(entry.content, "Implement user authentication");
-        assert_eq!(entry.priority, "high");
-        assert_eq!(entry.status, "not_started");
+    fn test_session_output_new() {
+        let output = SessionOutput::new();
+        assert!(output.is_empty());
+        assert_eq!(output.text, "");
     }
 
     #[test]
-    fn test_plan_entry_various_statuses() {
-        for status in ["not_started", "in_progress", "complete", "blocked"] {
-            let json = json!({
-                "content": "Task",
-                "priority": "medium",
-                "status": status
-            });
-            let entry: PlanEntry = serde_json::from_value(json).unwrap();
-            assert_eq!(entry.status, status);
-        }
+    fn test_session_output_append() {
+        let mut output = SessionOutput::new();
+        output.append("Hello ");
+        output.append("world!");
+        assert_eq!(output.text, "Hello world!");
+        assert!(!output.is_empty());
     }
 
     #[test]
-    fn test_plan_entry_various_priorities() {
-        for priority in ["low", "medium", "high", "critical"] {
-            let json = json!({
-                "content": "Task",
-                "priority": priority,
-                "status": "not_started"
-            });
-            let entry: PlanEntry = serde_json::from_value(json).unwrap();
-            assert_eq!(entry.priority, priority);
-        }
-    }
-
-    #[test]
-    fn test_plan_entry_round_trip() {
-        let original = PlanEntry {
-            content: "Write tests".to_string(),
-            priority: "high".to_string(),
-            status: "in_progress".to_string(),
-        };
-        let json_str = serde_json::to_string(&original).unwrap();
-        let deserialized: PlanEntry = serde_json::from_str(&json_str).unwrap();
-
-        assert_eq!(original, deserialized);
-    }
-
-    // ========================================================================
-    // Plan Tests
-    // ========================================================================
-
-    #[test]
-    fn test_plan_with_multiple_entries() {
-        let json = json!({
-            "entries": [
-                {"content": "Task 1", "priority": "high", "status": "complete"},
-                {"content": "Task 2", "priority": "medium", "status": "in_progress"},
-                {"content": "Task 3", "priority": "low", "status": "not_started"}
-            ]
-        });
-        let plan: Plan = serde_json::from_value(json).unwrap();
-
-        assert_eq!(plan.entries.len(), 3);
-        assert_eq!(plan.entries[0].content, "Task 1");
-        assert_eq!(plan.entries[1].status, "in_progress");
-        assert_eq!(plan.entries[2].priority, "low");
-    }
-
-    #[test]
-    fn test_empty_plan() {
-        let json = json!({
-            "entries": []
-        });
-        let plan: Plan = serde_json::from_value(json).unwrap();
-
-        assert!(plan.entries.is_empty());
-    }
-
-    #[test]
-    fn test_plan_from_acp_update_format() {
-        // Simulates what wait_for_plan extracts from ACP session/update
-        let entries_json = json!([
-            {"content": "Design API", "priority": "high", "status": "not_started"},
-            {"content": "Implement endpoints", "priority": "high", "status": "not_started"},
-            {"content": "Write tests", "priority": "medium", "status": "not_started"}
-        ]);
-
-        let entries: Vec<PlanEntry> = serde_json::from_value(entries_json).unwrap();
-        let plan = Plan { entries };
-
-        assert_eq!(plan.entries.len(), 3);
-        assert_eq!(plan.entries[0].content, "Design API");
-    }
-
-    #[test]
-    fn test_plan_round_trip() {
-        let original = Plan {
-            entries: vec![
-                PlanEntry {
-                    content: "First task".to_string(),
-                    priority: "high".to_string(),
-                    status: "complete".to_string(),
-                },
-                PlanEntry {
-                    content: "Second task".to_string(),
-                    priority: "low".to_string(),
-                    status: "not_started".to_string(),
-                },
-            ],
-        };
-        let json_str = serde_json::to_string(&original).unwrap();
-        let deserialized: Plan = serde_json::from_str(&json_str).unwrap();
-
-        assert_eq!(original, deserialized);
+    fn test_session_output_is_empty_with_whitespace() {
+        let mut output = SessionOutput::new();
+        output.append("   \n\t  ");
+        assert!(output.is_empty());
     }
 }

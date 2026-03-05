@@ -1,0 +1,149 @@
+# ============================================================================
+# Simple Implementation Scenario
+# ============================================================================
+#
+# Purpose: Tests the most basic successful flow in Villalobos - a single task
+# that gets planned and implemented without any decomposition or retries.
+#
+# Expected Flow:
+#   1. Planner receives goal
+#   2. Planner calls write_plan with a simple single-task plan
+#   3. Planner calls complete(success=true)
+#   4. Orchestrator receives the plan
+#   5. Orchestrator calls implement(task)
+#   6. Implementer performs work (simulated tool calls)
+#   7. Implementer calls complete(success=true)
+#   8. Orchestrator calls complete(success=true)
+#   9. Final TaskResult.success = true
+#
+# Test Assertions:
+#   - result.task_result.success == true
+#   - result.planner_was_spawned() == true
+#   - result.orchestrator_was_spawned() == true
+#   - result.implementer_was_spawned() == true
+#   - result.implement_calls().len() == 1
+#   - result.implement_calls()[0] contains "error handling"
+#
+# Sessions Defined: 1 planner, 1 orchestrator, 1 implementer
+# Mock Responses Defined: 1 (for the implement call)
+# ============================================================================
+
+[scenario]
+name = "simple_implement"
+description = "Single task that gets implemented directly"
+
+# Planner session: creates a plan and calls write_plan, then complete
+[[planner_sessions]]
+session_id = "planner-001"
+
+[[planner_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Analyzing the request... I'll create a plan for adding error handling.\n\n"
+
+# Planner calls write_plan tool via MCP
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling write_plan tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "write_plan"
+plan = "## Plan\n\n1. **Add error handling to login function**\n   - Add try-catch blocks\n   - Add proper error logging\n   - Return meaningful error messages\n"
+
+# Planner calls complete tool via MCP
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling complete tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Plan created successfully"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Orchestrator session: executes the plan by calling implement
+[[orchestrator_sessions]]
+session_id = "orchestrator-001"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Executing the plan. Calling implement for the error handling task.\n\n"
+
+# Orchestrator calls implement tool via MCP
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling implement tool]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "implement"
+task = "Add error handling to login function with try-catch blocks, proper error logging, and meaningful error messages"
+
+# Orchestrator calls complete after implement returns
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Implementation complete. All tasks finished.\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "All tasks completed successfully"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Implementer session: implements the task
+[[implementer_sessions]]
+session_id = "implementer-001"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Implementing error handling...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 200
+session_update = "tool_call"
+tool_title = "str-replace-editor"
+
+[[implementer_sessions.updates]]
+delay_ms = 300
+session_update = "tool_result"
+
+[implementer_sessions.updates.tool_result]
+title = "str-replace-editor"
+is_error = false
+content = "File updated successfully"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Error handling added. Calling complete.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Error handling implementation complete"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Mock tool response for implement calls
+[[mock_tool_responses]]
+tool_type = "Implement"
+task_pattern = ".*error handling.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Added try-catch blocks and error logging"
+files_modified = ["src/auth/login.rs"]
+

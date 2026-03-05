@@ -1,27 +1,68 @@
 //! Simplified ACP client for spawning and managing agents
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
+
+/// Trait defining the interface for an ACP client.
+///
+/// This trait abstracts the ACP client operations to enable testing with mock implementations.
+/// All methods are async and the trait is Send + Sync for use across async boundaries.
+#[async_trait]
+pub trait AcpClientTrait: Send + Sync {
+    /// Initialize the ACP connection
+    async fn initialize(&mut self) -> Result<()>;
+
+    /// Create a new session
+    async fn session_new(
+        &mut self,
+        model: &str,
+        mcp_servers: Vec<Value>,
+        cwd: &str,
+    ) -> Result<SessionNewResponse>;
+
+    /// Send a prompt to a session
+    async fn session_prompt(&mut self, session_id: &str, prompt: &str) -> Result<()>;
+
+    /// Receive next notification from the server
+    ///
+    /// Notifications are server-initiated messages (no "id" field) like session/update.
+    /// Use this to monitor agent progress, receive plans, tool calls, etc.
+    async fn recv(&mut self) -> Result<Value>;
+
+    /// Gracefully shutdown the ACP client.
+    ///
+    /// This closes stdin (signaling EOF to the child), waits for the child process
+    /// to exit (with a timeout), and cleans up background tasks.
+    async fn shutdown(&mut self) -> Result<()>;
+}
+
+/// Pending request tracker - maps request IDs to their response channels
+type PendingRequests = Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>;
 
 /// ACP client for managing agent sessions
 pub struct AcpClient {
     child: Child,
     tx: mpsc::Sender<String>,
-    /// Channel for JSON-RPC responses (messages with an "id" field)
-    response_rx: mpsc::Receiver<Value>,
+    /// Map of pending request IDs to their response channels
+    pending_requests: PendingRequests,
     /// Channel for JSON-RPC notifications (messages without an "id" field)
     notification_rx: mpsc::Receiver<Value>,
     /// Handle to the stdin writer task
     stdin_task: Option<JoinHandle<()>>,
     /// Handle to the stdout reader task
     stdout_task: Option<JoinHandle<()>>,
+    /// Timeout for request/response operations
+    request_timeout: Duration,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,12 +71,26 @@ pub struct SessionNewResponse {
     pub session_id: String,
 }
 
+/// Default request timeout in seconds (60 seconds)
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
+
 impl AcpClient {
-    /// Spawn a new ACP agent process
+    /// Spawn a new ACP agent process with default timeout.
     ///
     /// If `cache_dir` is provided, auggie will use that directory for its settings,
     /// allowing different agents to have different tool configurations.
     pub async fn spawn(cache_dir: Option<&str>) -> Result<Self> {
+        Self::spawn_with_timeout(cache_dir, Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS)).await
+    }
+
+    /// Spawn a new ACP agent process with custom request timeout.
+    ///
+    /// If `cache_dir` is provided, auggie will use that directory for its settings,
+    /// allowing different agents to have different tool configurations.
+    pub async fn spawn_with_timeout(
+        cache_dir: Option<&str>,
+        request_timeout: Duration,
+    ) -> Result<Self> {
         let mut cmd = Command::new("auggie");
         cmd.arg("--acp");
 
@@ -60,8 +115,11 @@ impl AcpClient {
         let stdout = child.stdout.take().context("Failed to get stdout")?;
 
         let (tx, mut rx_commands) = mpsc::channel::<String>(100);
-        let (tx_responses, response_rx) = mpsc::channel::<Value>(100);
         let (tx_notifications, notification_rx) = mpsc::channel::<Value>(100);
+
+        // Create shared pending requests map
+        let pending_requests: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
+        let pending_requests_clone = Arc::clone(&pending_requests);
 
         // Spawn task to write to stdin
         let stdin_task = tokio::spawn(async move {
@@ -89,9 +147,26 @@ impl AcpClient {
                     // Route based on whether message has an "id" field:
                     // - Messages with "id" are responses to our requests
                     // - Messages without "id" are notifications from the server
-                    if value.get("id").is_some() {
-                        if tx_responses.send(value).await.is_err() {
-                            break;
+                    if let Some(id) = value
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                    {
+                        // Look up the pending request and send the response
+                        let mut pending = pending_requests_clone.lock().await;
+                        if let Some(sender) = pending.remove(&id) {
+                            // Send response to the waiting request
+                            if sender.send(value).is_err() {
+                                tracing::debug!("Response receiver dropped for request {}", id);
+                            }
+                        } else {
+                            // No pending request found - this is a stale response from a
+                            // previous session that was already handled or timed out.
+                            // This is normal during rapid session transitions.
+                            tracing::trace!(
+                                "Ignoring stale response with id {} (no pending request)",
+                                id
+                            );
                         }
                     } else {
                         if tx_notifications.send(value).await.is_err() {
@@ -99,7 +174,10 @@ impl AcpClient {
                         }
                     }
                 } else {
-                    tracing::warn!("Failed to parse ACP response: {}", &line[..line.len().min(100)]);
+                    tracing::warn!(
+                        "Failed to parse ACP response: {}",
+                        &line[..line.len().min(100)]
+                    );
                 }
             }
         });
@@ -107,14 +185,15 @@ impl AcpClient {
         Ok(Self {
             child,
             tx,
-            response_rx,
+            pending_requests,
             notification_rx,
             stdin_task: Some(stdin_task),
             stdout_task: Some(stdout_task),
+            request_timeout,
         })
     }
 
-    /// Send a JSON-RPC request and wait for response
+    /// Send a JSON-RPC request and wait for response with timeout.
     async fn request(&mut self, method: &str, params: Value) -> Result<Value> {
         let id = uuid::Uuid::new_v4().to_string();
         let request = json!({
@@ -126,58 +205,99 @@ impl AcpClient {
 
         let request_str = serde_json::to_string(&request)?;
         if method == "session/new" {
-            tracing::info!("📤 Creating new session: model={}, mcpServers={}",
-                params.get("model").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                params.get("mcpServers").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)
+            tracing::info!(
+                "📤 Creating new session: model={}, mcpServers={}",
+                params
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown"),
+                params
+                    .get("mcpServers")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0)
             );
         } else {
             tracing::debug!("📤 ACP {}: id={}", method, id);
         }
 
-        self.tx
-            .send(request_str)
-            .await
-            .context("Failed to send request")?;
-
         // For session/prompt, we don't need to wait for a response since the actual
         // results come via notifications. Return immediately.
         if method == "session/prompt" {
+            self.tx
+                .send(request_str)
+                .await
+                .context("Failed to send request")?;
             return Ok(json!({}));
         }
 
-        // Wait for response with matching ID from the response channel.
-        // Since we now route responses and notifications to separate channels,
-        // we only receive responses here - notifications are preserved in their own channel.
-        loop {
-            let response = self
-                .response_rx
-                .recv()
-                .await
-                .context("Failed to receive response")?;
+        // Create a oneshot channel to receive the response for this specific request
+        let (response_tx, response_rx) = oneshot::channel();
 
-            if response.get("id").and_then(|v| v.as_str()) == Some(&id) {
-                if method == "session/new" {
-                    if let Some(result) = response.get("result") {
-                        let session_id = result.get("sessionId").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        tracing::info!("📥 Session created: {}", session_id);
-                    }
-                }
-                if let Some(error) = response.get("error") {
-                    anyhow::bail!("ACP error: {}", error);
-                }
-                return response
-                    .get("result")
-                    .cloned()
-                    .context("No result in response");
-            }
-            // Non-matching response ID - this shouldn't happen in normal operation
-            // since each client makes sequential requests, but log it just in case
-            tracing::warn!("⚠️  Received response with unexpected id: {:?}", response.get("id"));
+        // Register the pending request before sending to avoid race conditions
+        {
+            let mut pending = self.pending_requests.lock().await;
+            pending.insert(id.clone(), response_tx);
         }
+
+        // Send the request
+        if let Err(e) = self.tx.send(request_str).await {
+            // Remove the pending request if send fails
+            let mut pending = self.pending_requests.lock().await;
+            pending.remove(&id);
+            return Err(e).context("Failed to send request");
+        }
+
+        // Wait for the response on our dedicated channel with timeout
+        let response = match tokio::time::timeout(self.request_timeout, response_rx).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) => {
+                // Channel closed - receiver dropped
+                anyhow::bail!("Response channel closed before receiving response");
+            }
+            Err(_elapsed) => {
+                // Timeout - remove the pending request so we don't leak memory
+                let mut pending = self.pending_requests.lock().await;
+                pending.remove(&id);
+                tracing::error!(
+                    "⏰ Timeout waiting for ACP {} response after {:?}",
+                    method,
+                    self.request_timeout
+                );
+                anyhow::bail!(
+                    "Timeout waiting for ACP {} response after {:?}",
+                    method,
+                    self.request_timeout
+                );
+            }
+        };
+
+        if method == "session/new" {
+            if let Some(result) = response.get("result") {
+                let session_id = result
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                tracing::info!("📥 Session created: {}", session_id);
+            }
+        }
+
+        if let Some(error) = response.get("error") {
+            anyhow::bail!("ACP error: {}", error);
+        }
+
+        response
+            .get("result")
+            .cloned()
+            .context("No result in response")
     }
 
+}
+
+#[async_trait]
+impl AcpClientTrait for AcpClient {
     /// Initialize the ACP connection
-    pub async fn initialize(&mut self) -> Result<()> {
+    async fn initialize(&mut self) -> Result<()> {
         let params = json!({
             "protocolVersion": 1,
             "capabilities": {},
@@ -192,7 +312,7 @@ impl AcpClient {
     }
 
     /// Create a new session
-    pub async fn session_new(
+    async fn session_new(
         &mut self,
         model: &str,
         mcp_servers: Vec<Value>,
@@ -209,7 +329,7 @@ impl AcpClient {
     }
 
     /// Send a prompt to a session
-    pub async fn session_prompt(&mut self, session_id: &str, prompt: &str) -> Result<()> {
+    async fn session_prompt(&mut self, session_id: &str, prompt: &str) -> Result<()> {
         let params = json!({
             "sessionId": session_id,
             "prompt": [
@@ -228,7 +348,7 @@ impl AcpClient {
     ///
     /// Notifications are server-initiated messages (no "id" field) like session/update.
     /// Use this to monitor agent progress, receive plans, tool calls, etc.
-    pub async fn recv(&mut self) -> Result<Value> {
+    async fn recv(&mut self) -> Result<Value> {
         self.notification_rx.recv().await.context("Failed to receive notification")
     }
 
@@ -236,7 +356,7 @@ impl AcpClient {
     ///
     /// This closes stdin (signaling EOF to the child), waits for the child process
     /// to exit (with a timeout), and cleans up background tasks.
-    pub async fn shutdown(&mut self) -> Result<()> {
+    async fn shutdown(&mut self) -> Result<()> {
         tracing::debug!("Shutting down ACP client");
 
         // Drop the sender to close the stdin channel, which will cause the stdin

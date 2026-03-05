@@ -1,0 +1,352 @@
+# ============================================================================
+# Nested Decomposition Scenario
+# ============================================================================
+#
+# Purpose: Tests hierarchical task decomposition. The main orchestrator calls
+# decompose() for a complex task, which spawns a sub-planner and sub-orchestrator
+# to handle the subtasks independently.
+#
+# Expected Flow:
+#   1. Main Planner creates plan with complex task + simple task
+#   2. Main Planner calls complete(success=true)
+#   3. Main Orchestrator calls decompose("Build authentication system...")
+#      -> This triggers sub-planning/orchestration internally
+#   4. Sub-Planner (planner-002) creates subtask plan
+#   5. Sub-Planner calls complete(success=true)
+#   6. Sub-Orchestrator (orchestrator-002) calls implement("login flow...")
+#   7. Implementer 1 completes
+#   8. Sub-Orchestrator calls implement("registration flow...")
+#   9. Implementer 2 completes
+#   10. Sub-Orchestrator calls complete(success=true)
+#   11. Main Orchestrator calls implement("rate limiting...")
+#   12. Implementer 3 completes
+#   13. Main Orchestrator calls complete(success=true)
+#
+# Test Assertions:
+#   - result.task_result.success == true
+#   - result.decompose_calls().len() >= 1
+#   - result.implement_calls().len() >= 3
+#   - Multiple planner sessions created (main + sub)
+#   - Multiple orchestrator sessions created (main + sub)
+#
+# Sessions Defined: 2 planners, 2 orchestrators, 3 implementers
+# Mock Responses Defined: 3 (for all implement calls)
+#
+# Note: Session order matters! Define sub-planner after main planner,
+# sub-orchestrator after main orchestrator.
+# ============================================================================
+
+[scenario]
+name = "nested_decompose"
+description = "Task decomposition with sub-orchestrator for complex multi-part tasks"
+
+# Main planner session: creates plan with a complex task that needs decomposition
+[[planner_sessions]]
+session_id = "planner-001"
+
+[[planner_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Analyzing the request for building an authentication system.\n\n"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling write_plan tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "write_plan"
+plan = """## Plan
+
+1. **Build authentication system** (complex - requires decomposition)
+   - Login flow
+   - Registration flow
+   - Password reset
+
+2. **Add rate limiting**
+   - Simple single task
+"""
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling complete tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Plan created with decomposable task"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Sub-planner session: created by decompose(), plans the auth system subtasks
+[[planner_sessions]]
+session_id = "planner-002"
+
+[[planner_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Breaking down the authentication system into subtasks.\n\n"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling write_plan tool for subtasks]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "write_plan"
+plan = """## Authentication System Subtasks
+
+1. **Implement login flow**
+   - Add login endpoint
+   - Add JWT token generation
+   - Add session management
+
+2. **Implement registration flow**
+   - Add registration endpoint
+   - Add email validation
+   - Add password hashing
+"""
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling complete tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Subtasks planned for authentication system"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Main orchestrator session: calls decompose for complex task, then implement for simple one
+[[orchestrator_sessions]]
+session_id = "orchestrator-001"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Executing plan. First task is complex, using decompose.\n\n"
+
+# Orchestrator calls decompose for the complex auth task
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling decompose tool]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "decompose"
+task = "Build authentication system with login, registration, and password reset flows"
+
+# After decompose returns, call implement for the simple task
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Auth system decomposed and implemented. Now implementing rate limiting.\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "implement"
+task = "Add rate limiting middleware to protect API endpoints"
+
+# Complete the main orchestration
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "All tasks completed.\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "All tasks including nested decomposition completed"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Sub-orchestrator session: spawned by decompose(), implements the auth subtasks
+[[orchestrator_sessions]]
+session_id = "orchestrator-002"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Executing authentication subtasks.\n\n"
+
+# Implement login flow
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Implementing login flow]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "implement"
+task = "Implement login flow with JWT token generation and session management"
+
+# Implement registration flow
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Implementing registration flow]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "implement"
+task = "Implement registration flow with email validation and password hashing"
+
+# Sub-orchestrator completes
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Auth subtasks complete.\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Authentication subtasks completed"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Implementer for login flow
+[[implementer_sessions]]
+session_id = "implementer-001"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Implementing login flow...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 150
+session_update = "tool_call"
+tool_title = "str-replace-editor"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "tool_result"
+
+[implementer_sessions.updates.tool_result]
+title = "str-replace-editor"
+is_error = false
+content = "Created src/auth/login.rs"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Login flow implemented.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Login flow implementation complete"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Implementer for registration flow
+[[implementer_sessions]]
+session_id = "implementer-002"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Implementing registration flow...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 150
+session_update = "tool_call"
+tool_title = "str-replace-editor"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "tool_result"
+
+[implementer_sessions.updates.tool_result]
+title = "str-replace-editor"
+is_error = false
+content = "Created src/auth/register.rs"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Registration flow implemented.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Registration flow implementation complete"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Implementer for rate limiting (simple task)
+[[implementer_sessions]]
+session_id = "implementer-003"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Adding rate limiting middleware...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 150
+session_update = "tool_call"
+tool_title = "str-replace-editor"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "tool_result"
+
+[implementer_sessions.updates.tool_result]
+title = "str-replace-editor"
+is_error = false
+content = "Created src/middleware/rate_limit.rs"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Rate limiting added.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Rate limiting implementation complete"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Mock tool responses
+[[mock_tool_responses]]
+tool_type = "Implement"
+task_pattern = ".*login flow.*JWT.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Implemented login with JWT tokens and session management"
+files_modified = ["src/auth/login.rs", "src/auth/jwt.rs"]
+
+[[mock_tool_responses]]
+tool_type = "Implement"
+task_pattern = ".*registration flow.*email.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Implemented registration with email validation and password hashing"
+files_modified = ["src/auth/register.rs", "src/auth/validation.rs"]
+
+[[mock_tool_responses]]
+tool_type = "Implement"
+task_pattern = ".*rate limiting.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Added rate limiting middleware"
+files_modified = ["src/middleware/rate_limit.rs", "src/middleware/mod.rs"]

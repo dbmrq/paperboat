@@ -1,0 +1,66 @@
+# ============================================================================
+# Planner Failure Scenario
+# ============================================================================
+#
+# Purpose: Tests graceful handling when the planner fails to create a valid
+# plan. The planner signals failure, and the task completes with failure status.
+#
+# Expected Flow:
+#   1. Planner receives goal
+#   2. Planner analyzes but cannot create coherent plan
+#   3. Planner calls complete(success=false, message="Unable to create plan...")
+#   4. Task ends with failure
+#
+# Test Assertions:
+#   - result.task_result.success == false
+#   - result.task_result.message contains error information
+#   - result.planner_was_spawned() == true
+#   - result.orchestrator_was_spawned() == false (never reached)
+#   - result.implementer_was_spawned() == false (never reached)
+#   - result.implement_calls().is_empty() == true
+#
+# Sessions Defined: 1 planner only
+# Mock Responses Defined: 0 (no tool calls made)
+#
+# Note: This scenario does NOT call write_plan - it goes directly to
+# complete(success=false) to signal the planning failure.
+# ============================================================================
+
+[scenario]
+name = "planner_failure"
+description = "Planner fails to produce plan and signals failure"
+
+# Planner session: fails to create a plan
+[[planner_sessions]]
+session_id = "planner-001"
+
+[[planner_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Analyzing the request...\n\n"
+
+[[planner_sessions.updates]]
+delay_ms = 150
+session_update = "agent_message_chunk"
+content = "I'm having trouble understanding this request. The requirements are ambiguous and contradictory.\n\n"
+
+[[planner_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Cannot create a coherent plan due to:\n- Conflicting requirements between feature A and B\n- Missing critical specifications\n- Unclear scope boundaries\n\n"
+
+# Planner calls complete with failure
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling complete tool with failure]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = false
+message = "Unable to create plan - requirements are ambiguous and contradictory"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+

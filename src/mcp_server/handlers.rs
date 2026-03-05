@@ -45,56 +45,128 @@ pub(crate) async fn handle_request(
             })))
         }
         "tools/list" => {
-            let tools = json!({
-                "tools": [
-                    {
-                        "name": "decompose",
-                        "description": "<usecase>Breaks down complex, multi-step tasks into smaller subtasks by spawning a specialized planner agent.</usecase>\n<instructions>Use when a task involves multiple distinct steps, requires different types of work (e.g., backend + frontend + tests), or would take more than one focused implementation session. The planner will create a detailed plan, then you can implement each subtask. Returns a list of subtasks to implement.</instructions>",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "task": {
-                                    "type": "string",
-                                    "description": "The complex task to break down into implementable subtasks"
+            // Get agent type from environment to filter available tools
+            let agent_type = std::env::var("VILLALOBOS_AGENT_TYPE").unwrap_or_else(|_| "orchestrator".to_string());
+
+            let tools = match agent_type.as_str() {
+                "planner" => {
+                    // Planner gets write_plan (to submit the plan) and complete (to signal done)
+                    json!({
+                        "tools": [
+                            {
+                                "name": "write_plan",
+                                "description": "<usecase>REQUIRED: Submit your structured plan.</usecase>\n<instructions>You MUST call this tool to submit your plan. The plan should be clear, structured markdown with numbered tasks. Each task should have a title, description, and any relevant context. This is the ONLY way to pass your plan to the orchestrator - do NOT just output text.</instructions>",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "plan": {
+                                            "type": "string",
+                                            "description": "The structured plan in markdown format"
+                                        }
+                                    },
+                                    "required": ["plan"]
                                 }
                             },
-                            "required": ["task"]
-                        }
-                    },
-                    {
-                        "name": "implement",
-                        "description": "<usecase>Implements a single, focused task by spawning a specialized implementer agent with full code editing capabilities.</usecase>\n<instructions>Use for atomic tasks that can be completed in one session: adding a function, fixing a bug, writing tests, creating a file, etc. The implementer has access to all code editing tools. After calling this, the task will be completed by the implementer agent.</instructions>",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "task": {
-                                    "type": "string",
-                                    "description": "Clear description of the single task to implement"
+                            {
+                                "name": "complete",
+                                "description": "<usecase>REQUIRED: Signal that you have finished your work.</usecase>\n<instructions>You MUST call this tool AFTER calling write_plan. This signals to the orchestration system that your planning work is done.</instructions>",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "description": "Whether the planning was completed successfully"
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "description": "Brief summary of the plan"
+                                        }
+                                    },
+                                    "required": ["success"]
+                                }
+                            }
+                        ]
+                    })
+                }
+                "implementer" => {
+                    // Implementer only gets the complete tool to signal they're done
+                    json!({
+                        "tools": [
+                            {
+                                "name": "complete",
+                                "description": "<usecase>REQUIRED: Signal that you have finished your work.</usecase>\n<instructions>You MUST call this tool when you have completed your assigned task. This signals to the orchestration system that your work is done. Set success=true and include a brief summary of what you accomplished. Call this IMMEDIATELY when you finish - do not wait for user input.</instructions>",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "description": "Whether the task was completed successfully"
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "description": "Brief summary of what was accomplished"
+                                        }
+                                    },
+                                    "required": ["success"]
+                                }
+                            }
+                        ]
+                    })
+                }
+                _ => {
+                    // Orchestrator gets all tools
+                    json!({
+                        "tools": [
+                            {
+                                "name": "decompose",
+                                "description": "<usecase>Breaks down complex, multi-step tasks into smaller subtasks by spawning a specialized planner agent.</usecase>\n<instructions>Use when a task involves multiple distinct steps, requires different types of work (e.g., backend + frontend + tests), or would take more than one focused implementation session. The planner will create a detailed plan, then you can implement each subtask. Returns a list of subtasks to implement.</instructions>",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "task": {
+                                            "type": "string",
+                                            "description": "The complex task to break down into implementable subtasks"
+                                        }
+                                    },
+                                    "required": ["task"]
                                 }
                             },
-                            "required": ["task"]
-                        }
-                    },
-                    {
-                        "name": "complete",
-                        "description": "<usecase>Marks your orchestration work as finished and returns control to the user.</usecase>\n<instructions>Call this only after all tasks have been delegated (via decompose or implement). Set success=true if all work completed successfully, success=false if there were failures. Include a brief summary message describing what was accomplished.</instructions>",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "success": {
-                                    "type": "boolean",
-                                    "description": "Whether all delegated tasks completed successfully"
-                                },
-                                "message": {
-                                    "type": "string",
-                                    "description": "Brief summary of what was accomplished or what failed"
+                            {
+                                "name": "implement",
+                                "description": "<usecase>Implements a single, focused task by spawning a specialized implementer agent with full code editing capabilities.</usecase>\n<instructions>Use for atomic tasks that can be completed in one session: adding a function, fixing a bug, writing tests, creating a file, etc. The implementer has access to all code editing tools. After calling this, the task will be completed by the implementer agent.</instructions>",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "task": {
+                                            "type": "string",
+                                            "description": "Clear description of the single task to implement"
+                                        }
+                                    },
+                                    "required": ["task"]
                                 }
                             },
-                            "required": ["success"]
-                        }
-                    }
-                ]
-            });
+                            {
+                                "name": "complete",
+                                "description": "<usecase>Marks your orchestration work as finished and returns control to the user.</usecase>\n<instructions>Call this only after all tasks have been delegated (via decompose or implement). Set success=true if all work completed successfully, success=false if there were failures. Include a brief summary message describing what was accomplished.</instructions>",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "description": "Whether all delegated tasks completed successfully"
+                                        },
+                                        "message": {
+                                            "type": "string",
+                                            "description": "Brief summary of what was accomplished or what failed"
+                                        }
+                                    },
+                                    "required": ["success"]
+                                }
+                            }
+                        ]
+                    })
+                }
+            };
 
             Ok(Some(json!({
                 "jsonrpc": "2.0",
@@ -212,12 +284,25 @@ async fn handle_tool_call(
                 )));
             }
         },
+        "write_plan" => match arguments.get("plan").and_then(|v| v.as_str()) {
+            Some(plan) => ToolCall::WritePlan {
+                plan: plan.to_string(),
+            },
+            None => {
+                tracing::warn!("⚠️  write_plan tool missing 'plan' argument");
+                return Ok(Some(invalid_params_error(
+                    id,
+                    "write_plan",
+                    "requires 'plan' string argument",
+                )));
+            }
+        },
         _ => {
             tracing::warn!("⚠️  Unknown tool requested: {}", name);
             return Ok(Some(method_not_found_error(
                 id,
                 name,
-                &["decompose", "implement", "complete"],
+                &["decompose", "implement", "complete", "write_plan"],
             )));
         }
     };
@@ -344,6 +429,16 @@ fn build_response_text(
                      ## Details\n\
                      {}",
                     message.as_deref().unwrap_or("Some tasks encountered problems")
+                )
+            }
+        }
+        ToolCall::WritePlan { plan: _ } => {
+            if response.success {
+                "✅ Plan submitted successfully. Now call complete(success=true) to finish.".to_string()
+            } else {
+                format!(
+                    "❌ Failed to submit plan: {}",
+                    response.error.as_deref().unwrap_or("Unknown error")
                 )
             }
         }

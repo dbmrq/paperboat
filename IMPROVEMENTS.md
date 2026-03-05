@@ -42,11 +42,18 @@ The current implementation lacks robust error recovery:
 - No way to express **dependencies** between subtasks
 - The `Plan` type has `priority` but it's not used
 
-### 5. Integration Testing (Medium Priority)
+### 5. Integration Testing ✅ COMPLETE
 
-- Unit tests are excellent (65 tests), but no **integration tests**
-- No tests for the full orchestrator flow
-- Consider adding mock-based tests for the ACP client
+- ~~Unit tests are excellent (65 tests), but no **integration tests**~~
+- ~~No tests for the full orchestrator flow~~
+- ~~Consider adding mock-based tests for the ACP client~~
+
+**Implemented:**
+- Full mock data system in `src/testing/` with `MockAcpClient`, `TestHarness`, and scenario loading
+- `AcpClientTrait` abstraction for dependency injection
+- 6 complete test scenarios in `tests/scenarios/` covering all major flows
+- 160+ tests including unit, integration, and E2E tests
+- See `docs/MOCK_DATA_SYSTEM_ARCHITECTURE.md` for details
 
 ### 6. Prompt Engineering Improvements (Medium Priority)
 
@@ -91,7 +98,7 @@ The prompts are quite basic:
 | 5 | Progress checkpointing | Medium | High |
 | 6 | Config file support | Medium | Medium |
 | 7 | Parallel subtask execution | High | High |
-| 8 | Integration tests | Medium | Medium |
+| 8 | Integration tests | ~~Medium~~ | ~~Medium~~ | ✅ COMPLETE |
 | 9 | Enhanced prompts | Low | Medium |
 | 10 | Cost/token tracking | Medium | Low |
 

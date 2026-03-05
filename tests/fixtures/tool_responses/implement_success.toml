@@ -1,0 +1,11 @@
+# Implement Tool Success Response Fixture
+#
+# Successful response for an implement tool call.
+
+tool_type = "Implement"
+
+[response]
+success = true
+summary = "Successfully implemented the requested functionality"
+files_modified = ["src/feature.rs", "tests/feature_test.rs"]
+

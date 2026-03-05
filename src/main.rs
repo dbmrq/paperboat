@@ -2,49 +2,31 @@ mod acp;
 mod app;
 mod config;
 mod error;
+mod logging;
 mod mcp_server;
 mod models;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 mod types;
 
 use anyhow::Result;
-use models::{discover_models, ModelConfig};
+use config::{build_model_config, load_agent_configs};
+use logging::RunLogManager;
+use models::discover_models;
 use std::path::PathBuf;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use std::sync::Arc;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging with both console and file output
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "villalobos=debug,info".into());
-
-    // Set up file appender with daily rotation
-    let log_dir = std::env::var("VILLALOBOS_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "villalobos.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
-    // Console layer: with ANSI colors for readability
-    let console_layer = fmt::layer()
-        .with_ansi(true)
-        .with_target(true)
-        .with_level(true);
-
-    // File layer: no ANSI colors, with timestamps, targets, and structured fields
-    let file_layer = fmt::layer()
-        .with_ansi(false)
-        .with_target(true)
-        .with_level(true)
-        .with_writer(non_blocking);
-
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(console_layer)
-        .with(file_layer)
-        .init();
-
-    // Check if we're running in MCP server mode
+    // Check if we're running in MCP server mode (before setting up full logging)
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "--mcp-server" {
-        // Get socket path from environment variable
+        // Simple console-only logging for MCP server mode
+        tracing_subscriber::fmt()
+            .with_env_filter("villalobos=info,info")
+            .init();
+
         let socket_path = std::env::var("VILLALOBOS_SOCKET")
             .expect("VILLALOBOS_SOCKET environment variable not set");
 
@@ -52,12 +34,56 @@ async fn main() -> Result<()> {
         return mcp_server::run_stdio_server(PathBuf::from(socket_path)).await;
     }
 
+    // Create run directory first (so we can put logs there)
+    let log_base = std::env::var("VILLALOBOS_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
+    let log_manager = Arc::new(RunLogManager::new(&log_base)?);
+    let run_dir = log_manager.run_dir().clone();
+
+    // Initialize logging with both console and file output
+    // Console filter: respects RUST_LOG env var, defaults to info level
+    let console_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "villalobos=info,info".into());
+
+    // File filter: always captures debug level for diagnostics
+    let file_filter = tracing_subscriber::EnvFilter::new("villalobos=debug,debug");
+
+    // Write app log to run directory (not a rolling file)
+    let log_file = std::fs::File::create(run_dir.join("app.log"))?;
+    let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
+
+    // Console layer: with ANSI colors for readability
+    let console_layer = fmt::layer()
+        .with_ansi(true)
+        .with_target(true)
+        .with_level(true)
+        .with_filter(console_filter);
+
+    // File layer: no ANSI colors, with timestamps
+    let file_layer = fmt::layer()
+        .with_ansi(false)
+        .with_target(true)
+        .with_level(true)
+        .with_writer(non_blocking)
+        .with_filter(file_filter);
+
+    tracing_subscriber::registry()
+        .with(console_layer)
+        .with(file_layer)
+        .init();
+
     // Get goal from command line
     let goal = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "Create a simple hello world program in Python".to_string());
 
+    tracing::info!("📁 Run directory: {:?}", run_dir);
     tracing::info!("Starting orchestrator with goal: {}", goal);
+
+    // Load agent configurations from config files
+    // Project-level (.villalobos/agents/) overrides user-level (~/.villalobos/agents/)
+    tracing::info!("📂 Loading agent configurations...");
+    let loaded_configs = load_agent_configs()?;
+    tracing::debug!("Loaded configs: {:?}", loaded_configs);
 
     // Discover available models from auggie
     tracing::info!("🔍 Discovering available models...");
@@ -67,8 +93,8 @@ async fn main() -> Result<()> {
         available_models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>()
     );
 
-    // Create model configuration with sensible defaults
-    let model_config = ModelConfig::new(available_models);
+    // Build model configuration from loaded configs and available models
+    let model_config = build_model_config(&loaded_configs, available_models)?;
     model_config.validate()?;
     tracing::info!(
         "🎯 Model configuration: orchestrator={}, planner={}, implementer={}",
@@ -78,7 +104,7 @@ async fn main() -> Result<()> {
     );
 
     // Run the orchestrator
-    let mut app = app::App::new(model_config).await?;
+    let mut app = app::App::with_log_manager(model_config, log_manager).await?;
     let result = app.run(&goal).await?;
 
     // Gracefully shutdown all processes

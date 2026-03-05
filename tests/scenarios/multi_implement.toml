@@ -1,0 +1,274 @@
+# ============================================================================
+# Multi Implementation Scenario
+# ============================================================================
+#
+# Purpose: Tests sequential execution of multiple tasks. The orchestrator
+# calls implement() three times, and each is handled by a separate implementer.
+#
+# Expected Flow:
+#   1. Planner creates a 3-task plan (database, service, API)
+#   2. Planner calls complete(success=true)
+#   3. Orchestrator calls implement("Create database schema...")
+#   4. Implementer 1 completes
+#   5. Orchestrator calls implement("Implement user service...")
+#   6. Implementer 2 completes
+#   7. Orchestrator calls implement("Add API endpoints...")
+#   8. Implementer 3 completes
+#   9. Orchestrator calls complete(success=true)
+#
+# Test Assertions:
+#   - result.task_result.success == true
+#   - result.implement_calls().len() == 3
+#   - Each implement call contains expected keywords
+#   - 3 implementer sessions were created
+#
+# Sessions Defined: 1 planner, 1 orchestrator, 3 implementers
+# Mock Responses Defined: 3 (one for each implement call)
+#
+# Note: Sessions are consumed in order - implementer-001 handles first
+# implement call, implementer-002 handles second, etc.
+# ============================================================================
+
+[scenario]
+name = "multi_implement"
+description = "Multiple sequential implementations with three implementer sessions"
+
+# Planner session: creates a multi-task plan
+[[planner_sessions]]
+session_id = "planner-001"
+
+[[planner_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Analyzing the request... Creating a multi-task plan.\n\n"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling write_plan tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "write_plan"
+plan = """## Plan
+
+1. **Create database schema**
+   - Add users table
+   - Add sessions table
+
+2. **Implement user service**
+   - Add CRUD operations
+   - Add validation logic
+
+3. **Add API endpoints**
+   - POST /users
+   - GET /users/:id
+   - DELETE /users/:id
+"""
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling complete tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Plan with 3 tasks created successfully"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Orchestrator session: calls implement 3 times
+[[orchestrator_sessions]]
+session_id = "orchestrator-001"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Executing the plan with 3 tasks. Starting with the database schema.\n\n"
+
+# First implement call
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling implement for task 1]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "implement"
+task = "Create database schema with users and sessions tables"
+
+# Second implement call
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "First task done. [Calling implement for task 2]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "implement"
+task = "Implement user service with CRUD operations and validation"
+
+# Third implement call
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Second task done. [Calling implement for task 3]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "implement"
+task = "Add API endpoints for users resource"
+
+# Orchestrator completes
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "All 3 implementations complete.\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "All 3 tasks completed successfully"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# First implementer session
+[[implementer_sessions]]
+session_id = "implementer-001"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Creating database schema...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 150
+session_update = "tool_call"
+tool_title = "save-file"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "tool_result"
+
+[implementer_sessions.updates.tool_result]
+title = "save-file"
+is_error = false
+content = "Created migrations/001_users.sql"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Schema created.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Database schema implementation complete"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Second implementer session
+[[implementer_sessions]]
+session_id = "implementer-002"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Implementing user service...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 150
+session_update = "tool_call"
+tool_title = "str-replace-editor"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "tool_result"
+
+[implementer_sessions.updates.tool_result]
+title = "str-replace-editor"
+is_error = false
+content = "Created src/services/user_service.rs"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "User service implemented.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "User service implementation complete"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Third implementer session
+[[implementer_sessions]]
+session_id = "implementer-003"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Adding API endpoints...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 150
+session_update = "tool_call"
+tool_title = "str-replace-editor"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "tool_result"
+
+[implementer_sessions.updates.tool_result]
+title = "str-replace-editor"
+is_error = false
+content = "Created src/api/users.rs"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "API endpoints added.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "API endpoints implementation complete"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Mock tool responses for implement calls
+[[mock_tool_responses]]
+tool_type = "Implement"
+task_pattern = ".*database.*schema.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Created users and sessions tables"
+files_modified = ["migrations/001_users.sql", "migrations/002_sessions.sql"]
+
+[[mock_tool_responses]]
+tool_type = "Implement"
+task_pattern = ".*user.*service.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Implemented user service with CRUD and validation"
+files_modified = ["src/services/user_service.rs"]
+
+[[mock_tool_responses]]
+tool_type = "Implement"
+task_pattern = ".*API.*endpoints.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Added REST API endpoints for users"
+files_modified = ["src/api/users.rs", "src/api/mod.rs"]
+
