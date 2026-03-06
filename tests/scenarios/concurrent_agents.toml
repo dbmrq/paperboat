@@ -1,0 +1,226 @@
+# ============================================================================
+# Concurrent Agents Scenario
+# ============================================================================
+#
+# Purpose: Tests concurrent execution of multiple agents. The orchestrator
+# spawns multiple agents at once using spawn_agents with wait=All.
+#
+# Expected Flow (with real ACP clients / router_active=true):
+#   1. Planner creates a 3-task plan
+#   2. Planner calls complete(success=true)
+#   3. Orchestrator calls spawn_agents with 3 agents (wait=All)
+#   4. All 3 implementers run CONCURRENTLY (each with own socket)
+#   5. Each implementer calls complete() on its dedicated socket
+#   6. Results are aggregated and returned to orchestrator
+#   7. Orchestrator calls complete(success=true)
+#
+# Expected Flow (with mock clients / router_active=false):
+#   Same as above but agents run SEQUENTIALLY as a fallback.
+#   This allows the mock testing infrastructure to work without
+#   complex routing logic.
+#
+# Verification:
+#   - In live mode: Check logs for overlapping timestamps between agents
+#   - Total time should be ~max(agent_times) not sum(agent_times)
+#   - Each socket file should be created and cleaned up
+#
+# Sessions Defined: 1 planner, 1 orchestrator, 3 implementers
+# Mock Responses Defined: 3 (one for each agent)
+#
+# Note: This scenario works with both concurrent and sequential execution.
+# The test harness uses mock clients (sequential), but running with real
+# agents uses the concurrent code path.
+# ============================================================================
+
+[scenario]
+name = "concurrent_agents"
+description = "Multiple concurrent agents spawned with spawn_agents(wait=All)"
+
+# Planner session: creates a 3-task plan
+[[planner_sessions]]
+session_id = "planner-concurrent-001"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Creating plan for concurrent execution.\n\n"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling create_task tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Module A"
+description = "Create the first module"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling create_task tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Module B"
+description = "Create the second module"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling create_task tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Module C"
+description = "Create the third module"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling complete tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Plan with 3 independent tasks created"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Orchestrator session: spawns 3 agents concurrently
+[[orchestrator_sessions]]
+session_id = "orchestrator-concurrent-001"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Executing 3 independent tasks concurrently.\n\n"
+
+# Single spawn_agents call with 3 agents
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling spawn_agents with 3 concurrent agents]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "spawn_agents"
+task = "Implement all three modules concurrently"
+
+# Orchestrator completes after all agents finish
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "All 3 concurrent implementations complete.\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "All 3 modules implemented successfully"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Implementer 1
+[[implementer_sessions]]
+session_id = "impl-concurrent-001"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Implementing Module A...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Module A complete.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Module A implementation complete"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Implementer 2
+[[implementer_sessions]]
+session_id = "impl-concurrent-002"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Implementing Module B...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Module B complete.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Module B implementation complete"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Implementer 3
+[[implementer_sessions]]
+session_id = "impl-concurrent-003"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Implementing Module C...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Module C complete.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Module C implementation complete"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Mock tool responses for the spawn_agents call
+# Note: In mock mode, agents run sequentially so each needs a response
+[[mock_tool_responses]]
+tool_type = "SpawnAgents"
+task_pattern = ".*[Mm]odule.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Module implementation complete"
+files_modified = ["src/module_a.rs"]
+
+[[mock_tool_responses]]
+tool_type = "SpawnAgents"
+task_pattern = ".*[Mm]odule.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Module implementation complete"
+files_modified = ["src/module_b.rs"]
+
+[[mock_tool_responses]]
+tool_type = "SpawnAgents"
+task_pattern = ".*[Mm]odule.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Module implementation complete"
+files_modified = ["src/module_c.rs"]
+

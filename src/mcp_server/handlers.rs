@@ -47,43 +47,29 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
 
             let tools = match agent_type.as_str() {
                 "planner" => {
-                    // Planner gets write_plan (to submit the plan), create_task, and complete (to signal done)
+                    // Planner gets create_task (to add tasks) and complete (to signal done)
                     json!({
                         "tools": [
                             {
-                                "name": "write_plan",
-                                "description": "<usecase>REQUIRED: Submit your structured plan.</usecase>\n<instructions>You MUST call this tool to submit your plan. The plan should be clear, structured markdown with numbered tasks. Each task should have a title, description, and any relevant context. This is the ONLY way to pass your plan to the orchestrator - do NOT just output text.</instructions>",
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "plan": {
-                                            "type": "string",
-                                            "description": "The structured plan in markdown format"
-                                        }
-                                    },
-                                    "required": ["plan"]
-                                }
-                            },
-                            {
                                 "name": "create_task",
-                                "description": "Create a task in the plan. Call once per task.",
+                                "description": "<usecase>Add a task to the plan.</usecase>\n<instructions>Call once per task. Each task will be executed by a separate implementer agent. Include specific details: file paths, function names, requirements. Tasks without dependencies can run in parallel.</instructions>",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
                                         "name": {
                                             "type": "string",
-                                            "description": "The name of the task"
+                                            "description": "Short task name (e.g., 'Create user model', 'Add login endpoint')"
                                         },
                                         "description": {
                                             "type": "string",
-                                            "description": "The description of the task"
+                                            "description": "What the implementer agent should do. Be specific about files, functions, and requirements."
                                         },
                                         "dependencies": {
                                             "type": "array",
                                             "items": {
                                                 "type": "string"
                                             },
-                                            "description": "Names of tasks that this task depends on"
+                                            "description": "Names of tasks that must complete before this one. Leave empty for independent tasks."
                                         }
                                     },
                                     "required": ["name", "description"]
@@ -91,7 +77,7 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                             },
                             {
                                 "name": "complete",
-                                "description": "<usecase>REQUIRED: Signal that you have finished your work.</usecase>\n<instructions>You MUST call this tool AFTER calling write_plan. This signals to the orchestration system that your planning work is done.</instructions>",
+                                "description": "<usecase>Signal that planning is finished.</usecase>\n<instructions>Call after creating all tasks. The orchestrator will then execute the plan.</instructions>",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -116,17 +102,17 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                         "tools": [
                             {
                                 "name": "complete",
-                                "description": "<usecase>REQUIRED: Signal that you have finished your work.</usecase>\n<instructions>You MUST call this tool when you have completed your assigned task. This signals to the orchestration system that your work is done. Set success=true and include a brief summary of what you accomplished. Call this IMMEDIATELY when you finish - do not wait for user input.</instructions>",
+                                "description": "<usecase>Signal that your task is finished.</usecase>\n<instructions>Call this after completing your assigned work. The orchestrator is waiting for this signal to proceed.</instructions>",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
                                         "success": {
                                             "type": "boolean",
-                                            "description": "Whether the task was completed successfully"
+                                            "description": "true if task completed successfully, false if it failed"
                                         },
                                         "message": {
                                             "type": "string",
-                                            "description": "Brief summary of what was accomplished"
+                                            "description": "Brief summary of what you did"
                                         }
                                     },
                                     "required": ["success"]
@@ -155,17 +141,18 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                             },
                             {
                                 "name": "spawn_agents",
-                                "description": "Spawn one or more agents to execute tasks. Multiple agents run concurrently.",
+                                "description": "<usecase>Delegates tasks to implementer agents who will complete the actual work.</usecase>\n<instructions>Each agent receives a task description and has access to file editing, code search, and other development tools. Agents without dependencies can be spawned together for parallel execution. Use wait='all' to wait for all agents to complete before proceeding.</instructions>",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
                                         "agents": {
                                             "type": "array",
+                                            "description": "List of agents to spawn. Each needs a role ('implementer') and a task description.",
                                             "items": {
                                                 "type": "object",
                                                 "properties": {
-                                                    "role": { "type": "string", "enum": ["implementer"] },
-                                                    "task": { "type": "string" }
+                                                    "role": { "type": "string", "enum": ["implementer"], "description": "Agent type. Use 'implementer' for coding tasks." },
+                                                    "task": { "type": "string", "description": "What the agent should accomplish. Be specific about files, functions, and requirements." }
                                                 },
                                                 "required": ["role", "task"]
                                             }
@@ -173,7 +160,8 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                                         "wait": {
                                             "type": "string",
                                             "enum": ["all", "any", "none"],
-                                            "default": "all"
+                                            "default": "all",
+                                            "description": "'all' waits for all agents, 'any' returns when first completes, 'none' returns immediately"
                                         }
                                     },
                                     "required": ["agents"]
@@ -334,20 +322,6 @@ async fn handle_tool_call(
                 )));
             }
         }
-        "write_plan" => {
-            if let Some(plan) = arguments.get("plan").and_then(|v| v.as_str()) {
-                ToolCall::WritePlan {
-                    plan: plan.to_string(),
-                }
-            } else {
-                tracing::warn!("⚠️  write_plan tool missing 'plan' argument");
-                return Ok(Some(invalid_params_error(
-                    id.as_ref(),
-                    "write_plan",
-                    "requires 'plan' string argument",
-                )));
-            }
-        }
         "create_task" => {
             let name_arg = if let Some(n) = arguments.get("name").and_then(|v| v.as_str()) {
                 n.to_string()
@@ -393,7 +367,7 @@ async fn handle_tool_call(
             return Ok(Some(method_not_found_error(
                 id.as_ref(),
                 name,
-                &["decompose", "spawn_agents", "complete", "write_plan", "create_task"],
+                &["decompose", "spawn_agents", "complete", "create_task"],
             )));
         }
     };
@@ -529,17 +503,6 @@ fn build_response_text(tool_call: &ToolCall, response: &super::types::ToolRespon
                 )
             }
         }
-        ToolCall::WritePlan { plan: _ } => {
-            if response.success {
-                "✅ Plan submitted successfully. Now call complete(success=true) to finish."
-                    .to_string()
-            } else {
-                format!(
-                    "❌ Failed to submit plan: {}",
-                    response.error.as_deref().unwrap_or("Unknown error")
-                )
-            }
-        }
         ToolCall::CreateTask { name, .. } => {
             if response.success {
                 format!("✅ Task '{}' created successfully.", name)
@@ -551,5 +514,210 @@ fn build_response_text(tool_call: &ToolCall, response: &super::types::ToolRespon
                 )
             }
         }
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::collections::HashSet;
+
+    /// Helper to extract tool names from a tools/list response.
+    fn extract_tool_names(response: &Value) -> HashSet<String> {
+        response["result"]["tools"]
+            .as_array()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .filter_map(|t| t["name"].as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Test that planner agents only get create_task and complete tools.
+    /// Uses #[serial] because these tests modify the VILLALOBOS_AGENT_TYPE env var.
+    #[tokio::test]
+    #[serial]
+    async fn test_planner_tool_access() {
+        // Set agent type to planner
+        std::env::set_var("VILLALOBOS_AGENT_TYPE", "planner");
+
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list"
+        });
+
+        let socket_path = PathBuf::from("/tmp/test-socket");
+        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+
+        let tool_names = extract_tool_names(&response);
+
+        // Planner should have: create_task, complete
+        assert!(tool_names.contains("create_task"), "Planner should have create_task tool");
+        assert!(tool_names.contains("complete"), "Planner should have complete tool");
+
+        // Planner should NOT have: spawn_agents, decompose
+        assert!(!tool_names.contains("spawn_agents"), "Planner should NOT have spawn_agents tool");
+        assert!(!tool_names.contains("decompose"), "Planner should NOT have decompose tool");
+
+        // Verify exact count
+        assert_eq!(tool_names.len(), 2, "Planner should have exactly 2 tools, got: {:?}", tool_names);
+    }
+
+    /// Test that orchestrator agents get all MCP tools including spawn_agents.
+    #[tokio::test]
+    #[serial]
+    async fn test_orchestrator_tool_access() {
+        // Set agent type to orchestrator
+        std::env::set_var("VILLALOBOS_AGENT_TYPE", "orchestrator");
+
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list"
+        });
+
+        let socket_path = PathBuf::from("/tmp/test-socket");
+        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+
+        let tool_names = extract_tool_names(&response);
+
+        // Orchestrator should have: decompose, spawn_agents, complete
+        assert!(tool_names.contains("decompose"), "Orchestrator should have decompose tool");
+        assert!(tool_names.contains("spawn_agents"), "Orchestrator should have spawn_agents tool");
+        assert!(tool_names.contains("complete"), "Orchestrator should have complete tool");
+
+        // Verify exact count
+        assert_eq!(tool_names.len(), 3, "Orchestrator should have exactly 3 tools, got: {:?}", tool_names);
+    }
+
+    /// Test that implementer agents only get the complete tool.
+    #[tokio::test]
+    #[serial]
+    async fn test_implementer_tool_access() {
+        // Set agent type to implementer
+        std::env::set_var("VILLALOBOS_AGENT_TYPE", "implementer");
+
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list"
+        });
+
+        let socket_path = PathBuf::from("/tmp/test-socket");
+        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+
+        let tool_names = extract_tool_names(&response);
+
+        // Implementer should only have: complete
+        assert!(tool_names.contains("complete"), "Implementer should have complete tool");
+
+        // Implementer should NOT have any other MCP tools
+        assert!(!tool_names.contains("spawn_agents"), "Implementer should NOT have spawn_agents tool");
+        assert!(!tool_names.contains("decompose"), "Implementer should NOT have decompose tool");
+        assert!(!tool_names.contains("create_task"), "Implementer should NOT have create_task tool");
+
+        // Verify exact count
+        assert_eq!(tool_names.len(), 1, "Implementer should have exactly 1 tool, got: {:?}", tool_names);
+    }
+
+    /// Test that unknown agent types default to orchestrator tools (fail-safe).
+    #[tokio::test]
+    #[serial]
+    async fn test_unknown_agent_type_defaults_to_orchestrator() {
+        // Set agent type to something unknown
+        std::env::set_var("VILLALOBOS_AGENT_TYPE", "unknown_type");
+
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list"
+        });
+
+        let socket_path = PathBuf::from("/tmp/test-socket");
+        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+
+        let tool_names = extract_tool_names(&response);
+
+        // Unknown types should default to orchestrator tools
+        assert!(tool_names.contains("spawn_agents"), "Unknown agent type should default to having spawn_agents");
+        assert!(tool_names.contains("decompose"), "Unknown agent type should default to having decompose");
+        assert!(tool_names.contains("complete"), "Unknown agent type should default to having complete");
+    }
+
+    /// Test that missing agent type env var defaults to orchestrator tools.
+    #[tokio::test]
+    #[serial]
+    async fn test_missing_agent_type_defaults_to_orchestrator() {
+        // Remove the agent type env var
+        std::env::remove_var("VILLALOBOS_AGENT_TYPE");
+
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list"
+        });
+
+        let socket_path = PathBuf::from("/tmp/test-socket");
+        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+
+        let tool_names = extract_tool_names(&response);
+
+        // Missing type should default to orchestrator tools
+        assert!(tool_names.contains("spawn_agents"), "Missing agent type should default to having spawn_agents");
+    }
+
+    /// Test that MCP tools match the centralized config.
+    /// This ensures handlers.rs stays in sync with agents/config.rs.
+    #[tokio::test]
+    #[serial]
+    async fn test_mcp_tools_match_centralized_config() {
+        use crate::agents::{PLANNER_CONFIG, ORCHESTRATOR_CONFIG, IMPLEMENTER_CONFIG};
+
+        let socket_path = PathBuf::from("/tmp/test-socket");
+
+        // Test planner
+        std::env::set_var("VILLALOBOS_AGENT_TYPE", "planner");
+        let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+        let tool_names = extract_tool_names(&response);
+
+        for expected_tool in PLANNER_CONFIG.mcp_tools {
+            assert!(tool_names.contains(*expected_tool),
+                    "Planner should have {} (from centralized config)", expected_tool);
+        }
+        assert_eq!(tool_names.len(), PLANNER_CONFIG.mcp_tools.len(),
+                   "Planner tool count should match config");
+
+        // Test orchestrator
+        std::env::set_var("VILLALOBOS_AGENT_TYPE", "orchestrator");
+        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+        let tool_names = extract_tool_names(&response);
+
+        for expected_tool in ORCHESTRATOR_CONFIG.mcp_tools {
+            assert!(tool_names.contains(*expected_tool),
+                    "Orchestrator should have {} (from centralized config)", expected_tool);
+        }
+        assert_eq!(tool_names.len(), ORCHESTRATOR_CONFIG.mcp_tools.len(),
+                   "Orchestrator tool count should match config");
+
+        // Test implementer
+        std::env::set_var("VILLALOBOS_AGENT_TYPE", "implementer");
+        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+        let tool_names = extract_tool_names(&response);
+
+        for expected_tool in IMPLEMENTER_CONFIG.mcp_tools {
+            assert!(tool_names.contains(*expected_tool),
+                    "Implementer should have {} (from centralized config)", expected_tool);
+        }
+        assert_eq!(tool_names.len(), IMPLEMENTER_CONFIG.mcp_tools.len(),
+                   "Implementer tool count should match config");
     }
 }

@@ -29,10 +29,15 @@ async fn main() -> Result<()> {
             .with_env_filter("villalobos=info,info")
             .init();
 
-        let socket_path = std::env::var("VILLALOBOS_SOCKET")
-            .expect("VILLALOBOS_SOCKET environment variable not set");
+        // Get socket path from --socket argument (preferred) or VILLALOBOS_SOCKET env var (fallback)
+        let socket_path = args.iter()
+            .position(|a| a == "--socket")
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .or_else(|| std::env::var("VILLALOBOS_SOCKET").ok())
+            .expect("Socket path required: use --socket <path> or set VILLALOBOS_SOCKET");
 
-        tracing::info!("Running in MCP server mode");
+        tracing::info!("Running in MCP server mode (socket={})", socket_path);
         return mcp_server::run_stdio_server(PathBuf::from(socket_path)).await;
     }
 
@@ -79,7 +84,6 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "Create a simple hello world program in Python".to_string());
 
     tracing::info!("📁 Run directory: {:?}", run_dir);
-    tracing::info!("Starting orchestrator with goal: {}", goal);
 
     // Load agent configurations from config files
     // Project-level (.villalobos/agents/) overrides user-level (~/.villalobos/agents/)
@@ -99,7 +103,12 @@ async fn main() -> Result<()> {
     );
 
     // Build model configuration from loaded configs and available models
-    let model_config = build_model_config(&loaded_configs, &available_models)?;
+    let mut model_config = build_model_config(&loaded_configs, &available_models)?;
+
+    // Apply debug build override (uses Haiku for fast, cheap testing)
+    // In release builds, this is a no-op
+    model_config.apply_debug_override();
+
     model_config.validate()?;
     tracing::info!(
         "🎯 Model configuration: orchestrator={}, planner={}, implementer={}",
@@ -108,11 +117,49 @@ async fn main() -> Result<()> {
         model_config.implementer_model
     );
 
-    // Run the orchestrator
+    // Run the orchestrator with signal handling for graceful shutdown
     let mut app = app::App::with_log_manager(model_config, log_manager).await?;
-    let result = app.run(&goal).await?;
 
-    // Gracefully shutdown all processes
+    // Set up signal handler
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let shutdown_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(shutdown_tx)));
+
+    // Spawn signal handler task
+    let signal_shutdown_tx = shutdown_tx.clone();
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate()).expect("Failed to set up SIGTERM handler");
+            let mut sigint = signal(SignalKind::interrupt()).expect("Failed to set up SIGINT handler");
+
+            tokio::select! {
+                _ = sigterm.recv() => {
+                    tracing::info!("📴 Received SIGTERM, initiating shutdown...");
+                }
+                _ = sigint.recv() => {
+                    tracing::info!("📴 Received SIGINT, initiating shutdown...");
+                }
+            }
+
+            // Signal main task to shutdown
+            if let Some(tx) = signal_shutdown_tx.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+        }
+    });
+
+    // Run the main task with ability to be interrupted
+    let result = tokio::select! {
+        result = app.run(&goal) => result?,
+        _ = &mut shutdown_rx => {
+            tracing::info!("🛑 Shutdown requested, cleaning up...");
+            app.shutdown().await?;
+            std::process::exit(130); // Exit code for SIGINT
+        }
+    };
+
+    // Normal completion - gracefully shutdown all processes
     app.shutdown().await?;
 
     if result.success {

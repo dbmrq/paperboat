@@ -123,6 +123,46 @@ impl ModelConfig {
         }
     }
 
+    /// Applies debug build model override.
+    ///
+    /// In debug builds, all models default to Haiku for fast, cheap testing.
+    /// This can be overridden by setting the `VILLALOBOS_MODEL` environment variable.
+    ///
+    /// In release builds, this is a no-op (respects user configuration).
+    #[cfg(debug_assertions)]
+    pub fn apply_debug_override(&mut self) {
+        // Check for environment variable override first
+        if let Ok(model_str) = std::env::var("VILLALOBOS_MODEL") {
+            if let Ok(model_id) = ModelId::from_str(&model_str) {
+                tracing::info!(
+                    "🧪 VILLALOBOS_MODEL override: using {} for all agents",
+                    model_id
+                );
+                self.orchestrator_model = model_id;
+                self.planner_model = model_id;
+                self.implementer_model = model_id;
+                return;
+            } else {
+                tracing::warn!(
+                    "⚠️  Invalid VILLALOBOS_MODEL '{}', falling back to debug default (haiku)",
+                    model_str
+                );
+            }
+        }
+
+        // Debug build default: use Haiku for all agents (cheap and fast)
+        tracing::info!("🧪 Debug build: using haiku4.5 for all agents (override with VILLALOBOS_MODEL)");
+        self.orchestrator_model = ModelId::Haiku4_5;
+        self.planner_model = ModelId::Haiku4_5;
+        self.implementer_model = ModelId::Haiku4_5;
+    }
+
+    /// Applies debug build model override (no-op in release builds).
+    #[cfg(not(debug_assertions))]
+    pub fn apply_debug_override(&mut self) {
+        // Release build: respect user configuration
+    }
+
     /// Validates that all selected models are in the available list
     pub fn validate(&self) -> Result<()> {
         let available_ids: Vec<ModelId> = self.available_models.iter().map(|m| m.id).collect();
@@ -462,5 +502,68 @@ mod tests {
             models[0].description,
             "Best for complex tasks with multiple lines of description"
         );
+    }
+
+    // ========================================================================
+    // Debug Override Tests
+    // ========================================================================
+
+    // Use a mutex to serialize tests that modify VILLALOBOS_MODEL env var
+    use std::sync::Mutex;
+    static ENV_VAR_MUTEX: Mutex<()> = Mutex::new(());
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn test_apply_debug_override_sets_haiku() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
+        // Clear any env var that might interfere
+        std::env::remove_var("VILLALOBOS_MODEL");
+
+        let mut config = ModelConfig::default();
+        config.apply_debug_override();
+
+        assert_eq!(config.orchestrator_model, ModelId::Haiku4_5);
+        assert_eq!(config.planner_model, ModelId::Haiku4_5);
+        assert_eq!(config.implementer_model, ModelId::Haiku4_5);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn test_apply_debug_override_respects_env_var() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
+        // Set env var to override
+        std::env::set_var("VILLALOBOS_MODEL", "sonnet4.5");
+
+        let mut config = ModelConfig::default();
+        config.apply_debug_override();
+
+        assert_eq!(config.orchestrator_model, ModelId::Sonnet4_5);
+        assert_eq!(config.planner_model, ModelId::Sonnet4_5);
+        assert_eq!(config.implementer_model, ModelId::Sonnet4_5);
+
+        // Clean up
+        std::env::remove_var("VILLALOBOS_MODEL");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn test_apply_debug_override_invalid_env_var_falls_back() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
+        // Set invalid env var
+        std::env::set_var("VILLALOBOS_MODEL", "invalid-model");
+
+        let mut config = ModelConfig::default();
+        config.apply_debug_override();
+
+        // Should fall back to Haiku
+        assert_eq!(config.orchestrator_model, ModelId::Haiku4_5);
+        assert_eq!(config.planner_model, ModelId::Haiku4_5);
+        assert_eq!(config.implementer_model, ModelId::Haiku4_5);
+
+        // Clean up
+        std::env::remove_var("VILLALOBOS_MODEL");
     }
 }

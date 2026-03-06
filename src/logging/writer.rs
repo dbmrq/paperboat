@@ -142,10 +142,36 @@ impl AgentWriter {
         Ok(())
     }
 
-    /// Write a tool call event.
-    pub async fn write_tool_call(&mut self, tool_name: &str) -> std::io::Result<()> {
+    /// Write an agent tool call event (tools used by the agent like save-file, web-search, etc).
+    ///
+    /// The `title` is the human-readable description from the ACP tool_call update.
+    /// This distinguishes agent tools from MCP tools (our orchestration tools).
+    pub async fn write_tool_call(&mut self, title: &str) -> std::io::Result<()> {
         let timestamp = Local::now().format("%H:%M:%S");
-        let line = format!("\n[{timestamp}] 🔧 Tool: {tool_name}\n");
+        let line = format!("\n[{timestamp}] 🔧 Agent: {title}\n");
+        self.file.write_all(line.as_bytes()).await?;
+
+        let _ = self.event_tx.send(LogEvent::ToolCall {
+            agent_type: self.agent_type.clone(),
+            session_id: self.session_id.clone(),
+            depth: self.depth,
+            tool_name: title.to_string(),
+        });
+
+        Ok(())
+    }
+
+    /// Write an MCP tool call event (our orchestration tools like spawn_agents, complete, etc).
+    ///
+    /// The `tool_name` is the actual MCP tool name.
+    /// The `description` provides context about what the tool is doing.
+    pub async fn write_mcp_tool_call(
+        &mut self,
+        tool_name: &str,
+        description: &str,
+    ) -> std::io::Result<()> {
+        let timestamp = Local::now().format("%H:%M:%S");
+        let line = format!("\n[{timestamp}] 🔧 MCP: {tool_name}({description})\n");
         self.file.write_all(line.as_bytes()).await?;
 
         let _ = self.event_tx.send(LogEvent::ToolCall {
@@ -236,6 +262,16 @@ impl AgentWriter {
         let timestamp = Local::now().format("%H:%M:%S");
         let line = format!("\n[{timestamp}] ✅ Result: {message}\n");
         self.file.write_all(line.as_bytes()).await
+    }
+
+    /// Write a spawn error to the log file.
+    /// This captures the full error chain for debugging spawn failures.
+    pub async fn write_spawn_error(&mut self, error: &anyhow::Error) -> std::io::Result<()> {
+        let timestamp = Local::now().format("%H:%M:%S");
+        // Use {:#} to get the full error chain
+        let line = format!("\n[{timestamp}] ❌ SPAWN FAILED:\n{error:#}\n");
+        self.file.write_all(line.as_bytes()).await?;
+        self.file.flush().await
     }
 
     /// Write completion marker and flush.
@@ -345,7 +381,7 @@ mod tests {
         writer.finalize(false).await.unwrap();
 
         let content = std::fs::read_to_string(dir.path().join("tools.log")).unwrap();
-        assert!(content.contains("Tool: view"));
+        assert!(content.contains("Agent: view"), "Expected 'Agent: view' in log, got: {}", content);
         // Success results are no longer logged to file (only errors)
         assert!(!content.contains("Tool result: view"));
         assert!(content.contains("❌ Tool failed: save-file"));

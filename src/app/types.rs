@@ -23,35 +23,13 @@ pub enum ToolMessage {
 /// forcing the orchestrator to delegate work to worker agents.
 pub const ORCHESTRATOR_CACHE_DIR: &str = "~/.villalobos/augment-orchestrator";
 
-/// Tools to remove from the orchestrator agent.
-/// These are editing/execution tools that should only be available to worker agents.
-pub const ORCHESTRATOR_REMOVED_TOOLS: &[&str] = &[
-    "str-replace-editor",
-    "save-file",
-    "remove-files",
-    "apply_patch",
-    "launch-process",
-    "kill-process",
-    "read-process",
-    "write-process",
-    "list-processes",
-    "web-search",
-    "web-fetch",
-];
-
 /// Path to the planner-specific auggie cache directory.
 /// This directory has a settings.json with built-in task management tools removed,
-/// so the planner uses our custom write_plan tool instead.
+/// so the planner uses our custom create_task tool instead.
 pub const PLANNER_CACHE_DIR: &str = "~/.villalobos/augment-planner";
 
-/// Tools to remove from the planner agent.
-/// These are built-in task management tools that conflict with our custom planning workflow.
-pub const PLANNER_REMOVED_TOOLS: &[&str] = &[
-    "view_tasklist",
-    "reorganize_tasklist",
-    "update_tasks",
-    "add_tasks",
-];
+// NOTE: Tool removal configuration is now centralized in `crate::agents::config`.
+// Use ORCHESTRATOR_CONFIG and PLANNER_CONFIG from there for removed_auggie_tools.
 
 /// System prompt for the orchestrator agent (loaded from prompts/orchestrator.txt)
 pub const ORCHESTRATOR_PROMPT: &str = include_str!("../../prompts/orchestrator.txt");

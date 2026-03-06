@@ -37,7 +37,7 @@ pub struct MockSessionUpdate {
     pub tool_result: Option<MockToolResult>,
 
     /// Optional MCP tool call to inject (triggers tool call through the mock channel).
-    /// This simulates the agent calling one of our MCP tools (`write_plan`, `complete`, `spawn_agents`, `decompose`).
+    /// This simulates the agent calling one of our MCP tools (`create_task`, `complete`, `spawn_agents`, `decompose`).
     #[serde(default)]
     pub inject_mcp_tool_call: Option<MockMcpToolCall>,
 }
@@ -47,8 +47,13 @@ pub struct MockSessionUpdate {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 pub enum MockMcpToolCall {
-    /// Call the `write_plan` tool (planner agent).
-    WritePlan { plan: String },
+    /// Call the `create_task` tool (planner agent).
+    CreateTask {
+        name: String,
+        description: String,
+        #[serde(default)]
+        dependencies: Vec<String>,
+    },
     /// Call the complete tool (all agents).
     Complete {
         success: bool,

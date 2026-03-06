@@ -46,17 +46,13 @@ content = "Creating a plan for fixing critical database bug.\n\n"
 [[planner_sessions.updates]]
 delay_ms = 50
 session_update = "agent_message_chunk"
-content = "[Calling write_plan tool]"
+content = "[Calling create_task tool]"
 
 [planner_sessions.updates.inject_mcp_tool_call]
-tool = "write_plan"
-plan = """## Plan
-
-1. **Fix database connection timeout bug**
-   - Investigate connection pool settings
-   - Update timeout configuration
-   - Add retry logic
-"""
+tool = "create_task"
+name = "Fix database connection timeout bug"
+description = "Investigate connection pool settings, update timeout configuration, and add retry logic"
+dependencies = []
 
 [[planner_sessions.updates]]
 delay_ms = 50

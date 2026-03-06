@@ -156,16 +156,25 @@ impl MockSessionBuilder {
         self
     }
 
-    /// Add a `write_plan` MCP tool call injection.
-    /// This simulates the planner agent calling `write_plan()`.
-    pub fn with_write_plan(mut self, plan: impl Into<String>, delay_ms: u64) -> Self {
+    /// Add a `create_task` MCP tool call injection.
+    /// This simulates the planner agent calling `create_task()`.
+    pub fn with_create_task(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        delay_ms: u64,
+    ) -> Self {
         self.updates.push(MockSessionUpdate {
             delay_ms,
             session_update: "agent_message_chunk".to_string(), // Dummy update to trigger injection
-            content: Some("[calling write_plan]".to_string()),
+            content: Some("[calling create_task]".to_string()),
             tool_title: None,
             tool_result: None,
-            inject_mcp_tool_call: Some(MockMcpToolCall::WritePlan { plan: plan.into() }),
+            inject_mcp_tool_call: Some(MockMcpToolCall::CreateTask {
+                name: name.into(),
+                description: description.into(),
+                dependencies: vec![],
+            }),
         });
         self
     }

@@ -1,8 +1,11 @@
 //! Agent templates and registry.
 
+pub mod config;
 mod templates;
 
-pub use templates::{AgentRegistry, AgentTemplate};
+pub use config::{get_config, format_removed_tools, AgentToolConfig};
+pub use config::{PLANNER_CONFIG, ORCHESTRATOR_CONFIG, IMPLEMENTER_CONFIG, VERIFIER_CONFIG, EXPLORER_CONFIG};
+pub use templates::AgentRegistry;
 
 /// Agent roles that can be spawned.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -24,7 +27,8 @@ impl AgentRole {
         }
     }
 
-    pub fn as_str(&self) -> &'static str {
+    #[allow(dead_code)]
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Implementer => "implementer",
             Self::Verifier => "verifier",

@@ -106,6 +106,34 @@ impl TaskManager {
     pub fn all_tasks(&self) -> Vec<&Task> {
         self.tasks.values().collect()
     }
+
+    /// Check if any tasks have been created.
+    pub fn has_tasks(&self) -> bool {
+        !self.tasks.is_empty()
+    }
+
+    /// Format tasks as a structured plan for the orchestrator.
+    /// Returns None if no tasks exist, otherwise (task_count, formatted_plan).
+    pub fn format_for_orchestrator(&self) -> Option<(usize, String)> {
+        if self.tasks.is_empty() {
+            return None;
+        }
+
+        // Sort tasks: those with no dependencies first
+        let mut tasks: Vec<_> = self.tasks.values().collect();
+        tasks.sort_by(|a, b| {
+            let a_deps = a.dependencies.len();
+            let b_deps = b.dependencies.len();
+            a_deps.cmp(&b_deps).then_with(|| a.name.cmp(&b.name))
+        });
+
+        let mut lines = Vec::new();
+        for (i, task) in tasks.iter().enumerate() {
+            lines.push(format!("{}. **{}**: {}", i + 1, task.name, task.description));
+        }
+
+        Some((tasks.len(), lines.join("\n")))
+    }
 }
 
 impl Default for TaskManager {

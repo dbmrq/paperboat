@@ -13,7 +13,7 @@ use std::time::Duration;
 ///
 /// This test verifies the most basic complete flow:
 /// 1. Goal is submitted
-/// 2. Planner creates a plan using write_plan tool
+/// 2. Planner creates tasks using create_task tool
 /// 3. Planner calls complete
 /// 4. Orchestrator receives the plan
 /// 5. Orchestrator calls implement for a task
@@ -87,15 +87,15 @@ async fn test_e2e_complete_task_lifecycle() {
     assert!(!tool_calls.is_empty(), "Should have captured tool calls");
 
     // Find tool call types
-    let mut write_plan_idx = None;
+    let mut create_task_idx = None;
     let mut implement_idx = None;
     let mut complete_indices = Vec::new();
 
     for (i, tc) in tool_calls.iter().enumerate() {
         match &tc.call {
-            crate::mcp_server::ToolCall::WritePlan { .. } => {
-                if write_plan_idx.is_none() {
-                    write_plan_idx = Some(i);
+            crate::mcp_server::ToolCall::CreateTask { .. } => {
+                if create_task_idx.is_none() {
+                    create_task_idx = Some(i);
                 }
             }
             crate::mcp_server::ToolCall::SpawnAgents { .. } => {
@@ -110,17 +110,17 @@ async fn test_e2e_complete_task_lifecycle() {
         }
     }
 
-    // write_plan should be called first
+    // create_task should be called first
     assert!(
-        write_plan_idx.is_some(),
-        "write_plan should have been called"
+        create_task_idx.is_some(),
+        "create_task should have been called"
     );
 
-    // implement should be called after write_plan
+    // implement should be called after create_task
     assert!(implement_idx.is_some(), "implement should have been called");
     assert!(
-        write_plan_idx.unwrap() < implement_idx.unwrap(),
-        "write_plan should happen before implement"
+        create_task_idx.unwrap() < implement_idx.unwrap(),
+        "create_task should happen before implement"
     );
 
     // There should be multiple complete calls (planner, implementer, orchestrator)
@@ -415,8 +415,10 @@ async fn test_e2e_prompt_content_verification() {
                     content: None,
                     tool_title: None,
                     tool_result: None,
-                    inject_mcp_tool_call: Some(MockMcpToolCall::WritePlan {
-                        plan: "## Plan\n\n1. Implement feature X\n".to_string(),
+                    inject_mcp_tool_call: Some(MockMcpToolCall::CreateTask {
+                        name: "Implement feature X".to_string(),
+                        description: "Implement feature X according to requirements".to_string(),
+                        dependencies: vec![],
                     }),
                 },
                 MockSessionUpdate {
@@ -489,28 +491,27 @@ async fn test_e2e_tool_call_arguments_verification() {
         .expect("Test should complete");
 
     // ----------------------------------------------------------------
-    // Verify write_plan tool call has plan content
+    // Verify create_task tool call has task content
     // ----------------------------------------------------------------
-    let write_plan_call = result
+    let create_task_call = result
         .tool_calls
         .iter()
-        .find(|tc| matches!(&tc.call, crate::mcp_server::ToolCall::WritePlan { .. }));
+        .find(|tc| matches!(&tc.call, crate::mcp_server::ToolCall::CreateTask { .. }));
 
     assert!(
-        write_plan_call.is_some(),
-        "Should have a write_plan tool call"
+        create_task_call.is_some(),
+        "Should have a create_task tool call"
     );
 
-    if let crate::mcp_server::ToolCall::WritePlan { plan } = &write_plan_call.unwrap().call {
+    if let crate::mcp_server::ToolCall::CreateTask { name, description, .. } = &create_task_call.unwrap().call {
         assert!(
-            plan.contains("##") || plan.contains("1.") || plan.contains("-"),
-            "Plan should have structured content (headers, numbers, or bullets), got: {}",
-            plan
+            !name.is_empty(),
+            "Task name should not be empty"
         );
         assert!(
-            plan.len() > 20,
-            "Plan should have substantive content (>20 chars), got {} chars",
-            plan.len()
+            description.len() > 10,
+            "Task description should have substantive content (>10 chars), got {} chars",
+            description.len()
         );
     }
 
@@ -708,26 +709,26 @@ async fn test_e2e_tool_call_timing() {
     // Verify expected sequence patterns
     // ----------------------------------------------------------------
 
-    // write_plan should appear early (planner phase)
-    let write_plan_pos = call_sequence.iter().position(|&t| t == "write_plan");
+    // create_task should appear early (planner phase)
+    let create_task_pos = call_sequence.iter().position(|&t| t == "create_task");
     assert!(
-        write_plan_pos.is_some(),
-        "write_plan should be in call sequence"
+        create_task_pos.is_some(),
+        "create_task should be in call sequence"
     );
 
-    // spawn_agents should appear after write_plan (orchestrator delegating)
+    // spawn_agents should appear after create_task (orchestrator delegating)
     let spawn_agents_pos = call_sequence.iter().position(|&t| t == "spawn_agents");
     assert!(
         spawn_agents_pos.is_some(),
         "spawn_agents should be in call sequence"
     );
     assert!(
-        write_plan_pos.unwrap() < spawn_agents_pos.unwrap(),
-        "write_plan should happen before spawn_agents. Sequence: {:?}",
+        create_task_pos.unwrap() < spawn_agents_pos.unwrap(),
+        "create_task should happen before spawn_agents. Sequence: {:?}",
         call_sequence
     );
 
-    // First complete should be planner's (after write_plan)
+    // First complete should be planner's (after create_task)
     let first_complete_pos = call_sequence.iter().position(|&t| t == "complete");
     assert!(
         first_complete_pos.is_some(),
@@ -975,17 +976,17 @@ async fn test_e2e_planning_only_flow() {
     );
 
     // ----------------------------------------------------------------
-    // Verify write_plan was called
+    // Verify create_task was called
     // ----------------------------------------------------------------
-    let write_plan_calls: Vec<_> = result
+    let create_task_calls: Vec<_> = result
         .tool_calls
         .iter()
-        .filter(|tc| matches!(&tc.call, crate::mcp_server::ToolCall::WritePlan { .. }))
+        .filter(|tc| matches!(&tc.call, crate::mcp_server::ToolCall::CreateTask { .. }))
         .collect();
 
     assert!(
-        !write_plan_calls.is_empty(),
-        "Planning-only flow should have write_plan call"
+        !create_task_calls.is_empty(),
+        "Planning-only flow should have create_task call"
     );
 }
 
@@ -1039,7 +1040,7 @@ async fn test_e2e_all_tool_calls_have_responses() {
     // ----------------------------------------------------------------
     assert!(
         result.tool_calls.len() >= 5,
-        "Should have at least 5 tool calls (write_plan, 3x implement, 2+ complete), got {}",
+        "Should have at least 5 tool calls (3x create_task, 3x implement, 2+ complete), got {}",
         result.tool_calls.len()
     );
 }

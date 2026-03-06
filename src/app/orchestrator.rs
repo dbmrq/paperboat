@@ -31,13 +31,14 @@ impl App {
         // Configure MCP server
         // For stdio transport, env is an array of {name, value} objects
         // Use unique name "villalobos-orchestrator" to prevent caching issues
+        // Pass --socket directly to avoid env var caching issues across auggie sessions
         let mcp_servers = vec![json!({
             "name": "villalobos-orchestrator",
             "command": binary_path.to_string_lossy(),
-            "args": ["--mcp-server"],
+            "args": ["--mcp-server", "--socket", &socket_path],
             "env": [{
-                "name": "VILLALOBOS_SOCKET",
-                "value": socket_path
+                "name": "VILLALOBOS_AGENT_TYPE",
+                "value": "orchestrator"
             }]
         })];
 
@@ -53,7 +54,7 @@ impl App {
             .await?;
 
         let full_prompt = format!(
-            "{}\n\n## PLAN TO EXECUTE\n\nThe following plan was created by a planner agent. Your job is to execute it by calling spawn_agents() or decompose() for each task. Do NOT re-plan or re-analyze. Just execute the tasks in order.\n\n{}",
+            "{}\n\n## Plan\n\n{}",
             ORCHESTRATOR_PROMPT.trim(),
             prompt
         );
@@ -100,8 +101,7 @@ impl App {
                     match &request.tool_call {
                         ToolCall::Decompose { task } => {
                             // Log the MCP tool call to orchestrator log
-                            let tool_desc = format!("decompose_villalobos: {}", truncate_for_log(task, 100));
-                            let _ = writer.write_tool_call(&tool_desc).await;
+                            let _ = writer.write_mcp_tool_call("decompose", &truncate_for_log(task, 100)).await;
                             tracing::info!("🔄 MCP tool call: decompose({})", truncate_for_log(task, 80));
 
                             self.tool_rx = Some(tool_rx);
@@ -120,8 +120,8 @@ impl App {
                         ToolCall::SpawnAgents { ref agents, ref wait } => {
                             // Log the MCP tool call to orchestrator log
                             let agent_count = agents.len();
-                            let tool_desc = format!("spawn_agents: {agent_count} agent(s), wait={wait:?}");
-                            let _ = writer.write_tool_call(&tool_desc).await;
+                            let desc = format!("{agent_count} agent(s), wait={wait:?}");
+                            let _ = writer.write_mcp_tool_call("spawn_agents", &desc).await;
                             tracing::info!("🚀 MCP tool call: spawn_agents({agent_count} agents, wait={wait:?})");
 
                             // Log each agent being spawned
@@ -159,24 +159,52 @@ impl App {
                                 continue;
                             }
 
-                            // NOTE: Concurrent mode is currently disabled because tool calls from
-                            // worker agents are not properly routed. The concurrent implementation
-                            // (spawn_agents_concurrent) only waits for session_finished messages
-                            // but doesn't handle tool calls (e.g., the `complete` call workers must
-                            // make). This causes workers to hang waiting for tool responses that
-                            // never come, resulting in 30-minute timeouts.
-                            //
-                            // TODO: To enable concurrent mode, we need to either:
-                            // 1. Add session IDs to tool calls so they can be routed to the correct
-                            //    handler, OR
-                            // 2. Have each concurrent agent spawn its own MCP server instance
-                            //
-                            // For now, we always use sequential mode which properly handles tool
-                            // calls through the orchestrator's tool_rx channel.
-                            let _ = self.router_active; // silence unused warning
-                            let (all_success, combined_summary) = {
+                            // Choose execution mode based on router_active:
+                            // - Concurrent mode (router_active=true): Each agent gets its own socket
+                            //   and tool handler, enabling true parallel execution
+                            // - Sequential mode (router_active=false): Fallback for mock tests where
+                            //   agents share the orchestrator's tool_rx channel
+                            let (all_success, combined_summary) = if self.router_active {
+                                // Concurrent mode: use per-agent sockets
+                                tracing::info!("🚀 Running {} agents in CONCURRENT mode", agents.len());
+
+                                let results = self.spawn_agents_concurrent(agents.clone(), wait.clone()).await;
+
+                                let mut summaries = Vec::new();
+                                let mut all_success = true;
+
+                                for result in &results {
+                                    let status = if result.success { "✓" } else { "✗" };
+                                    let msg = result.message.as_deref().unwrap_or("No message");
+                                    summaries.push(format!("[{}] {} {}", result.role, status, truncate_for_log(msg, 80)));
+
+                                    if !result.success {
+                                        all_success = false;
+                                    }
+                                }
+
+                                let success_count = results.iter().filter(|r| r.success).count();
+                                if all_success {
+                                    tracing::info!(
+                                        "✅ spawn_agents complete: {}/{} agents succeeded (concurrent mode)",
+                                        success_count,
+                                        results.len()
+                                    );
+                                } else {
+                                    tracing::warn!(
+                                        "⚠️ spawn_agents complete: {}/{} agents succeeded, {} failed (concurrent mode)",
+                                        success_count,
+                                        results.len(),
+                                        results.len() - success_count
+                                    );
+                                }
+
+                                (all_success, summaries.join("\n"))
+                            } else {
                                 // Sequential mode: spawn agents one at a time
                                 // This uses handle_implement_with_response which works with mock clients
+                                tracing::debug!("Running {} agents in SEQUENTIAL mode (mock/test)", agents.len());
+
                                 let mut all_success = true;
                                 let mut summaries = Vec::new();
 
@@ -241,27 +269,17 @@ impl App {
                             );
                             let _ = response_tx.send(response);
 
-                            // Drain remaining orchestrator messages before returning
-                            tracing::debug!("⏳ Draining remaining orchestrator messages for session {}", session_id);
+                            // Brief drain for any final messages (500ms max)
                             let drain_result = tokio::time::timeout(
-                                std::time::Duration::from_secs(5),
+                                std::time::Duration::from_millis(500),
                                 self.drain_orchestrator_messages(&session_id, writer),
                             ).await;
 
                             if drain_result.is_err() {
-                                tracing::debug!("⚠️ Timeout waiting for orchestrator session_finished, proceeding anyway");
+                                tracing::trace!("Drain timeout, proceeding");
                             }
 
                             break TaskResult { success: *success, message: message.clone() };
-                        }
-                        ToolCall::WritePlan { .. } => {
-                            // WritePlan is only for planner agents, not orchestrator
-                            tracing::warn!("Orchestrator received unexpected WritePlan call");
-                            let response = ToolResponse::failure(
-                                request.request_id.clone(),
-                                "write_plan is not available to orchestrator agents".to_string(),
-                            );
-                            let _ = response_tx.send(response);
                         }
                         ToolCall::CreateTask { .. } => {
                             // CreateTask is only for planner agents, not orchestrator

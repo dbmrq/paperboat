@@ -21,7 +21,7 @@ impl App {
             .to_string_lossy()
             .to_string();
 
-        // Configure MCP server with planner agent type (only gets write_plan and complete tools)
+        // Configure MCP server with planner agent type (only gets create_task and complete tools)
         // Use unique name "villalobos-planner" to prevent MCP server caching/reuse between agent types
         let mcp_servers = vec![json!({
             "name": "villalobos-planner",

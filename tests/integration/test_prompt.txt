@@ -1,0 +1,29 @@
+INTEGRATION TEST: Create three simple Python modules concurrently.
+
+This is an automated integration test for the Villalobos orchestrator platform.
+The goal is to exercise the core orchestrator flows efficiently.
+
+## Requirements
+
+Create three empty Python module files in {TEST_DIR}:
+
+1. **module_alpha.py** - A module with a single function `alpha()` that returns "alpha"
+2. **module_beta.py** - A module with a single function `beta()` that returns "beta"  
+3. **module_gamma.py** - A module with a single function `gamma()` that returns "gamma"
+
+## Important Instructions
+
+- These three tasks are INDEPENDENT - spawn 3 implementer agents CONCURRENTLY using a single `spawn_agents()` call with an array of 3 agents
+- Each file should be minimal: just the function definition and a module docstring
+- Do NOT add tests, do NOT add type hints, do NOT add anything beyond the basic requirement
+- After all agents complete, call `complete(success=true)` with a brief summary
+
+## Expected Flow
+
+1. Planner: Create a plan with 3 parallel tasks
+2. Orchestrator: Call `spawn_agents([{implementer, task1}, {implementer, task2}, {implementer, task3}], wait="all")`
+3. Three implementers run concurrently, each creating one file
+4. Orchestrator calls `complete(success=true)` when all done
+
+This tests: planning, concurrent agent spawning, file creation, and completion signaling.
+

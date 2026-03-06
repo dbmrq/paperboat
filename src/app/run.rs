@@ -90,20 +90,22 @@ impl App {
             tracing::warn!("Failed to finalize planner log: {}", e);
         }
 
-        // Use the stored plan (from write_plan tool) if available,
-        // otherwise fall back to full planner output (for backward compatibility)
-        if let Some(ref plan) = self.stored_plan {
-            tracing::info!(
-                "📋 Using stored plan ({} chars) from write_plan tool",
-                plan.len()
-            );
-            Ok(plan.clone())
+        // Use structured tasks from TaskManager
+        let formatted_tasks = {
+            let tm = self.task_manager.read().await;
+            tm.format_for_orchestrator()
+        };
+
+        if let Some((count, plan)) = formatted_tasks {
+            tracing::info!("📋 Using {} structured tasks from create_task calls", count);
+            Ok(plan)
         } else if !planner_output.is_empty() {
-            tracing::warn!("⚠️  Planner did not use write_plan tool, falling back to full output");
+            // Fallback: raw planner output (not recommended)
+            tracing::warn!("⚠️  Planner did not create tasks, falling back to raw output");
             Ok(planner_output.text.clone())
         } else {
             Err(anyhow::anyhow!(
-                "Planner produced no plan (neither write_plan nor text output)"
+                "Planner produced no plan (no create_task calls, no text output)"
             ))
         }
     }
@@ -123,9 +125,6 @@ impl App {
         let result = self
             .run_orchestrator_with_writer(plan_to_execute, &mut orchestrator_writer)
             .await;
-
-        // Clear stored plan after use
-        self.stored_plan = None;
 
         // Finalize orchestrator log
         let success = result.as_ref().map(|r| r.success).unwrap_or(false);

@@ -228,7 +228,11 @@ impl MockAcpClient {
 
         // Convert MockMcpToolCall to ToolCall
         let tool_call = match &pending.tool_call {
-            MockMcpToolCall::WritePlan { plan } => ToolCall::WritePlan { plan: plan.clone() },
+            MockMcpToolCall::CreateTask { name, description, dependencies } => ToolCall::CreateTask {
+                name: name.clone(),
+                description: description.clone(),
+                dependencies: dependencies.clone(),
+            },
             MockMcpToolCall::Complete { success, message } => ToolCall::Complete {
                 success: *success,
                 message: message.clone(),
@@ -251,12 +255,12 @@ impl MockAcpClient {
         let request_id = uuid::Uuid::new_v4().to_string();
 
         // Record the tool call in the interceptor (this captures it for assertions)
-        // For write_plan and complete, the interceptor handles them specially.
-        // For implement/decompose, the interceptor returns a mock response.
+        // For create_task and complete, the interceptor handles them specially.
+        // For spawn_agents/decompose, the interceptor returns a mock response.
         {
             let mut guard = interceptor.lock().await;
             // Just record the call - we don't need the response here since
-            // the App will handle it internally for write_plan/complete
+            // the App will handle it internally for create_task/complete
             let _ = guard.get_response(&tool_call, &request_id);
         }
 

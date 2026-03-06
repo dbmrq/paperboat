@@ -22,7 +22,7 @@
 # Sessions Defined: 1 planner only
 # Mock Responses Defined: 0 (no tool calls made)
 #
-# Note: This scenario does NOT call write_plan - it goes directly to
+# Note: This scenario does NOT call create_task - it goes directly to
 # complete(success=false) to signal the planning failure.
 # ============================================================================
 

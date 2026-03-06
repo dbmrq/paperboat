@@ -52,20 +52,24 @@ content = "Analyzing the request for building an authentication system.\n\n"
 [[planner_sessions.updates]]
 delay_ms = 50
 session_update = "agent_message_chunk"
-content = "[Calling write_plan tool]"
+content = "[Calling create_task tool]"
 
 [planner_sessions.updates.inject_mcp_tool_call]
-tool = "write_plan"
-plan = """## Plan
+tool = "create_task"
+name = "Build authentication system"
+description = "Build authentication system including login flow, registration flow, and password reset (complex - requires decomposition)"
+dependencies = []
 
-1. **Build authentication system** (complex - requires decomposition)
-   - Login flow
-   - Registration flow
-   - Password reset
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling create_task tool]"
 
-2. **Add rate limiting**
-   - Simple single task
-"""
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Add rate limiting"
+description = "Add rate limiting to the API endpoints (simple single task)"
+dependencies = ["Build authentication system"]
 
 [[planner_sessions.updates]]
 delay_ms = 50
@@ -93,22 +97,24 @@ content = "Breaking down the authentication system into subtasks.\n\n"
 [[planner_sessions.updates]]
 delay_ms = 50
 session_update = "agent_message_chunk"
-content = "[Calling write_plan tool for subtasks]"
+content = "[Calling create_task tool]"
 
 [planner_sessions.updates.inject_mcp_tool_call]
-tool = "write_plan"
-plan = """## Authentication System Subtasks
+tool = "create_task"
+name = "Implement login flow"
+description = "Add login endpoint, JWT token generation, and session management"
+dependencies = []
 
-1. **Implement login flow**
-   - Add login endpoint
-   - Add JWT token generation
-   - Add session management
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling create_task tool]"
 
-2. **Implement registration flow**
-   - Add registration endpoint
-   - Add email validation
-   - Add password hashing
-"""
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Implement registration flow"
+description = "Add registration endpoint, email validation, and password hashing"
+dependencies = []
 
 [[planner_sessions.updates]]
 delay_ms = 50

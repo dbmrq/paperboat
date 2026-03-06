@@ -7,10 +7,10 @@
 #
 # Expected Flow:
 #   1. Planner receives goal
-#   2. Planner calls write_plan with a simple single-task plan
+#   2. Planner calls create_task to create a task
 #   3. Planner calls complete(success=true)
 #   4. Orchestrator receives the plan
-#   5. Orchestrator calls implement(task)
+#   5. Orchestrator calls spawn_agents(task)
 #   6. Implementer performs work (simulated tool calls)
 #   7. Implementer calls complete(success=true)
 #   8. Orchestrator calls complete(success=true)
@@ -25,14 +25,14 @@
 #   - result.implement_calls()[0] contains "error handling"
 #
 # Sessions Defined: 1 planner, 1 orchestrator, 1 implementer
-# Mock Responses Defined: 1 (for the implement call)
+# Mock Responses Defined: 1 (for the spawn_agents call)
 # ============================================================================
 
 [scenario]
 name = "simple_implement"
 description = "Single task that gets implemented directly"
 
-# Planner session: creates a plan and calls write_plan, then complete
+# Planner session: creates tasks and calls complete
 [[planner_sessions]]
 session_id = "planner-001"
 
@@ -41,15 +41,17 @@ delay_ms = 100
 session_update = "agent_message_chunk"
 content = "Analyzing the request... I'll create a plan for adding error handling.\n\n"
 
-# Planner calls write_plan tool via MCP
+# Planner calls create_task tool via MCP
 [[planner_sessions.updates]]
 delay_ms = 50
 session_update = "agent_message_chunk"
-content = "[Calling write_plan tool]"
+content = "[Calling create_task tool]"
 
 [planner_sessions.updates.inject_mcp_tool_call]
-tool = "write_plan"
-plan = "## Plan\n\n1. **Add error handling to login function**\n   - Add try-catch blocks\n   - Add proper error logging\n   - Return meaningful error messages\n"
+tool = "create_task"
+name = "Add error handling to login function"
+description = "Add try-catch blocks, proper error logging, and meaningful error messages to the login function"
+dependencies = []
 
 # Planner calls complete tool via MCP
 [[planner_sessions.updates]]

@@ -184,31 +184,18 @@ impl App {
                             );
                             let _ = response_tx.send(response);
 
-                            tracing::debug!("⏳ Draining remaining messages for session {}", session_id);
+                            // Brief drain to capture any final messages (1 second max)
                             let drain_result = tokio::time::timeout(
-                                std::time::Duration::from_secs(5),
+                                std::time::Duration::from_millis(500),
                                 Self::drain_session_messages_from_rx(&mut session_rx, session_id, writer),
                             ).await;
 
                             if drain_result.is_err() {
-                                tracing::debug!("⚠️ Timeout waiting for session_finished, proceeding anyway");
+                                tracing::trace!("Drain timeout, proceeding");
                             }
 
                             self.tool_rx = Some(tool_rx);
                             return Ok(output);
-                        }
-                        ToolCall::WritePlan { plan } => {
-                            tracing::info!(
-                                "📝 Session {} submitted plan ({} chars)",
-                                session_id,
-                                plan.len()
-                            );
-                            self.stored_plan = Some(plan.clone());
-                            let response = ToolResponse::success(
-                                request.request_id,
-                                "Plan stored successfully".to_string(),
-                            );
-                            let _ = response_tx.send(response);
                         }
                         ToolCall::CreateTask { name, description, dependencies } => {
                             let task_id = {
@@ -298,31 +285,18 @@ impl App {
                             );
                             let _ = response_tx.send(response);
 
-                            tracing::debug!("⏳ Draining remaining messages for session {}", session_id);
+                            // Brief drain to capture any final messages (500ms max)
                             let drain_result = tokio::time::timeout(
-                                std::time::Duration::from_secs(5),
+                                std::time::Duration::from_millis(500),
                                 self.drain_session_messages_direct(session_id, writer),
                             ).await;
 
                             if drain_result.is_err() {
-                                tracing::debug!("⚠️ Timeout waiting for session_finished, proceeding anyway");
+                                tracing::trace!("Drain timeout, proceeding");
                             }
 
                             self.tool_rx = Some(tool_rx);
                             return Ok(output);
-                        }
-                        ToolCall::WritePlan { plan } => {
-                            tracing::info!(
-                                "📝 Session {} submitted plan ({} chars)",
-                                session_id,
-                                plan.len()
-                            );
-                            self.stored_plan = Some(plan.clone());
-                            let response = ToolResponse::success(
-                                request.request_id,
-                                "Plan stored successfully".to_string(),
-                            );
-                            let _ = response_tx.send(response);
                         }
                         ToolCall::CreateTask { name, description, dependencies } => {
                             let task_id = {

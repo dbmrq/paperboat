@@ -1,5 +1,6 @@
 //! Built-in agent templates.
 
+use super::config::{EXPLORER_CONFIG, IMPLEMENTER_CONFIG, VERIFIER_CONFIG};
 use super::AgentRole;
 use std::collections::HashMap;
 
@@ -20,35 +21,20 @@ impl AgentRegistry {
     pub fn new() -> Self {
         let mut templates = HashMap::new();
 
+        // Use centralized config from agents::config for tool restrictions
         templates.insert(AgentRole::Implementer, AgentTemplate {
             prompt_template: include_str!("../../prompts/implementer.txt"),
-            removed_tools: vec![],  // Gets all tools
+            removed_tools: IMPLEMENTER_CONFIG.removed_auggie_tools.to_vec(),
         });
 
         templates.insert(AgentRole::Verifier, AgentTemplate {
             prompt_template: include_str!("../../prompts/verifier.txt"),
-            removed_tools: vec![
-                // No editing - read-only except for running tests
-                "str-replace-editor",
-                "save-file",
-                "remove-files",
-            ],
+            removed_tools: VERIFIER_CONFIG.removed_auggie_tools.to_vec(),
         });
 
         templates.insert(AgentRole::Explorer, AgentTemplate {
             prompt_template: include_str!("../../prompts/explorer.txt"),
-            removed_tools: vec![
-                // No editing
-                "str-replace-editor",
-                "save-file",
-                "remove-files",
-                // No execution (can only read and search)
-                "launch-process",
-                "kill-process",
-                "read-process",
-                "write-process",
-                "list-processes",
-            ],
+            removed_tools: EXPLORER_CONFIG.removed_auggie_tools.to_vec(),
         });
 
         Self { templates }
@@ -58,6 +44,7 @@ impl AgentRegistry {
         self.templates.get(role)
     }
 
+    #[allow(dead_code)]
     pub fn has_role(&self, role: &AgentRole) -> bool {
         self.templates.contains_key(role)
     }
@@ -77,23 +64,35 @@ mod tests {
     fn test_registry_has_implementer() {
         let registry = AgentRegistry::new();
         let template = registry.get(&AgentRole::Implementer).unwrap();
-        assert!(template.removed_tools.is_empty());
+        // Implementer can edit files and run processes
+        assert!(!template.removed_tools.contains(&"str-replace-editor"));
+        assert!(!template.removed_tools.contains(&"save-file"));
+        assert!(!template.removed_tools.contains(&"launch-process"));
+        // But sub-agents are removed for all agent types
+        assert!(template.removed_tools.contains(&"sub-agent-explore"));
+        assert!(template.removed_tools.contains(&"sub-agent-plan"));
     }
 
     #[test]
     fn test_registry_has_verifier() {
         let registry = AgentRegistry::new();
         let template = registry.get(&AgentRole::Verifier).unwrap();
+        // Verifier cannot edit files
         assert!(template.removed_tools.contains(&"str-replace-editor"));
-        assert!(!template.removed_tools.contains(&"launch-process")); // Can run tests
+        assert!(template.removed_tools.contains(&"save-file"));
+        // But verifier CAN run processes (for tests)
+        assert!(!template.removed_tools.contains(&"launch-process"));
     }
 
     #[test]
     fn test_registry_has_explorer() {
         let registry = AgentRegistry::new();
         let template = registry.get(&AgentRole::Explorer).unwrap();
+        // Explorer cannot edit files
         assert!(template.removed_tools.contains(&"str-replace-editor"));
-        assert!(template.removed_tools.contains(&"launch-process")); // Can't execute
+        assert!(template.removed_tools.contains(&"save-file"));
+        // Explorer cannot execute processes
+        assert!(template.removed_tools.contains(&"launch-process"));
     }
 
     #[test]

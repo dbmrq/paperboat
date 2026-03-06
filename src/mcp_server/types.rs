@@ -114,7 +114,6 @@ impl ToolResponse {
 /// - `Decompose` - Request to break down a task into smaller subtasks
 /// - `SpawnAgents` - Request to spawn one or more worker agents
 /// - `Complete` - Signal that the orchestrator has finished processing
-/// - `WritePlan` - Submit a plan (planner agent only)
 /// - `CreateTask` - Create a task (planner agent only)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ToolCall {
@@ -138,11 +137,6 @@ pub enum ToolCall {
         /// Optional message providing details about the completion.
         message: Option<String>,
     },
-    /// Submit a plan (used by planner agents).
-    WritePlan {
-        /// The plan content as markdown.
-        plan: String,
-    },
     /// Create a task (used by planner agents).
     /// This creates a task for the orchestrator to track and execute.
     CreateTask {
@@ -162,7 +156,6 @@ impl ToolCall {
             Self::Decompose { .. } => "decompose",
             Self::SpawnAgents { .. } => "spawn_agents",
             Self::Complete { .. } => "complete",
-            Self::WritePlan { .. } => "write_plan",
             Self::CreateTask { .. } => "create_task",
         }
     }

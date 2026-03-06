@@ -29,7 +29,7 @@ pub mod types;
 pub use types::ToolMessage;
 
 use crate::acp::{AcpClient, AcpClientTrait};
-use crate::agents::AgentRegistry;
+use crate::agents::{AgentRegistry, ORCHESTRATOR_CONFIG, PLANNER_CONFIG};
 use crate::error::TimeoutConfig;
 use crate::logging::{LogScope, RunLogManager};
 use crate::models::ModelConfig;
@@ -40,9 +40,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use types::{
-    ORCHESTRATOR_CACHE_DIR, ORCHESTRATOR_REMOVED_TOOLS, PLANNER_CACHE_DIR, PLANNER_REMOVED_TOOLS,
-};
+use types::{ORCHESTRATOR_CACHE_DIR, PLANNER_CACHE_DIR};
 
 /// The main application struct that orchestrates multi-agent workflows.
 pub struct App {
@@ -68,8 +66,6 @@ pub struct App {
     log_manager: Arc<RunLogManager>,
     /// Current logging scope (changes during decompose/subtasks)
     pub(crate) current_scope: LogScope,
-    /// Stored plan from planner agent (written via `write_plan` tool)
-    pub(crate) stored_plan: Option<String>,
     /// Router for directing ACP messages to per-session channels
     pub(crate) session_router: Arc<RwLock<SessionRouter>>,
     /// Task manager for tracking structured plan execution
@@ -113,22 +109,23 @@ impl App {
         }
 
         // Always write settings.json to ensure removedTools is current
+        // Use centralized config from agents::config
         let settings = json!({
-            "removedTools": ORCHESTRATOR_REMOVED_TOOLS
+            "removedTools": ORCHESTRATOR_CONFIG.removed_auggie_tools
         });
         let settings_path = cache_path.join("settings.json");
         std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)
             .context("Failed to write orchestrator settings.json")?;
         tracing::debug!(
             "Wrote orchestrator settings.json with {} removed tools",
-            ORCHESTRATOR_REMOVED_TOOLS.len()
+            ORCHESTRATOR_CONFIG.removed_auggie_tools.len()
         );
 
         Ok(cache_dir)
     }
 
     /// Set up the planner cache directory with the required configuration.
-    /// This ensures the planner agent has built-in task management tools removed.
+    /// This ensures the planner agent has file editing and process execution tools removed.
     fn setup_planner_cache() -> Result<String> {
         // First, check if auggie is authenticated
         let main_augment_dir = shellexpand::tilde("~/.augment").to_string();
@@ -161,15 +158,16 @@ impl App {
         }
 
         // Always write settings.json to ensure removedTools is current
+        // Use centralized config from agents::config
         let settings = json!({
-            "removedTools": PLANNER_REMOVED_TOOLS
+            "removedTools": PLANNER_CONFIG.removed_auggie_tools
         });
         let settings_path = cache_path.join("settings.json");
         std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)
             .context("Failed to write planner settings.json")?;
         tracing::debug!(
             "Wrote planner settings.json with {} removed tools",
-            PLANNER_REMOVED_TOOLS.len()
+            PLANNER_CONFIG.removed_auggie_tools.len()
         );
 
         Ok(cache_dir)
@@ -243,7 +241,6 @@ impl App {
             router_active: false,
             log_manager,
             current_scope,
-            stored_plan: None,
             session_router: Arc::new(RwLock::new(SessionRouter::new())),
             task_manager,
             agent_registry: AgentRegistry::new(),
@@ -279,7 +276,6 @@ impl App {
             router_active: false,
             log_manager,
             current_scope,
-            stored_plan: None,
             session_router: Arc::new(RwLock::new(SessionRouter::new())),
             task_manager: Arc::new(RwLock::new(TaskManager::default())),
             agent_registry: AgentRegistry::new(),
@@ -315,7 +311,6 @@ impl App {
             router_active: false,
             log_manager,
             current_scope,
-            stored_plan: None,
             session_router: Arc::new(RwLock::new(SessionRouter::new())),
             task_manager: Arc::new(RwLock::new(TaskManager::default())),
             agent_registry: AgentRegistry::new(),

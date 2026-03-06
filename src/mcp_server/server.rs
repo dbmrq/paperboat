@@ -27,7 +27,8 @@ use tokio::sync::Mutex;
 /// socket connection, sends the request, waits for the response, and sends
 /// the MCP response back to stdout.
 pub async fn run_stdio_server(socket_path: PathBuf) -> Result<()> {
-    eprintln!("🔌 MCP server starting with socket path: {socket_path:?}");
+    // Log to stderr which auggie captures
+    eprintln!("🔌 MCP server PID={} starting with socket path: {socket_path:?}", std::process::id());
 
     let stdin = tokio::io::stdin();
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));

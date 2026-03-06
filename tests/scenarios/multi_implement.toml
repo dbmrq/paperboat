@@ -45,25 +45,35 @@ content = "Analyzing the request... Creating a multi-task plan.\n\n"
 [[planner_sessions.updates]]
 delay_ms = 50
 session_update = "agent_message_chunk"
-content = "[Calling write_plan tool]"
+content = "[Calling create_task tool]"
 
 [planner_sessions.updates.inject_mcp_tool_call]
-tool = "write_plan"
-plan = """## Plan
+tool = "create_task"
+name = "Create database schema"
+description = "Add users table and sessions table to the database"
+dependencies = []
 
-1. **Create database schema**
-   - Add users table
-   - Add sessions table
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling create_task tool]"
 
-2. **Implement user service**
-   - Add CRUD operations
-   - Add validation logic
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Implement user service"
+description = "Add CRUD operations and validation logic for users"
+dependencies = ["Create database schema"]
 
-3. **Add API endpoints**
-   - POST /users
-   - GET /users/:id
-   - DELETE /users/:id
-"""
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling create_task tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Add API endpoints"
+description = "Add POST /users, GET /users/:id, and DELETE /users/:id endpoints"
+dependencies = ["Implement user service"]
 
 [[planner_sessions.updates]]
 delay_ms = 50

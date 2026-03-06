@@ -102,7 +102,7 @@ async fn test_multi_task_flow() {
 }
 
 /// Test that the planner produces a valid plan structure.
-/// Verifies: write_plan tool is called with plan content.
+/// Verifies: create_task tool is called.
 #[tokio::test]
 async fn test_planning_produces_valid_plan() {
     let harness = TestHarness::with_scenario_file(Path::new("tests/scenarios/planning_only.toml"))
@@ -122,16 +122,16 @@ async fn test_planning_produces_valid_plan() {
     assert_planner_spawned(&result);
     assert_orchestrator_spawned(&result);
 
-    // Verify write_plan was called (captured in tool_calls)
-    let write_plan_calls: Vec<_> = result
+    // Verify create_task was called (captured in tool_calls)
+    let create_task_calls: Vec<_> = result
         .tool_calls
         .iter()
-        .filter(|c| matches!(&c.call, crate::mcp_server::ToolCall::WritePlan { .. }))
+        .filter(|c| matches!(&c.call, crate::mcp_server::ToolCall::CreateTask { .. }))
         .collect();
 
     assert!(
-        !write_plan_calls.is_empty(),
-        "Expected write_plan to be called. Tool calls: {:?}",
+        !create_task_calls.is_empty(),
+        "Expected create_task to be called. Tool calls: {:?}",
         result
             .tool_calls
             .iter()
@@ -139,13 +139,10 @@ async fn test_planning_produces_valid_plan() {
             .collect::<Vec<_>>()
     );
 
-    // Verify the plan contains structured content
-    if let crate::mcp_server::ToolCall::WritePlan { plan } = &write_plan_calls[0].call {
-        assert!(
-            plan.contains("##") || plan.contains("1.") || plan.contains("-"),
-            "Plan should have structured content (headers, numbers, or bullets)"
-        );
-        assert!(plan.len() > 50, "Plan should have substantive content");
+    // Verify the task has substantive content
+    if let crate::mcp_server::ToolCall::CreateTask { name, description, .. } = &create_task_calls[0].call {
+        assert!(!name.is_empty(), "Task name should not be empty");
+        assert!(description.len() > 10, "Task description should have substantive content");
     }
 
     // No implement calls in planning-only scenario
@@ -305,10 +302,10 @@ async fn test_tool_call_responses_are_captured() {
     }
 
     // Verify different tool types were captured
-    let has_write_plan = result
+    let has_create_task = result
         .tool_calls
         .iter()
-        .any(|c| matches!(&c.call, crate::mcp_server::ToolCall::WritePlan { .. }));
+        .any(|c| matches!(&c.call, crate::mcp_server::ToolCall::CreateTask { .. }));
     let has_spawn_agents = result
         .tool_calls
         .iter()
@@ -318,7 +315,7 @@ async fn test_tool_call_responses_are_captured() {
         .iter()
         .any(|c| matches!(&c.call, crate::mcp_server::ToolCall::Complete { .. }));
 
-    assert!(has_write_plan, "Should capture write_plan calls");
+    assert!(has_create_task, "Should capture create_task calls");
     assert!(has_spawn_agents, "Should capture spawn_agents calls");
     assert!(has_complete, "Should capture complete calls");
 }
@@ -594,19 +591,19 @@ fn test_load_scenario_from_file() {
     // Verify planner session structure
     let planner = &scenario.planner_sessions[0];
     assert_eq!(planner.session_id, "planner-001");
-    // Planner has: message chunk, write_plan injection, complete injection, turn_finished
+    // Planner has: message chunk, create_task injection, complete injection, turn_finished
     assert!(planner.updates.len() >= 4);
 
-    // Verify the planner has an update with write_plan tool call injection
-    let has_write_plan = planner.updates.iter().any(|u| {
+    // Verify the planner has an update with create_task tool call injection
+    let has_create_task = planner.updates.iter().any(|u| {
         matches!(
             &u.inject_mcp_tool_call,
-            Some(MockMcpToolCall::WritePlan { .. })
+            Some(MockMcpToolCall::CreateTask { .. })
         )
     });
     assert!(
-        has_write_plan,
-        "Planner should have a write_plan tool call injection"
+        has_create_task,
+        "Planner should have a create_task tool call injection"
     );
 
     // Verify orchestrator session structure
@@ -880,15 +877,14 @@ async fn test_implement_failure_captured() {
 /// Verifies: System handles edge case of empty plan.
 #[tokio::test]
 async fn test_empty_plan_fails_gracefully() {
-    // Create scenario with planner that writes an empty plan
+    // Create scenario with planner that creates no tasks (empty plan)
     let scenario = MockScenario {
         scenario: ScenarioMetadata {
             name: "empty_plan".to_string(),
-            description: "Planner writes empty plan".to_string(),
+            description: "Planner creates no tasks".to_string(),
         },
         planner_sessions: vec![MockSessionBuilder::new("planner-001")
             .with_message_chunk("Analyzing request...", 50)
-            .with_write_plan("## Plan\n\n(No tasks needed)", 50)
             .with_complete(
                 true,
                 Some("Empty plan - no tasks to execute".to_string()),
@@ -950,7 +946,8 @@ async fn test_mock_exhaustion_error_is_clear() {
         },
         planner_sessions: vec![MockSessionBuilder::new("planner-001")
             .with_message_chunk("Creating plan...", 50)
-            .with_write_plan("## Plan\n\n1. Task A\n2. Task B", 50)
+            .with_create_task("Task A", "Do task A", 50)
+            .with_create_task("Task B", "Do task B", 50)
             .with_complete(true, Some("Plan created".to_string()), 50)
             .with_turn_finished(50)
             .build()],

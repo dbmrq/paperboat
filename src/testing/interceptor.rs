@@ -110,18 +110,6 @@ impl MockToolInterceptor {
                 });
                 return Ok(response);
             }
-            ToolCall::WritePlan { .. } => {
-                // WritePlan always succeeds
-                let response = ToolResponse::success(
-                    request_id.to_string(),
-                    "Plan stored successfully".to_string(),
-                );
-                self.captured_calls.push(CapturedToolCall {
-                    call: call.clone(),
-                    response: response.clone(),
-                });
-                return Ok(response);
-            }
             ToolCall::CreateTask { name, .. } => {
                 // CreateTask always succeeds
                 let response = ToolResponse::success(
@@ -246,39 +234,44 @@ mod tests {
     }
 
     #[test]
-    fn test_mock_tool_interceptor_write_plan_always_succeeds() {
+    fn test_mock_tool_interceptor_create_task_always_succeeds() {
         let mut interceptor = MockToolInterceptor::empty();
 
-        let call = ToolCall::WritePlan {
-            plan: "Some plan".to_string(),
+        let call = ToolCall::CreateTask {
+            name: "Task 1".to_string(),
+            description: "Do something".to_string(),
+            dependencies: vec![],
         };
         let response = interceptor.get_response(&call, "req-001").unwrap();
 
         assert!(response.success);
-        assert!(response.summary.contains("Plan stored"));
+        assert!(response.summary.contains("Task 'Task 1' created"));
     }
 
     #[tokio::test]
-    async fn test_mock_tool_interceptor_captures_write_plan() {
-        // Test that write_plan tool calls are captured correctly
+    async fn test_mock_tool_interceptor_captures_create_task() {
+        // Test that create_task tool calls are captured correctly
         let mut interceptor = MockToolInterceptor::empty();
 
-        let call = ToolCall::WritePlan {
-            plan: "Test plan content".to_string(),
+        let call = ToolCall::CreateTask {
+            name: "Test Task".to_string(),
+            description: "Test task content".to_string(),
+            dependencies: vec![],
         };
-        let response = interceptor.get_response(&call, "req-wp-001").unwrap();
+        let response = interceptor.get_response(&call, "req-ct-001").unwrap();
 
         assert!(response.success);
-        assert!(response.summary.contains("Plan stored"));
+        assert!(response.summary.contains("created"));
 
         // Verify the call was captured
         let captured = interceptor.captured_calls();
         assert_eq!(captured.len(), 1);
         match &captured[0].call {
-            ToolCall::WritePlan { plan } => {
-                assert_eq!(plan, "Test plan content");
+            ToolCall::CreateTask { name, description, .. } => {
+                assert_eq!(name, "Test Task");
+                assert_eq!(description, "Test task content");
             }
-            _ => panic!("Expected WritePlan call"),
+            _ => panic!("Expected CreateTask call"),
         }
     }
 }

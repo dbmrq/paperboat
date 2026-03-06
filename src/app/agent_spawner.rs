@@ -3,10 +3,13 @@
 //! This module provides a generalized interface for spawning worker agents
 //! (implementers, verifiers, etc.) with support for concurrent execution.
 
-use super::types::{format_duration_human, truncate_for_log};
+use super::socket::{setup_agent_socket, AgentSocketHandle};
+use super::types::{format_duration_human, truncate_for_log, ToolMessage};
 use super::App;
+use crate::acp::AcpClientTrait;
 use crate::agents::AgentRole;
-use crate::mcp_server::{AgentSpec, ToolResponse, WaitMode};
+use crate::logging::AgentWriter;
+use crate::mcp_server::{AgentSpec, ToolCall, ToolResponse, WaitMode};
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::Arc;
@@ -221,6 +224,136 @@ impl App {
         Ok((response.session_id, prompt))
     }
 
+    /// Spawn an agent with its own dedicated Unix socket.
+    ///
+    /// This is used for concurrent agent execution where each agent needs
+    /// its own socket to receive tool call responses.
+    ///
+    /// Returns (`session_id`, prompt, `AgentSocketHandle`, `AcpClient`) so the caller can:
+    /// - Log the prompt
+    /// - Receive tool calls on the agent's dedicated socket
+    /// - Clean up the socket when done
+    /// - Keep the AcpClient alive until the agent completes
+    pub(crate) async fn spawn_agent_with_own_socket(
+        &mut self,
+        spec: &AgentSpec,
+        context: &str,
+    ) -> Result<(String, String, AgentSocketHandle, crate::acp::AcpClient)> {
+        let cwd = std::env::current_dir()?.to_string_lossy().to_string();
+
+        // Get the path to the current binary
+        let binary_path =
+            std::env::current_exe().context("Failed to get current executable path")?;
+
+        // Create a unique socket for this agent
+        let agent_id = uuid::Uuid::new_v4().to_string();
+        tracing::debug!("Creating socket for agent_id={}", &agent_id[..8]);
+        let socket_handle = setup_agent_socket(&agent_id).await
+            .with_context(|| format!("Failed to create agent socket for agent_id={}", &agent_id[..8]))?;
+        tracing::debug!("Socket created successfully for agent_id={}", &agent_id[..8]);
+
+        let socket_path_str = socket_handle.socket_path.to_string_lossy().to_string();
+
+        // Determine prompt and removed_tools based on role
+        let (prompt, removed_tools) = match AgentRole::from_str(&spec.role) {
+            Some(AgentRole::Custom) => {
+                // Custom: require prompt and tools from spec
+                let custom_prompt = spec.prompt.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Custom agent requires 'prompt'"))?
+                    .clone();
+                let allowed_tools = spec.tools.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Custom agent requires 'tools' whitelist"))?;
+
+                // Derive removed_tools from allowed_tools
+                let all_tools = vec!["str-replace-editor", "save-file", "remove-files",
+                                     "launch-process", "kill-process", "read-process",
+                                     "write-process", "list-processes", "web-search", "web-fetch"];
+                let removed: Vec<String> = all_tools.iter()
+                    .filter(|t| !allowed_tools.contains(&t.to_string()))
+                    .map(|s| s.to_string())
+                    .collect();
+
+                (custom_prompt, removed)
+            }
+            Some(role) => {
+                // Template role: get from registry
+                let template = self.agent_registry.get(&role)
+                    .ok_or_else(|| anyhow::anyhow!("No template for role: {:?}", role))?;
+
+                let prompt = template.prompt_template
+                    .replace("{task}", &spec.task)
+                    .replace("{context}", context);
+                let removed = template.removed_tools.iter().map(|s| s.to_string()).collect();
+
+                (prompt, removed)
+            }
+            None => {
+                // Unknown role - treat as implementer for backward compatibility
+                tracing::warn!("Unknown agent role '{}', treating as implementer", spec.role);
+                let template = self.agent_registry.get(&AgentRole::Implementer).unwrap();
+                let prompt = template.prompt_template
+                    .replace("{task}", &spec.task)
+                    .replace("{context}", context);
+                (prompt, vec![])
+            }
+        };
+
+        // Build environment variables for the MCP server
+        let mut env_vars = vec![
+            json!({"name": "VILLALOBOS_AGENT_TYPE", "value": spec.role.clone()}),
+        ];
+
+        // Add removed tools to environment if any
+        if !removed_tools.is_empty() {
+            env_vars.push(json!({"name": "VILLALOBOS_REMOVED_TOOLS", "value": removed_tools.join(",")}));
+        }
+
+        // Configure MCP server with agent type
+        // Pass socket path as an ARG (not just env var) to ensure auggie spawns unique processes
+        // Auggie may cache MCP servers by command+args, so unique args = unique process
+        let mcp_server_name = format!("villalobos-{}-{}", spec.role, &agent_id[..8]);
+        let mcp_servers = vec![json!({
+            "name": mcp_server_name.clone(),
+            "command": binary_path.to_string_lossy(),
+            "args": ["--mcp-server", "--socket", &socket_path_str],
+            "env": env_vars
+        })];
+
+        tracing::info!(
+            "🔧 MCP server config for agent_id={}: name={}, socket={}",
+            &agent_id[..8], mcp_server_name, socket_path_str
+        );
+
+        // Create a fresh auggie instance for this agent to avoid MCP server caching issues.
+        // Each implementer gets its own auggie process with isolated MCP server state.
+        let mut agent_acp = crate::acp::AcpClient::spawn_with_timeout(
+            None, // Use default cache
+            self.timeout_config.request_timeout,
+        ).await
+            .with_context(|| format!("Failed to spawn auggie for agent_id={}", &agent_id[..8]))?;
+        agent_acp.initialize().await
+            .with_context(|| format!("Failed to initialize auggie for agent_id={}", &agent_id[..8]))?;
+
+        let response = agent_acp
+            .session_new(
+                self.model_config.implementer_model.as_str(),
+                mcp_servers,
+                &cwd,
+            )
+            .await
+            .with_context(|| format!("Failed to create ACP session for agent_id={}", &agent_id[..8]))?;
+
+        tracing::debug!("🔨 {} prompt (with own socket, agent_id={}):\n{}", spec.role, &agent_id[..8], prompt);
+
+        agent_acp
+            .session_prompt(&response.session_id, &prompt)
+            .await
+            .with_context(|| format!("Failed to send prompt for agent_id={}, session_id={}", &agent_id[..8], response.session_id))?;
+
+        // Return the auggie instance so it stays alive while the agent runs
+        Ok((response.session_id, prompt, socket_handle, agent_acp))
+    }
+
     /// Handle decompose tool call, returning a `ToolResponse`.
     pub(crate) async fn handle_decompose_with_response(
         &mut self,
@@ -233,27 +366,31 @@ impl App {
         }
     }
 
-    /// Spawn an agent asynchronously based on an `AgentSpec`.
+    /// Spawn an agent asynchronously with its own dedicated socket.
+    pub(crate) async fn spawn_agent_async(
+        &mut self,
+        spec: &AgentSpec,
+    ) -> Result<(String, oneshot::Receiver<AgentResult>)> {
+        self.spawn_agent_async_with_context(spec, "").await
+    }
+
+    /// Spawn an agent asynchronously with its own dedicated socket and context.
     ///
-    /// Returns a tuple of (`session_id`, receiver) where the receiver will
-    /// receive the `AgentResult` when the agent completes.
-    ///
-    /// Supports all agent roles:
-    /// - Template roles (implementer, verifier, explorer): uses registry templates
-    /// - Custom: requires prompt and tools from spec
-    /// - Unknown roles: falls back to implementer behavior with warning
+    /// Each agent gets its own Unix socket and tool handler task, enabling
+    /// concurrent execution of multiple agents without routing conflicts.
     ///
     /// # Arguments
     ///
     /// * `spec` - The agent specification describing the role and task
+    /// * `context` - Additional context about neighboring tasks
     ///
     /// # Returns
     ///
     /// A tuple containing the session ID and a oneshot receiver for the result.
-    #[allow(dead_code)]
-    pub(crate) async fn spawn_agent_async(
+    pub(crate) async fn spawn_agent_async_with_context(
         &mut self,
         spec: &AgentSpec,
+        context: &str,
     ) -> Result<(String, oneshot::Receiver<AgentResult>)> {
         // Create implementer writer
         let mut impl_writer = self
@@ -262,19 +399,35 @@ impl App {
             .await
             .context("Failed to create implementer writer")?;
 
-        let impl_name = impl_writer.agent_name();
+        let impl_name = impl_writer.agent_name().clone();
         let task = spec.task.clone();
         let role = spec.role.clone();
 
         tracing::info!(
-            "🔨 [{}] Starting async agent spawn (role={}): {}",
+            "🔨 [{}] Starting concurrent agent spawn (role={}): {}",
             impl_name,
             role,
             truncate_for_log(&task, 100)
         );
 
-        // Spawn the agent session using the spec-based spawner
-        let (session_id, agent_prompt) = self.spawn_agent_with_spec(spec).await?;
+        // Write a preliminary header so we have context in the log even if spawn fails
+        if let Err(e) = impl_writer.write_header(&task).await {
+            tracing::warn!("Failed to write preliminary header: {}", e);
+        }
+
+        // Spawn the agent with its own dedicated socket and auggie instance
+        let spawn_result = self.spawn_agent_with_own_socket(spec, context).await;
+
+        // If spawn failed, log the error to the implementer log file before propagating
+        let (session_id, agent_prompt, socket_handle, agent_acp) = match spawn_result {
+            Ok(result) => result,
+            Err(e) => {
+                // Write spawn error to the log file for debugging
+                let _ = impl_writer.write_spawn_error(&e).await;
+                let _ = impl_writer.finalize(false).await;
+                return Err(e);
+            }
+        };
         impl_writer.set_session_id(session_id.clone());
         if let Err(e) = impl_writer
             .write_header_with_prompt(&task, &agent_prompt)
@@ -286,7 +439,7 @@ impl App {
         // Create the completion channel
         let (result_tx, result_rx) = oneshot::channel();
 
-        // Register session with router
+        // Register session with router for ACP messages
         let session_rx = self.register_session(&session_id).await;
 
         // Clone what we need for the spawned task
@@ -294,14 +447,29 @@ impl App {
         let session_id_clone = session_id.clone();
         let timeout_duration = self.timeout_config.session_timeout;
 
-        // Spawn a task to wait for the agent and send result
+        // Spawn a handler task that:
+        // 1. Receives tool calls on the agent's dedicated socket
+        // 2. Handles the Complete tool call to detect agent completion
+        // 3. Cleans up the socket when done
+        // 4. Sends AgentResult via the oneshot channel
         tokio::spawn(async move {
+            // Keep agent_acp alive for the duration of the agent's execution.
+            // When this task ends, the AcpClient is dropped and auggie shuts down.
+            let _agent_acp = agent_acp;
+
             let start_time = std::time::Instant::now();
 
-            // Wait for the session to complete
-            // Note: This simplified version just waits for session_finished
-            // In practice, we'd need to handle tool calls from the agent
-            let success = Self::wait_for_agent_completion(session_rx, timeout_duration).await;
+            // Wait for the agent to complete, handling tool calls
+            let (success, message) = Self::run_agent_handler(
+                socket_handle,
+                session_rx,
+                timeout_duration,
+                &role,
+                &task,
+                &impl_name,
+                &mut impl_writer,
+            )
+            .await;
 
             let elapsed = start_time.elapsed();
             let elapsed_str = format_duration_human(elapsed);
@@ -317,23 +485,21 @@ impl App {
                 router.unregister(&session_id_clone);
             }
 
-            let message = if success {
+            if success {
                 tracing::info!(
-                    "✅ [async] Agent {} completed ({}) - {}",
+                    "✅ [concurrent] Agent {} completed ({}) - {}",
                     role,
                     elapsed_str,
                     truncate_for_log(&task, 60)
                 );
-                Some(format!("Task completed: {task}"))
             } else {
                 tracing::error!(
-                    "❌ [async] Agent {} FAILED after {} - {}",
+                    "❌ [concurrent] Agent {} FAILED after {} - {}",
                     role,
                     elapsed_str,
                     truncate_for_log(&task, 80)
                 );
-                Some(format!("Task failed: {task}"))
-            };
+            }
 
             let result = AgentResult {
                 role,
@@ -349,10 +515,121 @@ impl App {
         Ok((session_id, result_rx))
     }
 
+    /// Run the agent handler task, processing tool calls until completion.
+    ///
+    /// This handles the agent's dedicated socket, responding to tool calls
+    /// (especially the `Complete` call that signals the agent is done).
+    async fn run_agent_handler(
+        mut socket_handle: AgentSocketHandle,
+        mut session_rx: tokio::sync::mpsc::Receiver<serde_json::Value>,
+        timeout: std::time::Duration,
+        role: &str,
+        task: &str,
+        agent_name: &str,
+        writer: &mut AgentWriter,
+    ) -> (bool, Option<String>) {
+        let result = tokio::time::timeout(timeout, async {
+            loop {
+                tokio::select! {
+                    // Handle tool calls from the agent's socket
+                    Some(tool_msg) = socket_handle.tool_rx.recv() => {
+                        let ToolMessage::Request { request, response_tx } = tool_msg;
+
+                        match &request.tool_call {
+                            ToolCall::Complete { success, message } => {
+                                tracing::info!(
+                                    "✅ [{}] Agent {} signaled complete (socket={:?}): success={}, message={:?}",
+                                    agent_name, role, socket_handle.socket_path, success, message
+                                );
+
+                                if let Some(msg) = message {
+                                    let _ = writer.write_result(msg).await;
+                                }
+
+                                // Send success response
+                                let response = ToolResponse::success(
+                                    request.request_id,
+                                    message.clone().unwrap_or_else(|| "Done".to_string()),
+                                );
+                                let _ = response_tx.send(response);
+
+                                // Clean up socket before returning
+                                socket_handle.cleanup();
+
+                                return (*success, message.clone());
+                            }
+                            other => {
+                                // Worker agents should only call complete()
+                                // Log warning and return error
+                                tracing::warn!(
+                                    "⚠️ [{}] Agent {} made unexpected tool call: {:?}",
+                                    agent_name, role, other.tool_type()
+                                );
+                                let response = ToolResponse::failure(
+                                    request.request_id,
+                                    format!(
+                                        "Worker agents can only call complete(). \
+                                         Tool '{}' is not available.",
+                                        other.tool_type()
+                                    ),
+                                );
+                                let _ = response_tx.send(response);
+                            }
+                        }
+                    }
+
+                    // Handle ACP session messages (for logging)
+                    Some(msg) = session_rx.recv() => {
+                        // Check for session_finished (fallback completion signal)
+                        if let Some(params) = msg.get("params") {
+                            if let Some(update) = params.get("update") {
+                                if let Some(session_update) = update.get("sessionUpdate").and_then(|v| v.as_str()) {
+                                    if session_update == "session_finished" {
+                                        tracing::debug!(
+                                            "[{}] Agent {} received session_finished without complete call",
+                                            agent_name, role
+                                        );
+                                        // Clean up socket
+                                        socket_handle.cleanup();
+                                        // Treat as failure since agent didn't call complete()
+                                        return (false, Some(format!("Agent finished without calling complete() for task: {task}")));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Both channels closed unexpectedly
+                    else => {
+                        tracing::warn!(
+                            "[{}] Agent {} channels closed unexpectedly",
+                            agent_name, role
+                        );
+                        socket_handle.cleanup();
+                        return (false, Some(format!("Agent channels closed for task: {task}")));
+                    }
+                }
+            }
+        })
+        .await;
+
+        if let Ok((success, message)) = result {
+            (success, message)
+        } else {
+            tracing::error!(
+                "⏰ [{}] Agent {} timed out after {:?}",
+                agent_name, role, timeout
+            );
+            // Socket cleanup happens when socket_handle is dropped
+            (false, Some(format!("Agent timed out for task: {task}")))
+        }
+    }
+
     /// Internal helper to wait for an agent to complete via session messages.
     ///
     /// This is a simplified version that just waits for the session to finish.
-    /// For full functionality, tool calls would need to be handled externally.
+    /// Used by the old sequential mode - kept for fallback compatibility.
+    #[allow(dead_code)]
     async fn wait_for_agent_completion(
         mut session_rx: tokio::sync::mpsc::Receiver<serde_json::Value>,
         timeout: std::time::Duration,
@@ -381,6 +658,9 @@ impl App {
 
     /// Spawn multiple agents concurrently with the specified wait mode.
     ///
+    /// Each agent gets its own dedicated Unix socket for tool call handling,
+    /// enabling true concurrent execution without routing conflicts.
+    ///
     /// # Arguments
     ///
     /// * `agents` - Vector of agent specifications to spawn
@@ -392,7 +672,39 @@ impl App {
     /// # Returns
     ///
     /// A vector of `AgentResult` for completed agents (may be empty for `WaitMode::None`).
-    #[allow(dead_code)]
+    /// Generate context about neighboring tasks for an implementer.
+    fn generate_task_context(agents: &[AgentSpec], index: usize) -> String {
+        if agents.len() <= 1 {
+            return String::new();
+        }
+
+        let mut lines = Vec::new();
+
+        // Previous tasks (up to 2)
+        let prev_start = index.saturating_sub(2);
+        if prev_start < index {
+            lines.push("## Previous Tasks".to_string());
+            for i in prev_start..index {
+                lines.push(format!("- {}", truncate_for_log(&agents[i].task, 100)));
+            }
+        }
+
+        // Next tasks (up to 2)
+        let next_end = (index + 3).min(agents.len());
+        if index + 1 < next_end {
+            lines.push("## Next Tasks".to_string());
+            for i in (index + 1)..next_end {
+                lines.push(format!("- {}", truncate_for_log(&agents[i].task, 100)));
+            }
+        }
+
+        if lines.is_empty() {
+            String::new()
+        } else {
+            lines.join("\n")
+        }
+    }
+
     pub(crate) async fn spawn_agents_concurrent(
         &mut self,
         agents: Vec<AgentSpec>,
@@ -413,18 +725,19 @@ impl App {
         let mut receivers = Vec::with_capacity(agent_count);
         let mut spawn_errors = Vec::new();
 
-        for spec in agents {
-            match self.spawn_agent_async(&spec).await {
+        for (index, spec) in agents.iter().enumerate() {
+            let context = Self::generate_task_context(&agents, index);
+            match self.spawn_agent_async_with_context(spec, &context).await {
                 Ok((_session_id, rx)) => {
                     receivers.push((spec.role.clone(), spec.task.clone(), rx));
                 }
                 Err(e) => {
-                    tracing::error!("Failed to spawn agent [{}]: {}", spec.role, e);
+                    tracing::error!("Failed to spawn agent [{}]: {:#}", spec.role, e);
                     spawn_errors.push(AgentResult {
-                        role: spec.role,
-                        task: spec.task,
+                        role: spec.role.clone(),
+                        task: spec.task.clone(),
                         success: false,
-                        message: Some(format!("Failed to spawn: {e}")),
+                        message: Some(format!("Failed to spawn: {e:#}")),
                     });
                 }
             }

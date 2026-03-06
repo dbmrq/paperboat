@@ -7,7 +7,7 @@
 #
 # Expected Flow:
 #   1. Planner receives goal
-#   2. Planner calls write_plan with a multi-phase plan
+#   2. Planner calls create_task to create tasks
 #   3. Planner calls complete(success=true)
 #   4. Orchestrator receives the plan
 #   5. Orchestrator immediately calls complete(success=true) without implementing
@@ -28,7 +28,7 @@
 name = "planning_only"
 description = "Planner produces a plan, orchestrator immediately completes without implementation"
 
-# Planner session: creates a plan and calls write_plan, then complete
+# Planner session: creates tasks and calls complete
 [[planner_sessions]]
 session_id = "planner-001"
 
@@ -37,28 +37,41 @@ delay_ms = 100
 session_update = "agent_message_chunk"
 content = "Analyzing the request... Creating a planning-only outline.\n\n"
 
-# Planner calls write_plan tool via MCP
+# Planner calls create_task tool via MCP (Phase 1)
 [[planner_sessions.updates]]
 delay_ms = 50
 session_update = "agent_message_chunk"
-content = "[Calling write_plan tool]"
+content = "[Calling create_task tool]"
 
 [planner_sessions.updates.inject_mcp_tool_call]
-tool = "write_plan"
-plan = """## Plan Overview
+tool = "create_task"
+name = "Phase 1: Research"
+description = "Investigate existing solutions and document requirements"
+dependencies = []
 
-1. **Phase 1: Research**
-   - Investigate existing solutions
-   - Document requirements
+# Planner calls create_task tool via MCP (Phase 2)
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling create_task tool]"
 
-2. **Phase 2: Design**
-   - Create architecture diagram
-   - Define API contracts
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Phase 2: Design"
+description = "Create architecture diagram and define API contracts"
+dependencies = ["Phase 1: Research"]
 
-3. **Phase 3: Implementation**
-   - Build core modules
-   - Write tests
-"""
+# Planner calls create_task tool via MCP (Phase 3)
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling create_task tool]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Phase 3: Implementation"
+description = "Build core modules and write tests"
+dependencies = ["Phase 2: Design"]
 
 # Planner calls complete tool via MCP
 [[planner_sessions.updates]]

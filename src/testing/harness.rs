@@ -232,7 +232,7 @@ mod tests {
             },
             planner_sessions: vec![MockSessionBuilder::new("planner-test-001")
                 .with_message_chunk("Planning...", 0)
-                .with_write_plan("1. Do the thing", 0)
+                .with_create_task("Do the thing", "Do the thing according to requirements", 0)
                 .with_complete(true, Some("Plan done".to_string()), 0)
                 .with_turn_finished(0)
                 .build()],
