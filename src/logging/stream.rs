@@ -3,7 +3,11 @@
 use super::writer::AgentType;
 
 /// Events broadcast for UI streaming and observation.
+///
+/// The fields in each variant are intentionally kept for the streaming API,
+/// even though they may not currently be used outside of tests.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum LogEvent {
     /// Agent started a new session.
     AgentStarted {
@@ -62,6 +66,24 @@ pub enum LogEvent {
         path: String,
         task_description: String,
     },
+
+    /// A task was created in the task manager.
+    TaskCreated {
+        task_id: String,
+        name: String,
+        description: String,
+        dependencies: Vec<String>,
+        depth: u32,
+    },
+
+    /// A task's state changed (e.g., pending -> in_progress -> completed).
+    TaskStateChanged {
+        task_id: String,
+        name: String,
+        old_status: String,
+        new_status: String,
+        depth: u32,
+    },
 }
 
 #[cfg(test)]
@@ -79,7 +101,7 @@ mod tests {
 
         // Test Clone
         let cloned = event.clone();
-        
+
         // Test Debug
         let debug_str = format!("{:?}", cloned);
         assert!(debug_str.contains("AgentMessage"));
@@ -133,6 +155,20 @@ mod tests {
                 path: "/logs/run-123/subtask-001".to_string(),
                 task_description: "Implement feature X".to_string(),
             },
+            LogEvent::TaskCreated {
+                task_id: "task-001".to_string(),
+                name: "Implement login".to_string(),
+                description: "Add user authentication".to_string(),
+                dependencies: vec!["task-000".to_string()],
+                depth: 1,
+            },
+            LogEvent::TaskStateChanged {
+                task_id: "task-001".to_string(),
+                name: "Implement login".to_string(),
+                old_status: "pending".to_string(),
+                new_status: "in_progress".to_string(),
+                depth: 1,
+            },
         ];
 
         for event in events {
@@ -142,4 +178,3 @@ mod tests {
         }
     }
 }
-

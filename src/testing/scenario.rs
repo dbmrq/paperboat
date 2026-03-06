@@ -1,9 +1,11 @@
 //! Scenario loading for the mock testing system.
 //!
-//! This module provides the MockScenario type and related functionality
+//! This module provides the `MockScenario` type and related functionality
 //! for loading test scenarios from TOML files.
 
-use super::types::{AgentType, MockAcpResponse, MockAgentSession, MockToolCallResponse, MockToolType};
+use super::types::{
+    AgentType, MockAcpResponse, MockAgentSession, MockToolCallResponse, MockToolType,
+};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -44,7 +46,7 @@ pub struct MockScenario {
 }
 
 /// Metadata about a test scenario.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ScenarioMetadata {
     /// Name of the scenario.
     #[serde(default)]
@@ -64,7 +66,7 @@ impl MockScenario {
 
     /// Load a scenario from a TOML string.
     pub fn parse(toml_content: &str) -> Result<Self> {
-        let scenario: MockScenario = toml::from_str(toml_content)?;
+        let scenario: Self = toml::from_str(toml_content)?;
         Ok(scenario)
     }
 
@@ -93,14 +95,11 @@ impl MockScenario {
                 return false;
             }
             match &r.task_pattern {
-                Some(pattern) => {
-                    regex::Regex::new(pattern)
-                        .map(|re| re.is_match(task))
-                        .unwrap_or(false)
-                }
+                Some(pattern) => regex::Regex::new(pattern)
+                    .map(|re| re.is_match(task))
+                    .unwrap_or(false),
                 None => true, // No pattern means match all
             }
         })
     }
 }
-

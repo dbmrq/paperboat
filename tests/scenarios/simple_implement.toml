@@ -82,7 +82,7 @@ session_update = "agent_message_chunk"
 content = "[Calling implement tool]"
 
 [orchestrator_sessions.updates.inject_mcp_tool_call]
-tool = "implement"
+tool = "spawn_agents"
 task = "Add error handling to login function with try-catch blocks, proper error logging, and meaningful error messages"
 
 # Orchestrator calls complete after implement returns
@@ -139,7 +139,7 @@ session_update = "agent_turn_finished"
 
 # Mock tool response for implement calls
 [[mock_tool_responses]]
-tool_type = "Implement"
+tool_type = "SpawnAgents"
 task_pattern = ".*error handling.*"
 
 [mock_tool_responses.response]

@@ -77,8 +77,8 @@ impl LogScope {
     }
 
     /// Create a child scope for a decompose operation (subtask).
-    /// Creates a new subdirectory and returns a LogScope for it.
-    pub async fn child_scope(&self, task_description: &str) -> std::io::Result<LogScope> {
+    /// Creates a new subdirectory and returns a `LogScope` for it.
+    pub async fn child_scope(&self, task_description: &str) -> std::io::Result<Self> {
         let mut count = self.subtask_count.write().await;
         *count += 1;
         let subdir = self.dir.join(format!("subtask-{:03}", *count));
@@ -93,16 +93,17 @@ impl LogScope {
             task_description: task_description.to_string(),
         });
 
-        Ok(LogScope::new(subdir, self.event_tx.clone(), self.depth + 1))
+        Ok(Self::new(subdir, self.event_tx.clone(), self.depth + 1))
     }
 
     /// Get the directory path for this scope.
-    pub fn dir(&self) -> &PathBuf {
+    pub const fn dir(&self) -> &PathBuf {
         &self.dir
     }
 
     /// Get the depth of this scope in the hierarchy.
-    pub fn depth(&self) -> u32 {
+    #[allow(dead_code)]
+    pub const fn depth(&self) -> u32 {
         self.depth
     }
 }
@@ -195,7 +196,9 @@ mod tests {
         assert!(dir.path().join("subtask-001/planner.log").exists());
         assert!(dir.path().join("subtask-001/orchestrator.log").exists());
         assert!(dir.path().join("subtask-001/implementer-001.log").exists());
-        assert!(dir.path().join("subtask-001/subtask-001/implementer-001.log").exists());
+        assert!(dir
+            .path()
+            .join("subtask-001/subtask-001/implementer-001.log")
+            .exists());
     }
 }
-

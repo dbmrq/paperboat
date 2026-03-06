@@ -24,7 +24,7 @@ impl RunLogManager {
     pub fn new(base_dir: &str) -> std::io::Result<Self> {
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
         let short_uuid = &uuid::Uuid::new_v4().to_string()[..8];
-        let run_dir = PathBuf::from(base_dir).join(format!("{}_{}", timestamp, short_uuid));
+        let run_dir = PathBuf::from(base_dir).join(format!("{timestamp}_{short_uuid}"));
 
         std::fs::create_dir_all(&run_dir)?;
 
@@ -42,11 +42,11 @@ impl RunLogManager {
     }
 
     /// Get the run directory path.
-    pub fn run_dir(&self) -> &PathBuf {
+    pub const fn run_dir(&self) -> &PathBuf {
         &self.run_dir
     }
 
-    /// Create the root LogScope for this run.
+    /// Create the root `LogScope` for this run.
     ///
     /// The root scope is where the app and root orchestrator logs live.
     pub fn root_scope(&self) -> LogScope {
@@ -54,8 +54,14 @@ impl RunLogManager {
     }
 
     /// Subscribe to log events for streaming to UI.
+    #[allow(dead_code)]
     pub fn subscribe(&self) -> broadcast::Receiver<LogEvent> {
         self.event_tx.subscribe()
+    }
+
+    /// Get a clone of the event sender for task management integration.
+    pub fn event_sender(&self) -> broadcast::Sender<LogEvent> {
+        self.event_tx.clone()
     }
 }
 
@@ -115,7 +121,11 @@ mod tests {
         // Should receive the SubtaskCreated event
         let event = rx.recv().await.unwrap();
         match event {
-            LogEvent::SubtaskCreated { parent_depth, new_depth, .. } => {
+            LogEvent::SubtaskCreated {
+                parent_depth,
+                new_depth,
+                ..
+            } => {
                 assert_eq!(parent_depth, 0);
                 assert_eq!(new_depth, 1);
             }
@@ -141,4 +151,3 @@ mod tests {
         assert!(run_dir.join("implementer-001.log").exists());
     }
 }
-

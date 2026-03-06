@@ -88,7 +88,7 @@ session_update = "agent_message_chunk"
 content = "[Calling implement tool - first attempt]"
 
 [orchestrator_sessions.updates.inject_mcp_tool_call]
-tool = "implement"
+tool = "spawn_agents"
 task = "Fix database connection timeout bug"
 
 # Orchestrator receives failure, decides to retry
@@ -98,7 +98,7 @@ session_update = "agent_message_chunk"
 content = "First attempt failed. Retrying with more specific instructions.\n"
 
 [orchestrator_sessions.updates.inject_mcp_tool_call]
-tool = "implement"
+tool = "spawn_agents"
 task = "Fix database connection timeout bug - focus on connection pool settings and add exponential backoff retry"
 
 # After successful retry, complete
@@ -192,7 +192,7 @@ session_update = "agent_turn_finished"
 
 # Mock tool responses
 [[mock_tool_responses]]
-tool_type = "Implement"
+tool_type = "SpawnAgents"
 task_pattern = "^Fix database connection timeout bug$"
 
 [mock_tool_responses.response]
@@ -201,7 +201,7 @@ summary = "Implementation failed"
 error = "Config file parsing error - unexpected format"
 
 [[mock_tool_responses]]
-tool_type = "Implement"
+tool_type = "SpawnAgents"
 task_pattern = ".*connection pool.*exponential backoff.*"
 
 [mock_tool_responses.response]

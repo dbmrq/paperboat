@@ -1,0 +1,393 @@
+//! Session handling - waiting for agent sessions and processing ACP messages.
+
+use super::types::ToolMessage;
+use super::App;
+use crate::error::{OrchestratorError, TimeoutOperation};
+use crate::logging::AgentWriter;
+use crate::mcp_server::{ToolCall, ToolResponse};
+use crate::types::SessionOutput;
+use anyhow::{Context, Result};
+use serde_json::Value;
+use tokio::sync::mpsc;
+
+impl App {
+    /// Handle ACP messages and stream agent output.
+    pub(crate) async fn handle_acp_message(&self, msg: &serde_json::Value, agent_type: &str) {
+        if let Some(method) = msg.get("method").and_then(|v| v.as_str()) {
+            if method == "session/update" {
+                if let Some(params) = msg.get("params") {
+                    if let Some(update) = params.get("update") {
+                        if let Some(session_update) =
+                            update.get("sessionUpdate").and_then(|v| v.as_str())
+                        {
+                            match session_update {
+                                "agent_message_chunk" | "agent_thought_chunk" => {
+                                    // Message chunks are logged by AgentWriter elsewhere
+                                }
+                                "tool_call" => {
+                                    if let Some(title) =
+                                        update.get("title").and_then(|t| t.as_str())
+                                    {
+                                        tracing::info!("🔧 {} tool call: {}", agent_type, title);
+                                    }
+                                }
+                                "tool_result" => {
+                                    let title = update
+                                        .get("title")
+                                        .and_then(|t| t.as_str())
+                                        .unwrap_or("unknown");
+                                    let is_error = update
+                                        .get("isError")
+                                        .and_then(serde_json::Value::as_bool)
+                                        .unwrap_or(false);
+                                    if is_error {
+                                        let content = update
+                                            .get("content")
+                                            .and_then(|c| c.get("text").and_then(|t| t.as_str()))
+                                            .unwrap_or("no error message");
+                                        tracing::error!(
+                                            "❌ {} tool failed: {} - {}",
+                                            agent_type,
+                                            title,
+                                            content
+                                        );
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Register a session with the router and get its per-session receiver.
+    ///
+    /// This should be called before waiting for session output.
+    /// The session should be unregistered after completion via `unregister_session`.
+    pub(crate) async fn register_session(&self, session_id: &str) -> mpsc::Receiver<Value> {
+        let mut router = self.session_router.write().await;
+        let rx = router.register(session_id);
+        tracing::debug!("Registered session {} with router", session_id);
+        rx
+    }
+
+    /// Unregister a session from the router.
+    ///
+    /// This should be called after the session completes to clean up.
+    pub(crate) async fn unregister_session(&self, session_id: &str) {
+        let mut router = self.session_router.write().await;
+        router.unregister(session_id);
+        tracing::debug!("Unregistered session {} from router", session_id);
+    }
+
+    /// Wait for a session to complete, collecting all message output.
+    /// This is the unified wait function for all agent types (planner, implementer, etc.)
+    pub(crate) async fn wait_for_session_output(
+        &mut self,
+        session_id: &str,
+        writer: &mut AgentWriter,
+    ) -> Result<SessionOutput, OrchestratorError> {
+        let timeout_duration = self.timeout_config.session_timeout;
+
+        // If router is active, use routed mode with per-session receiver
+        // Otherwise, use direct mode (for tests with mock clients)
+        if self.router_active {
+            // Register the session with the router to get a per-session receiver
+            let session_rx = self.register_session(session_id).await;
+
+            let result = tokio::time::timeout(
+                timeout_duration,
+                self.wait_for_session_output_routed(session_id, writer, session_rx),
+            )
+            .await;
+
+            // Always unregister the session after completion (success or failure)
+            self.unregister_session(session_id).await;
+
+            match result {
+                Ok(inner_result) => inner_result.map_err(OrchestratorError::from),
+                Err(_elapsed) => {
+                    tracing::error!(
+                        "⏰ Timeout waiting for session after {:?} (session: {})",
+                        timeout_duration,
+                        session_id
+                    );
+                    Err(OrchestratorError::Timeout {
+                        operation: TimeoutOperation::WaitForSession,
+                        duration: timeout_duration,
+                        context: Some(format!("session_id: {session_id}")),
+                    })
+                }
+            }
+        } else {
+            // Direct mode: call acp_worker.recv() directly (for tests)
+            match tokio::time::timeout(
+                timeout_duration,
+                self.wait_for_session_output_direct(session_id, writer),
+            )
+            .await
+            {
+                Ok(result) => result.map_err(OrchestratorError::from),
+                Err(_elapsed) => {
+                    tracing::error!(
+                        "⏰ Timeout waiting for session after {:?} (session: {})",
+                        timeout_duration,
+                        session_id
+                    );
+                    Err(OrchestratorError::Timeout {
+                        operation: TimeoutOperation::WaitForSession,
+                        duration: timeout_duration,
+                        context: Some(format!("session_id: {session_id}")),
+                    })
+                }
+            }
+        }
+    }
+
+    /// Wait for session output using routed mode (per-session receiver from router).
+    async fn wait_for_session_output_routed(
+        &mut self,
+        session_id: &str,
+        writer: &mut AgentWriter,
+        mut session_rx: mpsc::Receiver<Value>,
+    ) -> Result<SessionOutput> {
+        tracing::debug!("⏳ Waiting for session (routed): {}", session_id);
+        let mut output = SessionOutput::new();
+        let mut seen_unhandled: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        let mut tool_rx = self.tool_rx.take().context("Tool receiver not set up")?;
+
+        loop {
+            tokio::select! {
+                Some(tool_msg) = tool_rx.recv() => {
+                    let ToolMessage::Request { request, response_tx } = tool_msg;
+
+                    match &request.tool_call {
+                        ToolCall::Complete { success, message } => {
+                            tracing::info!(
+                                "✅ Session {} signaled complete: success={}, message={:?}",
+                                session_id,
+                                success,
+                                message
+                            );
+
+                            if let Some(msg) = message {
+                                let _ = writer.write_result(msg).await;
+                            }
+
+                            let response = ToolResponse::success(
+                                request.request_id,
+                                message.clone().unwrap_or_else(|| "Done".to_string()),
+                            );
+                            let _ = response_tx.send(response);
+
+                            tracing::debug!("⏳ Draining remaining messages for session {}", session_id);
+                            let drain_result = tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                Self::drain_session_messages_from_rx(&mut session_rx, session_id, writer),
+                            ).await;
+
+                            if drain_result.is_err() {
+                                tracing::debug!("⚠️ Timeout waiting for session_finished, proceeding anyway");
+                            }
+
+                            self.tool_rx = Some(tool_rx);
+                            return Ok(output);
+                        }
+                        ToolCall::WritePlan { plan } => {
+                            tracing::info!(
+                                "📝 Session {} submitted plan ({} chars)",
+                                session_id,
+                                plan.len()
+                            );
+                            self.stored_plan = Some(plan.clone());
+                            let response = ToolResponse::success(
+                                request.request_id,
+                                "Plan stored successfully".to_string(),
+                            );
+                            let _ = response_tx.send(response);
+                        }
+                        ToolCall::CreateTask { name, description, dependencies } => {
+                            let task_id = {
+                                let mut tm = self.task_manager.write().await;
+                                tm.create(name, description, dependencies.clone())
+                            };
+
+                            tracing::info!(
+                                "📋 Session {} created task '{}' (id: {})",
+                                session_id, name, task_id
+                            );
+
+                            let response = ToolResponse::success(
+                                request.request_id,
+                                format!("Task '{}' created with id {}", name, task_id),
+                            );
+                            let _ = response_tx.send(response);
+                        }
+                        other => {
+                            tracing::warn!("Unexpected tool call from session {}: {:?}", session_id, other);
+                            let response = ToolResponse::failure(
+                                request.request_id,
+                                "This tool is not available. Use complete() to signal you're done.".to_string(),
+                            );
+                            let _ = response_tx.send(response);
+                        }
+                    }
+                }
+
+                Some(msg) = session_rx.recv() => {
+                    let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
+                    if finished {
+                        self.tool_rx = Some(tool_rx);
+                        return Ok(output);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Wait for session output using direct mode (polling ACP clients directly).
+    /// Used for tests with mock clients that don't support the routing infrastructure.
+    /// Polls both planner and worker clients to handle all session types.
+    async fn wait_for_session_output_direct(
+        &mut self,
+        session_id: &str,
+        writer: &mut AgentWriter,
+    ) -> Result<SessionOutput> {
+        tracing::debug!("⏳ Waiting for session (direct): {}", session_id);
+        let mut output = SessionOutput::new();
+        let mut seen_unhandled: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        let mut tool_rx = self.tool_rx.take().context("Tool receiver not set up")?;
+
+        // Track which clients have been exhausted (for mock clients)
+        let mut worker_exhausted = false;
+        let mut planner_exhausted = false;
+
+        loop {
+            // If both clients are exhausted and no tool messages, we're stuck
+            if worker_exhausted && planner_exhausted {
+                self.tool_rx = Some(tool_rx);
+                return Err(anyhow::anyhow!("No more mock updates available"));
+            }
+
+            tokio::select! {
+                Some(tool_msg) = tool_rx.recv() => {
+                    let ToolMessage::Request { request, response_tx } = tool_msg;
+
+                    match &request.tool_call {
+                        ToolCall::Complete { success, message } => {
+                            tracing::info!(
+                                "✅ Session {} signaled complete: success={}, message={:?}",
+                                session_id,
+                                success,
+                                message
+                            );
+
+                            if let Some(msg) = message {
+                                let _ = writer.write_result(msg).await;
+                            }
+
+                            let response = ToolResponse::success(
+                                request.request_id,
+                                message.clone().unwrap_or_else(|| "Done".to_string()),
+                            );
+                            let _ = response_tx.send(response);
+
+                            tracing::debug!("⏳ Draining remaining messages for session {}", session_id);
+                            let drain_result = tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                self.drain_session_messages_direct(session_id, writer),
+                            ).await;
+
+                            if drain_result.is_err() {
+                                tracing::debug!("⚠️ Timeout waiting for session_finished, proceeding anyway");
+                            }
+
+                            self.tool_rx = Some(tool_rx);
+                            return Ok(output);
+                        }
+                        ToolCall::WritePlan { plan } => {
+                            tracing::info!(
+                                "📝 Session {} submitted plan ({} chars)",
+                                session_id,
+                                plan.len()
+                            );
+                            self.stored_plan = Some(plan.clone());
+                            let response = ToolResponse::success(
+                                request.request_id,
+                                "Plan stored successfully".to_string(),
+                            );
+                            let _ = response_tx.send(response);
+                        }
+                        ToolCall::CreateTask { name, description, dependencies } => {
+                            let task_id = {
+                                let mut tm = self.task_manager.write().await;
+                                tm.create(name, description, dependencies.clone())
+                            };
+
+                            tracing::info!(
+                                "📋 Session {} created task '{}' (id: {})",
+                                session_id, name, task_id
+                            );
+
+                            let response = ToolResponse::success(
+                                request.request_id,
+                                format!("Task '{}' created with id {}", name, task_id),
+                            );
+                            let _ = response_tx.send(response);
+                        }
+                        other => {
+                            tracing::warn!("Unexpected tool call from session {}: {:?}", session_id, other);
+                            let response = ToolResponse::failure(
+                                request.request_id,
+                                "This tool is not available. Use complete() to signal you're done.".to_string(),
+                            );
+                            let _ = response_tx.send(response);
+                        }
+                    }
+                }
+
+                // Poll worker client (handles implementer sessions)
+                msg_result = self.acp_worker.recv(), if !worker_exhausted => {
+                    match msg_result {
+                        Ok(msg) => {
+                            let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
+                            if finished {
+                                self.tool_rx = Some(tool_rx);
+                                return Ok(output);
+                            }
+                        }
+                        Err(_) => {
+                            // Worker client exhausted (mock client)
+                            worker_exhausted = true;
+                            tracing::trace!("Worker client exhausted");
+                        }
+                    }
+                }
+
+                // Poll planner client (handles planner sessions)
+                msg_result = self.acp_planner.recv(), if !planner_exhausted => {
+                    match msg_result {
+                        Ok(msg) => {
+                            let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
+                            if finished {
+                                self.tool_rx = Some(tool_rx);
+                                return Ok(output);
+                            }
+                        }
+                        Err(_) => {
+                            // Planner client exhausted (mock client)
+                            planner_exhausted = true;
+                            tracing::trace!("Planner client exhausted");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

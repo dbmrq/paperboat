@@ -10,7 +10,7 @@ use std::str::FromStr;
 use tokio::process::Command;
 
 /// Known model identifiers with their CLI id strings
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelId {
     #[serde(rename = "haiku4.5")]
@@ -20,6 +20,7 @@ pub enum ModelId {
     #[serde(rename = "sonnet4")]
     Sonnet4,
     #[serde(rename = "sonnet4.5")]
+    #[default]
     Sonnet4_5,
     #[serde(rename = "gpt5")]
     Gpt5,
@@ -27,34 +28,29 @@ pub enum ModelId {
     Gpt5_1,
 }
 
-impl Default for ModelId {
-    fn default() -> Self {
-        ModelId::Sonnet4_5
-    }
-}
-
 impl ModelId {
     /// Returns the CLI id string for this model
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            ModelId::Haiku4_5 => "haiku4.5",
-            ModelId::Opus4_5 => "opus4.5",
-            ModelId::Sonnet4 => "sonnet4",
-            ModelId::Sonnet4_5 => "sonnet4.5",
-            ModelId::Gpt5 => "gpt5",
-            ModelId::Gpt5_1 => "gpt5.1",
+            Self::Haiku4_5 => "haiku4.5",
+            Self::Opus4_5 => "opus4.5",
+            Self::Sonnet4 => "sonnet4",
+            Self::Sonnet4_5 => "sonnet4.5",
+            Self::Gpt5 => "gpt5",
+            Self::Gpt5_1 => "gpt5.1",
         }
     }
 
     /// Returns all known model IDs
-    pub fn all() -> &'static [ModelId] {
+    #[allow(dead_code)]
+    pub const fn all() -> &'static [Self] {
         &[
-            ModelId::Haiku4_5,
-            ModelId::Opus4_5,
-            ModelId::Sonnet4,
-            ModelId::Sonnet4_5,
-            ModelId::Gpt5,
-            ModelId::Gpt5_1,
+            Self::Haiku4_5,
+            Self::Opus4_5,
+            Self::Sonnet4,
+            Self::Sonnet4_5,
+            Self::Gpt5,
+            Self::Gpt5_1,
         ]
     }
 }
@@ -64,13 +60,13 @@ impl FromStr for ModelId {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
-            "haiku4.5" => Ok(ModelId::Haiku4_5),
-            "opus4.5" => Ok(ModelId::Opus4_5),
-            "sonnet4" => Ok(ModelId::Sonnet4),
-            "sonnet4.5" => Ok(ModelId::Sonnet4_5),
-            "gpt5" => Ok(ModelId::Gpt5),
-            "gpt5.1" => Ok(ModelId::Gpt5_1),
-            _ => Err(anyhow!("Unknown model id: {}", s)),
+            "haiku4.5" => Ok(Self::Haiku4_5),
+            "opus4.5" => Ok(Self::Opus4_5),
+            "sonnet4" => Ok(Self::Sonnet4),
+            "sonnet4.5" => Ok(Self::Sonnet4_5),
+            "gpt5" => Ok(Self::Gpt5),
+            "gpt5.1" => Ok(Self::Gpt5_1),
+            _ => Err(anyhow!("Unknown model id: {s}")),
         }
     }
 }
@@ -82,7 +78,7 @@ impl std::fmt::Display for ModelId {
 }
 
 /// An available model discovered from the CLI
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AvailableModel {
     /// The model identifier
     pub id: ModelId,
@@ -97,11 +93,11 @@ pub struct AvailableModel {
 pub struct ModelConfig {
     /// List of available models discovered from the CLI
     pub available_models: Vec<AvailableModel>,
-    /// Model to use for orchestration (default: Opus4_5 - best for complex tasks)
+    /// Model to use for orchestration (default: `Opus4_5` - best for complex tasks)
     pub orchestrator_model: ModelId,
-    /// Model to use for planning (default: Sonnet4_5 - great for everyday tasks)
+    /// Model to use for planning (default: `Sonnet4_5` - great for everyday tasks)
     pub planner_model: ModelId,
-    /// Model to use for implementation (default: Sonnet4_5 - great for everyday tasks)
+    /// Model to use for implementation (default: `Sonnet4_5` - great for everyday tasks)
     pub implementer_model: ModelId,
 }
 
@@ -117,8 +113,8 @@ impl Default for ModelConfig {
 }
 
 impl ModelConfig {
-    /// Creates a new ModelConfig with sensible defaults and the given available models
-    pub fn new(available_models: Vec<AvailableModel>) -> Self {
+    /// Creates a new `ModelConfig` with sensible defaults and the given available models
+    pub const fn new(available_models: Vec<AvailableModel>) -> Self {
         Self {
             available_models,
             orchestrator_model: ModelId::Opus4_5,
@@ -168,7 +164,7 @@ pub async fn discover_models() -> Result<Vec<AvailableModel>> {
         .args(["model", "list"])
         .output()
         .await
-        .map_err(|e| anyhow!("Failed to run 'auggie model list': {}", e))?;
+        .map_err(|e| anyhow!("Failed to run 'auggie model list': {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -183,7 +179,7 @@ pub async fn discover_models() -> Result<Vec<AvailableModel>> {
     parse_model_list(&stdout)
 }
 
-/// Parses the output of `auggie model list` into AvailableModel structs
+/// Parses the output of `auggie model list` into `AvailableModel` structs
 fn parse_model_list(output: &str) -> Result<Vec<AvailableModel>> {
     let mut models = Vec::new();
 
@@ -468,4 +464,3 @@ mod tests {
         );
     }
 }
-

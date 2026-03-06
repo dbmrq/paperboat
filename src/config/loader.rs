@@ -89,38 +89,40 @@ pub fn load_agent_configs() -> Result<LoadedAgentConfigs> {
     })
 }
 
-/// Builds a ModelConfig from loaded agent configurations and available models.
-/// Resolves model strings (e.g., "opus") to concrete ModelIds (e.g., "opus4.5").
+/// Builds a `ModelConfig` from loaded agent configurations and available models.
+/// Resolves model strings (e.g., "opus") to concrete `ModelIds` (e.g., "opus4.5").
 pub fn build_model_config(
     loaded: &LoadedAgentConfigs,
-    available_models: Vec<AvailableModel>,
+    available_models: &[AvailableModel],
 ) -> Result<ModelConfig> {
-    let mut config = ModelConfig::new(available_models.clone());
+    let mut config = ModelConfig::new(available_models.to_vec());
 
     // Resolve orchestrator model
     if let Some(ref model_str) = loaded.orchestrator.model {
-        let resolved = resolve_model(model_str, &available_models)
-            .with_context(|| format!("Failed to resolve orchestrator model '{}'", model_str))?;
-        config.orchestrator_model = resolved.parse::<ModelId>()
-            .with_context(|| format!("Invalid orchestrator model ID: {}", resolved))?;
+        let resolved = resolve_model(model_str, available_models)
+            .with_context(|| format!("Failed to resolve orchestrator model '{model_str}'"))?;
+        config.orchestrator_model = resolved
+            .parse::<ModelId>()
+            .with_context(|| format!("Invalid orchestrator model ID: {resolved}"))?;
     }
 
     // Resolve planner model
     if let Some(ref model_str) = loaded.planner.model {
-        let resolved = resolve_model(model_str, &available_models)
-            .with_context(|| format!("Failed to resolve planner model '{}'", model_str))?;
-        config.planner_model = resolved.parse::<ModelId>()
-            .with_context(|| format!("Invalid planner model ID: {}", resolved))?;
+        let resolved = resolve_model(model_str, available_models)
+            .with_context(|| format!("Failed to resolve planner model '{model_str}'"))?;
+        config.planner_model = resolved
+            .parse::<ModelId>()
+            .with_context(|| format!("Invalid planner model ID: {resolved}"))?;
     }
 
     // Resolve implementer model
     if let Some(ref model_str) = loaded.implementer.model {
-        let resolved = resolve_model(model_str, &available_models)
-            .with_context(|| format!("Failed to resolve implementer model '{}'", model_str))?;
-        config.implementer_model = resolved.parse::<ModelId>()
-            .with_context(|| format!("Invalid implementer model ID: {}", resolved))?;
+        let resolved = resolve_model(model_str, available_models)
+            .with_context(|| format!("Failed to resolve implementer model '{model_str}'"))?;
+        config.implementer_model = resolved
+            .parse::<ModelId>()
+            .with_context(|| format!("Invalid implementer model ID: {resolved}"))?;
     }
 
     Ok(config)
 }
-

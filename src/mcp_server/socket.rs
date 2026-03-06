@@ -9,7 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 /// Connect to Unix socket with retry logic
-pub(crate) async fn connect_with_retry(socket_path: &PathBuf) -> Result<UnixStream> {
+pub async fn connect_with_retry(socket_path: &PathBuf) -> Result<UnixStream> {
     let delays = [100, 500, 2000];
     let mut last_error = None;
 
@@ -35,9 +35,9 @@ pub(crate) async fn connect_with_retry(socket_path: &PathBuf) -> Result<UnixStre
 }
 
 /// Send a response to stdout, handling errors gracefully
-pub(crate) async fn send_response(stdout: &mut tokio::io::Stdout, response: &Value) -> Result<()> {
+pub async fn send_response(stdout: &mut tokio::io::Stdout, response: &Value) -> Result<()> {
     let resp_str = serde_json::to_string(response)?;
-    eprintln!("📤 MCP server sending: {}", resp_str);
+    eprintln!("📤 MCP server sending: {resp_str}");
     stdout.write_all(resp_str.as_bytes()).await?;
     stdout.write_all(b"\n").await?;
     stdout.flush().await?;
@@ -47,8 +47,8 @@ pub(crate) async fn send_response(stdout: &mut tokio::io::Stdout, response: &Val
 /// Send a tool request to the app and wait for the response.
 ///
 /// This opens a new connection for each request to allow concurrent tool calls.
-/// The app will process the request and send back a ToolResponse.
-pub(crate) async fn send_request_and_wait(
+/// The app will process the request and send back a `ToolResponse`.
+pub async fn send_request_and_wait(
     socket_path: &PathBuf,
     request: &ToolRequest,
 ) -> Result<ToolResponse> {
@@ -57,7 +57,7 @@ pub(crate) async fn send_request_and_wait(
 
     // Send the request
     let request_json = serde_json::to_string(request)?;
-    eprintln!("📨 Sending to app: {}", request_json);
+    eprintln!("📨 Sending to app: {request_json}");
     stream.write_all(request_json.as_bytes()).await?;
     stream.write_all(b"\n").await?;
     stream.flush().await?;
@@ -77,4 +77,3 @@ pub(crate) async fn send_request_and_wait(
 
     Ok(response)
 }
-

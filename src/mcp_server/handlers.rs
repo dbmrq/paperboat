@@ -4,25 +4,21 @@ use super::error::{
     internal_error, invalid_params_error, invalid_request_error, method_not_found_error,
 };
 use super::socket::send_request_and_wait;
-use super::types::{ToolCall, ToolRequest};
+use super::types::{AgentSpec, ToolCall, ToolRequest, WaitMode};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
 /// Handle a JSON-RPC request
-pub(crate) async fn handle_request(
-    request: &Value,
-    socket_path: &PathBuf,
-) -> Result<Option<Value>> {
-    let id = request.get("id").cloned();
+pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Option<Value>> {
+    let id = request.get("id");
 
     // Extract method, returning error response if missing
-    let method = match request["method"].as_str() {
-        Some(m) => m,
-        None => {
-            tracing::warn!("⚠️  Request missing 'method' field: {:?}", request);
-            return Ok(Some(invalid_request_error(id, "missing 'method' field")));
-        }
+    let method = if let Some(m) = request["method"].as_str() {
+        m
+    } else {
+        tracing::warn!("⚠️  Request missing 'method' field: {:?}", request);
+        return Ok(Some(invalid_request_error(id, "missing 'method' field")));
     };
 
     match method {
@@ -46,11 +42,12 @@ pub(crate) async fn handle_request(
         }
         "tools/list" => {
             // Get agent type from environment to filter available tools
-            let agent_type = std::env::var("VILLALOBOS_AGENT_TYPE").unwrap_or_else(|_| "orchestrator".to_string());
+            let agent_type = std::env::var("VILLALOBOS_AGENT_TYPE")
+                .unwrap_or_else(|_| "orchestrator".to_string());
 
             let tools = match agent_type.as_str() {
                 "planner" => {
-                    // Planner gets write_plan (to submit the plan) and complete (to signal done)
+                    // Planner gets write_plan (to submit the plan), create_task, and complete (to signal done)
                     json!({
                         "tools": [
                             {
@@ -65,6 +62,31 @@ pub(crate) async fn handle_request(
                                         }
                                     },
                                     "required": ["plan"]
+                                }
+                            },
+                            {
+                                "name": "create_task",
+                                "description": "Create a task in the plan. Call once per task.",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "string",
+                                            "description": "The name of the task"
+                                        },
+                                        "description": {
+                                            "type": "string",
+                                            "description": "The description of the task"
+                                        },
+                                        "dependencies": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            },
+                                            "description": "Names of tasks that this task depends on"
+                                        }
+                                    },
+                                    "required": ["name", "description"]
                                 }
                             },
                             {
@@ -132,17 +154,29 @@ pub(crate) async fn handle_request(
                                 }
                             },
                             {
-                                "name": "implement",
-                                "description": "<usecase>Implements a single, focused task by spawning a specialized implementer agent with full code editing capabilities.</usecase>\n<instructions>Use for atomic tasks that can be completed in one session: adding a function, fixing a bug, writing tests, creating a file, etc. The implementer has access to all code editing tools. After calling this, the task will be completed by the implementer agent.</instructions>",
+                                "name": "spawn_agents",
+                                "description": "Spawn one or more agents to execute tasks. Multiple agents run concurrently.",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
-                                        "task": {
+                                        "agents": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "role": { "type": "string", "enum": ["implementer"] },
+                                                    "task": { "type": "string" }
+                                                },
+                                                "required": ["role", "task"]
+                                            }
+                                        },
+                                        "wait": {
                                             "type": "string",
-                                            "description": "Clear description of the single task to implement"
+                                            "enum": ["all", "any", "none"],
+                                            "default": "all"
                                         }
                                     },
-                                    "required": ["task"]
+                                    "required": ["agents"]
                                 }
                             },
                             {
@@ -174,7 +208,7 @@ pub(crate) async fn handle_request(
                 "result": tools
             })))
         }
-        "tools/call" => handle_tool_call(request, id, socket_path).await,
+        "tools/call" => handle_tool_call(request, id.cloned(), socket_path).await,
         // Handle notifications (no id) - just log and ignore
         _ if id.is_none() => {
             tracing::debug!("Ignoring notification with method: {}", method);
@@ -199,115 +233,172 @@ async fn handle_tool_call(
     socket_path: &PathBuf,
 ) -> Result<Option<Value>> {
     // Validate params structure
-    let params = match request["params"].as_object() {
-        Some(p) => p,
-        None => {
-            tracing::warn!("⚠️  tools/call missing 'params' object");
-            return Ok(Some(invalid_request_error(
-                id,
-                "'params' must be an object for tools/call",
-            )));
-        }
+    let params = if let Some(p) = request["params"].as_object() {
+        p
+    } else {
+        tracing::warn!("⚠️  tools/call missing 'params' object");
+        return Ok(Some(invalid_request_error(
+            id.as_ref(),
+            "'params' must be an object for tools/call",
+        )));
     };
 
     // Validate tool name
-    let name = match params.get("name").and_then(|v| v.as_str()) {
-        Some(n) => n,
-        None => {
-            tracing::warn!("⚠️  tools/call missing 'name' parameter");
-            return Ok(Some(invalid_params_error(
-                id,
-                "tools/call",
-                "missing required 'name' field",
-            )));
-        }
+    let name = if let Some(n) = params.get("name").and_then(|v| v.as_str()) {
+        n
+    } else {
+        tracing::warn!("⚠️  tools/call missing 'name' parameter");
+        return Ok(Some(invalid_params_error(
+            id.as_ref(),
+            "tools/call",
+            "missing required 'name' field",
+        )));
     };
 
     // Validate arguments
-    let arguments = match params.get("arguments").and_then(|v| v.as_object()) {
-        Some(a) => a,
-        None => {
-            tracing::warn!(
-                "⚠️  tools/call missing 'arguments' parameter for tool '{}'",
-                name
-            );
-            return Ok(Some(invalid_params_error(
-                id,
-                name,
-                "missing required 'arguments' field",
-            )));
-        }
+    let arguments = if let Some(a) = params.get("arguments").and_then(|v| v.as_object()) {
+        a
+    } else {
+        tracing::warn!(
+            "⚠️  tools/call missing 'arguments' parameter for tool '{}'",
+            name
+        );
+        return Ok(Some(invalid_params_error(
+            id.as_ref(),
+            name,
+            "missing required 'arguments' field",
+        )));
     };
 
     // Parse the tool call with specific error messages
     let tool_call = match name {
-        "decompose" => match arguments.get("task").and_then(|v| v.as_str()) {
-            Some(task) => ToolCall::Decompose {
-                task: task.to_string(),
-            },
-            None => {
+        "decompose" => {
+            if let Some(task) = arguments.get("task").and_then(|v| v.as_str()) {
+                ToolCall::Decompose {
+                    task: task.to_string(),
+                }
+            } else {
                 tracing::warn!("⚠️  decompose tool missing 'task' argument");
                 return Ok(Some(invalid_params_error(
-                    id,
+                    id.as_ref(),
                     "decompose",
                     "requires 'task' string argument",
                 )));
             }
-        },
-        "implement" => match arguments.get("task").and_then(|v| v.as_str()) {
-            Some(task) => ToolCall::Implement {
-                task: task.to_string(),
-            },
-            None => {
-                tracing::warn!("⚠️  implement tool missing 'task' argument");
+        }
+        "spawn_agents" => {
+            if let Some(agents_val) = arguments.get("agents") {
+                let agents: Vec<AgentSpec> = match serde_json::from_value(agents_val.clone()) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        tracing::warn!("⚠️  spawn_agents invalid 'agents' format: {}", e);
+                        return Ok(Some(invalid_params_error(
+                            id.as_ref(),
+                            "spawn_agents",
+                            "requires 'agents' array of {role, task} objects",
+                        )));
+                    }
+                };
+
+                let wait: WaitMode = arguments
+                    .get("wait")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+
+                ToolCall::SpawnAgents { agents, wait }
+            } else {
+                tracing::warn!("⚠️  spawn_agents tool missing 'agents' argument");
                 return Ok(Some(invalid_params_error(
-                    id,
-                    "implement",
-                    "requires 'task' string argument",
+                    id.as_ref(),
+                    "spawn_agents",
+                    "requires 'agents' array argument",
                 )));
             }
-        },
-        "complete" => match arguments.get("success").and_then(|v| v.as_bool()) {
-            Some(success) => {
+        }
+        "complete" => {
+            if let Some(success) = arguments
+                .get("success")
+                .and_then(serde_json::Value::as_bool)
+            {
                 let message = arguments
                     .get("message")
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+                    .map(std::string::ToString::to_string);
                 ToolCall::Complete { success, message }
-            }
-            None => {
+            } else {
                 tracing::warn!("⚠️  complete tool missing 'success' argument");
                 return Ok(Some(invalid_params_error(
-                    id,
+                    id.as_ref(),
                     "complete",
                     "requires 'success' boolean argument",
                 )));
             }
-        },
-        "write_plan" => match arguments.get("plan").and_then(|v| v.as_str()) {
-            Some(plan) => ToolCall::WritePlan {
-                plan: plan.to_string(),
-            },
-            None => {
+        }
+        "write_plan" => {
+            if let Some(plan) = arguments.get("plan").and_then(|v| v.as_str()) {
+                ToolCall::WritePlan {
+                    plan: plan.to_string(),
+                }
+            } else {
                 tracing::warn!("⚠️  write_plan tool missing 'plan' argument");
                 return Ok(Some(invalid_params_error(
-                    id,
+                    id.as_ref(),
                     "write_plan",
                     "requires 'plan' string argument",
                 )));
             }
-        },
+        }
+        "create_task" => {
+            let name_arg = if let Some(n) = arguments.get("name").and_then(|v| v.as_str()) {
+                n.to_string()
+            } else {
+                tracing::warn!("⚠️  create_task tool missing 'name' argument");
+                return Ok(Some(invalid_params_error(
+                    id.as_ref(),
+                    "create_task",
+                    "requires 'name' string argument",
+                )));
+            };
+
+            let description =
+                if let Some(d) = arguments.get("description").and_then(|v| v.as_str()) {
+                    d.to_string()
+                } else {
+                    tracing::warn!("⚠️  create_task tool missing 'description' argument");
+                    return Ok(Some(invalid_params_error(
+                        id.as_ref(),
+                        "create_task",
+                        "requires 'description' string argument",
+                    )));
+                };
+
+            let dependencies = arguments
+                .get("dependencies")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            ToolCall::CreateTask {
+                name: name_arg,
+                description,
+                dependencies,
+            }
+        }
         _ => {
             tracing::warn!("⚠️  Unknown tool requested: {}", name);
             return Ok(Some(method_not_found_error(
-                id,
+                id.as_ref(),
                 name,
-                &["decompose", "implement", "complete", "write_plan"],
+                &["decompose", "spawn_agents", "complete", "write_plan", "create_task"],
             )));
         }
     };
 
-    eprintln!("🔧 MCP Tool call: {:?}", tool_call);
+    eprintln!("🔧 MCP Tool call: {tool_call:?}");
 
     // Create request with unique ID for correlation
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -322,7 +413,7 @@ async fn handle_tool_call(
         Err(e) => {
             tracing::error!("Failed to get response from app: {}", e);
             return Ok(Some(internal_error(
-                id,
+                id.as_ref(),
                 "socket communication",
                 &e.to_string(),
             )));
@@ -349,10 +440,7 @@ async fn handle_tool_call(
 }
 
 /// Build a helpful response message based on the tool call and app response
-fn build_response_text(
-    tool_call: &ToolCall,
-    response: &super::types::ToolResponse,
-) -> String {
+fn build_response_text(tool_call: &ToolCall, response: &super::types::ToolResponse) -> String {
     match tool_call {
         ToolCall::Decompose { task } => {
             if response.success {
@@ -377,7 +465,10 @@ fn build_response_text(
                 )
             }
         }
-        ToolCall::Implement { task } => {
+        ToolCall::SpawnAgents { agents, wait } => {
+            let agent_count = agents.len();
+            let roles: Vec<&str> = agents.iter().map(|a| a.role.as_str()).collect();
+
             if response.success {
                 let files_section = if let Some(files) = &response.files_modified {
                     if files.is_empty() {
@@ -385,7 +476,11 @@ fn build_response_text(
                     } else {
                         format!(
                             "\n\n## Files Modified\n{}",
-                            files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
+                            files
+                                .iter()
+                                .map(|f| format!("- {f}"))
+                                .collect::<Vec<_>>()
+                                .join("\n")
                         )
                     }
                 } else {
@@ -393,24 +488,24 @@ fn build_response_text(
                 };
 
                 format!(
-                    "✅ Implementation complete: \"{}\"\n\n\
+                    "✅ Spawned {} agent(s) [{:?}] (wait={:?}) completed successfully.\n\n\
                      ## Summary\n\
                      {}{}\n\n\
                      ## Next Steps\n\
-                     If you have more independent tasks, call implement() for each. \
-                     You can call multiple implement() tools in the same turn to run them concurrently. \
+                     If you have more independent tasks, call spawn_agents() for each batch. \
                      When all work is done, call complete(success=true).",
-                    task, response.summary, files_section
+                    agent_count, roles, wait, response.summary, files_section
                 )
             } else {
                 format!(
-                    "❌ Implementation failed: \"{}\"\n\n\
+                    "❌ Spawned {} agent(s) [{:?}] failed.\n\n\
                      ## Error\n\
                      {}\n\n\
                      ## Next Steps\n\
                      Review the error and decide whether to retry, decompose the task, \
                      or call complete(success=false).",
-                    task,
+                    agent_count,
+                    roles,
                     response.error.as_deref().unwrap_or("Unknown error")
                 )
             }
@@ -428,13 +523,16 @@ fn build_response_text(
                     "⚠️ Tasks completed with issues.\n\n\
                      ## Details\n\
                      {}",
-                    message.as_deref().unwrap_or("Some tasks encountered problems")
+                    message
+                        .as_deref()
+                        .unwrap_or("Some tasks encountered problems")
                 )
             }
         }
         ToolCall::WritePlan { plan: _ } => {
             if response.success {
-                "✅ Plan submitted successfully. Now call complete(success=true) to finish.".to_string()
+                "✅ Plan submitted successfully. Now call complete(success=true) to finish."
+                    .to_string()
             } else {
                 format!(
                     "❌ Failed to submit plan: {}",
@@ -442,6 +540,16 @@ fn build_response_text(
                 )
             }
         }
+        ToolCall::CreateTask { name, .. } => {
+            if response.success {
+                format!("✅ Task '{}' created successfully.", name)
+            } else {
+                format!(
+                    "❌ Failed to create task '{}': {}",
+                    name,
+                    response.error.as_deref().unwrap_or("Unknown error")
+                )
+            }
+        }
     }
 }
-

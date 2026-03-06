@@ -16,8 +16,9 @@
 *.swo
 .DS_Store
 
-# Logs
-/logs/
+# Logs (keep directory structure via .gitkeep)
+/logs/*
+!/logs/.gitkeep
 *.log
 
 # Environment files (may contain secrets)
@@ -38,3 +39,15 @@ credentials/
 *.dylib
 *.dll
 
+# Windows
+Thumbs.db
+
+# Coverage reports
+*.lcov
+*.profraw
+*.profdata
+coverage/
+tarpaulin-report.html
+
+# Test output
+test-output/

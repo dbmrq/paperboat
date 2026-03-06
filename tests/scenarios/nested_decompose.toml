@@ -150,7 +150,7 @@ session_update = "agent_message_chunk"
 content = "Auth system decomposed and implemented. Now implementing rate limiting.\n"
 
 [orchestrator_sessions.updates.inject_mcp_tool_call]
-tool = "implement"
+tool = "spawn_agents"
 task = "Add rate limiting middleware to protect API endpoints"
 
 # Complete the main orchestration
@@ -184,7 +184,7 @@ session_update = "agent_message_chunk"
 content = "[Implementing login flow]"
 
 [orchestrator_sessions.updates.inject_mcp_tool_call]
-tool = "implement"
+tool = "spawn_agents"
 task = "Implement login flow with JWT token generation and session management"
 
 # Implement registration flow
@@ -194,7 +194,7 @@ session_update = "agent_message_chunk"
 content = "[Implementing registration flow]"
 
 [orchestrator_sessions.updates.inject_mcp_tool_call]
-tool = "implement"
+tool = "spawn_agents"
 task = "Implement registration flow with email validation and password hashing"
 
 # Sub-orchestrator completes
@@ -325,7 +325,7 @@ session_update = "agent_turn_finished"
 
 # Mock tool responses
 [[mock_tool_responses]]
-tool_type = "Implement"
+tool_type = "SpawnAgents"
 task_pattern = ".*login flow.*JWT.*"
 
 [mock_tool_responses.response]
@@ -334,7 +334,7 @@ summary = "Implemented login with JWT tokens and session management"
 files_modified = ["src/auth/login.rs", "src/auth/jwt.rs"]
 
 [[mock_tool_responses]]
-tool_type = "Implement"
+tool_type = "SpawnAgents"
 task_pattern = ".*registration flow.*email.*"
 
 [mock_tool_responses.response]
@@ -343,7 +343,7 @@ summary = "Implemented registration with email validation and password hashing"
 files_modified = ["src/auth/register.rs", "src/auth/validation.rs"]
 
 [[mock_tool_responses]]
-tool_type = "Implement"
+tool_type = "SpawnAgents"
 task_pattern = ".*rate limiting.*"
 
 [mock_tool_responses.response]

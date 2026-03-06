@@ -8,7 +8,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::broadcast;
 
 /// Type of agent for log identification.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentType {
     Orchestrator,
     Planner,
@@ -18,9 +18,9 @@ pub enum AgentType {
 impl AgentType {
     pub fn name(&self) -> String {
         match self {
-            AgentType::Orchestrator => "orchestrator".to_string(),
-            AgentType::Planner => "planner".to_string(),
-            AgentType::Implementer { index } => format!("implementer-{:03}", index),
+            Self::Orchestrator => "orchestrator".to_string(),
+            Self::Planner => "planner".to_string(),
+            Self::Implementer { index } => format!("implementer-{index:03}"),
         }
     }
 }
@@ -28,6 +28,8 @@ impl AgentType {
 /// Writes agent output to a log file and broadcasts events.
 pub struct AgentWriter {
     file: BufWriter<File>,
+    /// Path to the log file (used in tests)
+    #[allow(dead_code)]
     path: PathBuf,
     agent_type: AgentType,
     event_tx: broadcast::Sender<LogEvent>,
@@ -59,7 +61,8 @@ impl AgentWriter {
     }
 
     /// Get the path to the log file.
-    pub fn path(&self) -> &PathBuf {
+    #[allow(dead_code)]
+    pub const fn path(&self) -> &PathBuf {
         &self.path
     }
 
@@ -75,12 +78,13 @@ impl AgentWriter {
 
     /// Write a header at the start of the log file.
     /// The `task` parameter is a brief description; `prompt` is the full prompt sent to the agent.
+    #[allow(dead_code)]
     pub async fn write_header(&mut self, task: &str) -> std::io::Result<()> {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
         let session_info = self
             .session_id
             .as_ref()
-            .map(|id| format!("\nSession: {}", id))
+            .map(|id| format!("\nSession: {id}"))
             .unwrap_or_default();
         let header = format!(
             "=== {} Log ===\nStarted: {}{}\nTask: {}\n{}\n\n",
@@ -96,12 +100,16 @@ impl AgentWriter {
 
     /// Write a header with the full prompt at the start of the log file.
     /// This is useful for debugging to see exactly what prompt was sent to the agent.
-    pub async fn write_header_with_prompt(&mut self, task: &str, prompt: &str) -> std::io::Result<()> {
+    pub async fn write_header_with_prompt(
+        &mut self,
+        task: &str,
+        prompt: &str,
+    ) -> std::io::Result<()> {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
         let session_info = self
             .session_id
             .as_ref()
-            .map(|id| format!("\nSession: {}", id))
+            .map(|id| format!("\nSession: {id}"))
             .unwrap_or_default();
         let header = format!(
             "=== {} Log ===\nStarted: {}{}\nTask: {}\n{}\n\n## Full Prompt Sent to Agent\n\n{}\n\n{}\n\n",
@@ -137,7 +145,7 @@ impl AgentWriter {
     /// Write a tool call event.
     pub async fn write_tool_call(&mut self, tool_name: &str) -> std::io::Result<()> {
         let timestamp = Local::now().format("%H:%M:%S");
-        let line = format!("\n[{}] 🔧 Tool: {}\n", timestamp, tool_name);
+        let line = format!("\n[{timestamp}] 🔧 Tool: {tool_name}\n");
         self.file.write_all(line.as_bytes()).await?;
 
         let _ = self.event_tx.send(LogEvent::ToolCall {
@@ -179,10 +187,7 @@ impl AgentWriter {
         // Only write to file if it's an error - success results are noise
         if is_error {
             let timestamp = Local::now().format("%H:%M:%S");
-            let line = format!(
-                "[{}] ❌ Tool failed: {}\n{}\n",
-                timestamp, tool_name, content
-            );
+            let line = format!("[{timestamp}] ❌ Tool failed: {tool_name}\n{content}\n");
             self.file.write_all(line.as_bytes()).await?;
         }
 
@@ -206,11 +211,12 @@ impl AgentWriter {
         summary: &str,
     ) -> std::io::Result<()> {
         let timestamp = Local::now().format("%H:%M:%S");
-        let (icon, status) = if success { ("✅", "success") } else { ("❌", "FAILED") };
-        let line = format!(
-            "[{}] {} MCP result: {} - {} ({})\n",
-            timestamp, icon, tool_name, summary, status
-        );
+        let (icon, status) = if success {
+            ("✅", "success")
+        } else {
+            ("❌", "FAILED")
+        };
+        let line = format!("[{timestamp}] {icon} MCP result: {tool_name} - {summary} ({status})\n");
         self.file.write_all(line.as_bytes()).await?;
         self.file.flush().await?;
 
@@ -228,7 +234,7 @@ impl AgentWriter {
     /// Write a completion/result message from the agent.
     pub async fn write_result(&mut self, message: &str) -> std::io::Result<()> {
         let timestamp = Local::now().format("%H:%M:%S");
-        let line = format!("\n[{}] ✅ Result: {}\n", timestamp, message);
+        let line = format!("\n[{timestamp}] ✅ Result: {message}\n");
         self.file.write_all(line.as_bytes()).await
     }
 
@@ -266,11 +272,11 @@ fn format_duration(duration: std::time::Duration) -> String {
     if secs >= 60 {
         let mins = secs / 60;
         let secs = secs % 60;
-        format!("{}m {}s", mins, secs)
+        format!("{mins}m {secs}s")
     } else if secs > 0 {
-        format!("{}.{:03}s", secs, millis)
+        format!("{secs}.{millis:03}s")
     } else {
-        format!("{}ms", millis)
+        format!("{millis}ms")
     }
 }
 
@@ -308,8 +314,14 @@ mod tests {
     async fn test_agent_type_names() {
         assert_eq!(AgentType::Orchestrator.name(), "orchestrator");
         assert_eq!(AgentType::Planner.name(), "planner");
-        assert_eq!(AgentType::Implementer { index: 1 }.name(), "implementer-001");
-        assert_eq!(AgentType::Implementer { index: 42 }.name(), "implementer-042");
+        assert_eq!(
+            AgentType::Implementer { index: 1 }.name(),
+            "implementer-001"
+        );
+        assert_eq!(
+            AgentType::Implementer { index: 42 }.name(),
+            "implementer-042"
+        );
     }
 
     #[tokio::test]
@@ -317,18 +329,19 @@ mod tests {
         let dir = tempdir().unwrap();
         let (tx, _) = tokio::sync::broadcast::channel(10);
 
-        let mut writer = AgentWriter::new(
-            dir.path().join("tools.log"),
-            AgentType::Planner,
-            tx,
-            1,
-        )
-        .await
-        .unwrap();
+        let mut writer = AgentWriter::new(dir.path().join("tools.log"), AgentType::Planner, tx, 1)
+            .await
+            .unwrap();
 
         writer.write_tool_call("view").await.unwrap();
-        writer.write_tool_result("view", false, "file contents...").await.unwrap();  // Success - not logged
-        writer.write_tool_result("save-file", true, "permission denied").await.unwrap();  // Error - logged
+        writer
+            .write_tool_result("view", false, "file contents...")
+            .await
+            .unwrap(); // Success - not logged
+        writer
+            .write_tool_result("save-file", true, "permission denied")
+            .await
+            .unwrap(); // Error - logged
         writer.finalize(false).await.unwrap();
 
         let content = std::fs::read_to_string(dir.path().join("tools.log")).unwrap();
@@ -359,7 +372,12 @@ mod tests {
         // Verify event was broadcast
         let event = rx.recv().await.unwrap();
         match event {
-            LogEvent::AgentMessage { agent_type, session_id, depth, content } => {
+            LogEvent::AgentMessage {
+                agent_type,
+                session_id,
+                depth,
+                content,
+            } => {
                 assert_eq!(agent_type, AgentType::Orchestrator);
                 assert_eq!(session_id, Some("test-session-123".to_string()));
                 assert_eq!(depth, 0);
@@ -385,7 +403,8 @@ mod tests {
 
         writer.set_session_id("session-abc".to_string());
         let task = "Create a test plan";
-        let prompt = "You are a planner agent.\n\nCreate a comprehensive plan for:\n\nCreate a test plan";
+        let prompt =
+            "You are a planner agent.\n\nCreate a comprehensive plan for:\n\nCreate a test plan";
         writer.write_header_with_prompt(task, prompt).await.unwrap();
         writer.finalize(true).await.unwrap();
 
@@ -399,4 +418,3 @@ mod tests {
         assert!(content.contains("SUCCESS"));
     }
 }
-

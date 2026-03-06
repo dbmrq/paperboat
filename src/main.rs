@@ -1,10 +1,12 @@
 mod acp;
+mod agents;
 mod app;
 mod config;
 mod error;
 mod logging;
 mod mcp_server;
 mod models;
+mod tasks;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 mod types;
@@ -90,11 +92,14 @@ async fn main() -> Result<()> {
     let available_models = discover_models().await?;
     tracing::info!(
         "📋 Available models: {:?}",
-        available_models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>()
+        available_models
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect::<Vec<_>>()
     );
 
     // Build model configuration from loaded configs and available models
-    let model_config = build_model_config(&loaded_configs, available_models)?;
+    let model_config = build_model_config(&loaded_configs, &available_models)?;
     model_config.validate()?;
     tracing::info!(
         "🎯 Model configuration: orchestrator={}, planner={}, implementer={}",

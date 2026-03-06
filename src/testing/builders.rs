@@ -36,7 +36,7 @@ impl MockToolResponseBuilder {
     }
 
     /// Set the tool type this responds to.
-    pub fn tool_type(mut self, tool_type: MockToolType) -> Self {
+    pub const fn tool_type(mut self, tool_type: MockToolType) -> Self {
         self.tool_type = Some(tool_type);
         self
     }
@@ -62,11 +62,11 @@ impl MockToolResponseBuilder {
         self
     }
 
-    /// Build the MockToolCallResponse.
+    /// Build the `MockToolCallResponse`.
     pub fn build(self) -> MockToolCallResponse {
         MockToolCallResponse {
             task_pattern: self.task_pattern,
-            tool_type: self.tool_type.unwrap_or(MockToolType::Implement),
+            tool_type: self.tool_type.unwrap_or(MockToolType::SpawnAgents),
             response: MockToolResponseData {
                 success: self.success,
                 summary: self.summary,
@@ -156,8 +156,8 @@ impl MockSessionBuilder {
         self
     }
 
-    /// Add a write_plan MCP tool call injection.
-    /// This simulates the planner agent calling write_plan().
+    /// Add a `write_plan` MCP tool call injection.
+    /// This simulates the planner agent calling `write_plan()`.
     pub fn with_write_plan(mut self, plan: impl Into<String>, delay_ms: u64) -> Self {
         self.updates.push(MockSessionUpdate {
             delay_ms,
@@ -171,7 +171,7 @@ impl MockSessionBuilder {
     }
 
     /// Add a complete MCP tool call injection.
-    /// This simulates any agent calling complete().
+    /// This simulates any agent calling `complete()`.
     pub fn with_complete(mut self, success: bool, message: Option<String>, delay_ms: u64) -> Self {
         self.updates.push(MockSessionUpdate {
             delay_ms,
@@ -185,7 +185,7 @@ impl MockSessionBuilder {
     }
 
     /// Add an implement MCP tool call injection.
-    /// This simulates the orchestrator agent calling implement().
+    /// This simulates the orchestrator agent calling `implement()`.
     pub fn with_implement(mut self, task: impl Into<String>, delay_ms: u64) -> Self {
         self.updates.push(MockSessionUpdate {
             delay_ms,
@@ -193,13 +193,13 @@ impl MockSessionBuilder {
             content: Some("[calling implement]".to_string()),
             tool_title: None,
             tool_result: None,
-            inject_mcp_tool_call: Some(MockMcpToolCall::Implement { task: task.into() }),
+            inject_mcp_tool_call: Some(MockMcpToolCall::SpawnAgents { task: task.into() }),
         });
         self
     }
 
     /// Add a decompose MCP tool call injection.
-    /// This simulates the orchestrator agent calling decompose().
+    /// This simulates the orchestrator agent calling `decompose()`.
     pub fn with_decompose(mut self, task: impl Into<String>, delay_ms: u64) -> Self {
         self.updates.push(MockSessionUpdate {
             delay_ms,
@@ -218,7 +218,7 @@ impl MockSessionBuilder {
         self
     }
 
-    /// Build the MockAgentSession.
+    /// Build the `MockAgentSession`.
     pub fn build(self) -> MockAgentSession {
         MockAgentSession {
             session_id: self.session_id,
@@ -227,4 +227,3 @@ impl MockSessionBuilder {
         }
     }
 }
-

@@ -95,7 +95,7 @@ session_update = "agent_message_chunk"
 content = "[Calling implement for task 1]"
 
 [orchestrator_sessions.updates.inject_mcp_tool_call]
-tool = "implement"
+tool = "spawn_agents"
 task = "Create database schema with users and sessions tables"
 
 # Second implement call
@@ -105,7 +105,7 @@ session_update = "agent_message_chunk"
 content = "First task done. [Calling implement for task 2]"
 
 [orchestrator_sessions.updates.inject_mcp_tool_call]
-tool = "implement"
+tool = "spawn_agents"
 task = "Implement user service with CRUD operations and validation"
 
 # Third implement call
@@ -115,7 +115,7 @@ session_update = "agent_message_chunk"
 content = "Second task done. [Calling implement for task 3]"
 
 [orchestrator_sessions.updates.inject_mcp_tool_call]
-tool = "implement"
+tool = "spawn_agents"
 task = "Add API endpoints for users resource"
 
 # Orchestrator completes
@@ -246,7 +246,7 @@ session_update = "agent_turn_finished"
 
 # Mock tool responses for implement calls
 [[mock_tool_responses]]
-tool_type = "Implement"
+tool_type = "SpawnAgents"
 task_pattern = ".*database.*schema.*"
 
 [mock_tool_responses.response]
@@ -255,7 +255,7 @@ summary = "Created users and sessions tables"
 files_modified = ["migrations/001_users.sql", "migrations/002_sessions.sql"]
 
 [[mock_tool_responses]]
-tool_type = "Implement"
+tool_type = "SpawnAgents"
 task_pattern = ".*user.*service.*"
 
 [mock_tool_responses.response]
@@ -264,7 +264,7 @@ summary = "Implemented user service with CRUD and validation"
 files_modified = ["src/services/user_service.rs"]
 
 [[mock_tool_responses]]
-tool_type = "Implement"
+tool_type = "SpawnAgents"
 task_pattern = ".*API.*endpoints.*"
 
 [mock_tool_responses.response]

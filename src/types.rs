@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Result of completing a task
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskResult {
     pub success: bool,
     pub message: Option<String>,

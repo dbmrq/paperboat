@@ -18,7 +18,7 @@ pub enum OrchestratorError {
         /// Optional additional context (e.g., session ID).
         context: Option<String>,
     },
-    /// An internal error occurred (wraps anyhow::Error for compatibility).
+    /// An internal error occurred (wraps `anyhow::Error` for compatibility).
     Internal(anyhow::Error),
 }
 
@@ -28,14 +28,15 @@ pub enum TimeoutOperation {
     /// Waiting for a session to complete (any agent type).
     WaitForSession,
     /// Waiting for an ACP request/response (e.g., session/new, initialize).
+    #[allow(dead_code)]
     AcpRequest,
 }
 
 impl fmt::Display for TimeoutOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TimeoutOperation::WaitForSession => write!(f, "waiting for session"),
-            TimeoutOperation::AcpRequest => write!(f, "waiting for ACP response"),
+            Self::WaitForSession => write!(f, "waiting for session"),
+            Self::AcpRequest => write!(f, "waiting for ACP response"),
         }
     }
 }
@@ -43,22 +44,18 @@ impl fmt::Display for TimeoutOperation {
 impl fmt::Display for OrchestratorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OrchestratorError::Timeout {
+            Self::Timeout {
                 operation,
                 duration,
                 context,
             } => {
-                write!(
-                    f,
-                    "Timeout after {:?} while {operation}",
-                    duration,
-                )?;
+                write!(f, "Timeout after {duration:?} while {operation}",)?;
                 if let Some(ctx) = context {
-                    write!(f, " ({})", ctx)?;
+                    write!(f, " ({ctx})")?;
                 }
                 Ok(())
             }
-            OrchestratorError::Internal(e) => write!(f, "Internal error: {}", e),
+            Self::Internal(e) => write!(f, "Internal error: {e}"),
         }
     }
 }
@@ -66,15 +63,15 @@ impl fmt::Display for OrchestratorError {
 impl std::error::Error for OrchestratorError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            OrchestratorError::Internal(e) => Some(e.as_ref()),
-            _ => None,
+            Self::Internal(e) => Some(e.as_ref()),
+            Self::Timeout { .. } => None,
         }
     }
 }
 
 impl From<anyhow::Error> for OrchestratorError {
     fn from(e: anyhow::Error) -> Self {
-        OrchestratorError::Internal(e)
+        Self::Internal(e)
     }
 }
 
@@ -82,11 +79,11 @@ impl From<anyhow::Error> for OrchestratorError {
 #[derive(Debug, Clone)]
 pub struct TimeoutConfig {
     /// Timeout for waiting for any session to complete.
-    /// Default: 30 minutes. Env: VILLALOBOS_SESSION_TIMEOUT
+    /// Default: 30 minutes. Env: `VILLALOBOS_SESSION_TIMEOUT`
     pub session_timeout: Duration,
 
     /// Timeout for ACP request/response (e.g., session/new, initialize).
-    /// Default: 60 seconds. Env: VILLALOBOS_REQUEST_TIMEOUT
+    /// Default: 60 seconds. Env: `VILLALOBOS_REQUEST_TIMEOUT`
     pub request_timeout: Duration,
 }
 
@@ -103,15 +100,16 @@ impl TimeoutConfig {
     /// Default request timeout in seconds (60 seconds)
     const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
 
-    /// Create a new TimeoutConfig with custom durations.
-    pub fn new(session_timeout: Duration, request_timeout: Duration) -> Self {
+    /// Create a new `TimeoutConfig` with custom durations.
+    #[allow(dead_code)]
+    pub const fn new(session_timeout: Duration, request_timeout: Duration) -> Self {
         Self {
             session_timeout,
             request_timeout,
         }
     }
 
-    /// Create a TimeoutConfig from environment variables.
+    /// Create a `TimeoutConfig` from environment variables.
     ///
     /// Supported environment variables:
     /// - `VILLALOBOS_SESSION_TIMEOUT`: Session timeout in seconds (default: 1800)
@@ -120,14 +118,18 @@ impl TimeoutConfig {
         let session_timeout = std::env::var("VILLALOBOS_SESSION_TIMEOUT")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
-            .map(Duration::from_secs)
-            .unwrap_or_else(|| Duration::from_secs(Self::DEFAULT_SESSION_TIMEOUT_SECS));
+            .map_or_else(
+                || Duration::from_secs(Self::DEFAULT_SESSION_TIMEOUT_SECS),
+                Duration::from_secs,
+            );
 
         let request_timeout = std::env::var("VILLALOBOS_REQUEST_TIMEOUT")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
-            .map(Duration::from_secs)
-            .unwrap_or_else(|| Duration::from_secs(Self::DEFAULT_REQUEST_TIMEOUT_SECS));
+            .map_or_else(
+                || Duration::from_secs(Self::DEFAULT_REQUEST_TIMEOUT_SECS),
+                Duration::from_secs,
+            );
 
         Self {
             session_timeout,
@@ -135,9 +137,10 @@ impl TimeoutConfig {
         }
     }
 
-    /// Create a TimeoutConfig with no timeouts (infinite wait).
+    /// Create a `TimeoutConfig` with no timeouts (infinite wait).
     /// Useful for debugging or long-running tasks.
-    pub fn no_timeout() -> Self {
+    #[allow(dead_code)]
+    pub const fn no_timeout() -> Self {
         Self {
             session_timeout: Duration::MAX,
             request_timeout: Duration::MAX,
@@ -160,10 +163,7 @@ mod tests {
 
     #[test]
     fn test_timeout_config_custom() {
-        let config = TimeoutConfig::new(
-            Duration::from_secs(120),
-            Duration::from_secs(30),
-        );
+        let config = TimeoutConfig::new(Duration::from_secs(120), Duration::from_secs(30));
         assert_eq!(config.session_timeout, Duration::from_secs(120));
         assert_eq!(config.request_timeout, Duration::from_secs(30));
     }
@@ -203,4 +203,3 @@ mod tests {
         assert_eq!(TimeoutConfig::DEFAULT_REQUEST_TIMEOUT_SECS, 60);
     }
 }
-

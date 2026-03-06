@@ -14,51 +14,55 @@ use serde::{Deserialize, Serialize};
 ///
 /// Represents a single update that would be received from an ACP session,
 /// such as message chunks, tool calls, or completion signals.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MockSessionUpdate {
     /// Delay before sending this update (milliseconds).
     /// Used to simulate realistic timing in tests.
     #[serde(default)]
     pub delay_ms: u64,
 
-    /// The session update type (e.g., "agent_message_chunk", "agent_turn_finished").
+    /// The session update type (e.g., "`agent_message_chunk`", "`agent_turn_finished`").
     pub session_update: String,
 
-    /// Optional text content (for "agent_message_chunk" updates).
+    /// Optional text content (for "`agent_message_chunk`" updates).
     #[serde(default)]
     pub content: Option<String>,
 
-    /// Optional tool call info (for "tool_call" updates).
+    /// Optional tool call info (for "`tool_call`" updates).
     #[serde(default)]
     pub tool_title: Option<String>,
 
-    /// Optional tool result (for "tool_result" updates).
+    /// Optional tool result (for "`tool_result`" updates).
     #[serde(default)]
     pub tool_result: Option<MockToolResult>,
 
     /// Optional MCP tool call to inject (triggers tool call through the mock channel).
-    /// This simulates the agent calling one of our MCP tools (write_plan, complete, implement, decompose).
+    /// This simulates the agent calling one of our MCP tools (`write_plan`, `complete`, `spawn_agents`, `decompose`).
     #[serde(default)]
     pub inject_mcp_tool_call: Option<MockMcpToolCall>,
 }
 
 /// An MCP tool call to inject during mock session execution.
 /// This represents the agent calling one of our tools via the MCP protocol.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 pub enum MockMcpToolCall {
-    /// Call the write_plan tool (planner agent).
+    /// Call the `write_plan` tool (planner agent).
     WritePlan { plan: String },
     /// Call the complete tool (all agents).
-    Complete { success: bool, message: Option<String> },
-    /// Call the implement tool (orchestrator only).
-    Implement { task: String },
+    Complete {
+        success: bool,
+        message: Option<String>,
+    },
+    /// Call the spawn_agents tool (orchestrator only).
+    /// For backward compatibility, this accepts a single task and spawns one agent.
+    SpawnAgents { task: String },
     /// Call the decompose tool (orchestrator only).
     Decompose { task: String },
 }
 
-/// Tool result content for mock tool_result updates.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Tool result content for mock `tool_result` updates.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MockToolResult {
     pub title: String,
     pub is_error: bool,
@@ -87,7 +91,7 @@ pub struct MockAgentSession {
 /// Mock response for MCP tool calls.
 ///
 /// Defines how the mock system should respond when an MCP tool is called.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MockToolCallResponse {
     /// Pattern to match against the tool call (regex on task string).
     #[serde(default)]
@@ -101,15 +105,15 @@ pub struct MockToolCallResponse {
 }
 
 /// Tool types that can be mocked.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MockToolType {
     Decompose,
-    Implement,
+    SpawnAgents,
     Complete,
 }
 
-/// Response data for mock tool calls (mirrors ToolResponse structure).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Response data for mock tool calls (mirrors `ToolResponse` structure).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MockToolResponseData {
     /// Whether the operation succeeded.
     pub success: bool,
@@ -128,7 +132,7 @@ pub struct MockToolResponseData {
 }
 
 impl MockToolResponseData {
-    /// Convert to a ToolResponse with the given request ID.
+    /// Convert to a `ToolResponse` with the given request ID.
     pub fn to_tool_response(&self, request_id: String) -> ToolResponse {
         ToolResponse {
             request_id,
@@ -143,7 +147,7 @@ impl MockToolResponseData {
 /// Scripted ACP JSON-RPC responses.
 ///
 /// Used to mock responses to ACP methods like "initialize" or "session/new".
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MockAcpResponse {
     /// The method this responds to (e.g., "session/new", "initialize").
     pub method: String,
@@ -158,7 +162,7 @@ pub struct MockAcpResponse {
 }
 
 /// ACP error response structure.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MockAcpError {
     pub code: i32,
     pub message: String,
@@ -171,4 +175,3 @@ pub enum AgentType {
     Orchestrator,
     Implementer,
 }
-

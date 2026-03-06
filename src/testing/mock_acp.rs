@@ -7,7 +7,9 @@
 use crate::acp::{AcpClientTrait, SessionNewResponse};
 use crate::app::ToolMessage;
 use crate::mcp_server::{ToolCall, ToolRequest};
-use crate::testing::{AgentType, MockAgentSession, MockMcpToolCall, MockScenario, MockSessionUpdate};
+use crate::testing::{
+    AgentType, MockAgentSession, MockMcpToolCall, MockScenario, MockSessionUpdate,
+};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -15,7 +17,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
-/// Pending tool call that needs to be injected when recv() is called.
+/// Pending tool call that needs to be injected when `recv()` is called.
 #[derive(Debug)]
 struct PendingToolCall {
     tool_call: MockMcpToolCall,
@@ -35,7 +37,7 @@ pub struct MockAcpClient {
     /// Counter for generating unique session IDs.
     session_counter: usize,
 
-    /// Captured prompts for assertion: (session_id, prompt).
+    /// Captured prompts for assertion: (`session_id`, prompt).
     captured_prompts: Vec<(String, String)>,
 
     /// Reference sessions from the scenario (by agent type).
@@ -98,13 +100,13 @@ impl MockAcpClient {
         self
     }
 
-    /// Get all captured prompts as (session_id, prompt) pairs.
+    /// Get all captured prompts as (`session_id`, prompt) pairs.
     pub fn captured_prompts(&self) -> &[(String, String)] {
         &self.captured_prompts
     }
 
     /// Get the number of sessions created.
-    pub fn sessions_created_count(&self) -> usize {
+    pub const fn sessions_created_count(&self) -> usize {
         self.sessions_created.len()
     }
 
@@ -152,7 +154,7 @@ impl MockAcpClient {
     /// Determine agent type from model name and MCP server configuration.
     ///
     /// The agent type is primarily determined from the MCP server's environment
-    /// variables (VILLALOBOS_AGENT_TYPE), with fallback to model name heuristics.
+    /// variables (`VILLALOBOS_AGENT_TYPE`), with fallback to model name heuristics.
     fn agent_type_from_config(&self, model: &str, mcp_servers: &[Value]) -> AgentType {
         // First, try to detect from MCP server environment variables
         for server in mcp_servers {
@@ -196,7 +198,7 @@ impl MockAcpClient {
         }
     }
 
-    /// Queue updates from a session for the given session_id.
+    /// Queue updates from a session for the given `session_id`.
     fn queue_updates(&mut self, session_id: &str, updates: &[MockSessionUpdate]) {
         for update in updates {
             let notification = mock_session_update_to_notification(session_id, update);
@@ -215,9 +217,13 @@ impl MockAcpClient {
     /// This is fire-and-forget - we don't wait for the App's response.
     /// The tool interceptor has already provided the mock response.
     async fn inject_tool_call(&mut self, pending: PendingToolCall) -> Result<()> {
-        let tool_tx = self.tool_tx.as_ref()
+        let tool_tx = self
+            .tool_tx
+            .as_ref()
             .ok_or_else(|| anyhow!("No tool channel configured for MockAcpClient"))?;
-        let interceptor = self.tool_interceptor.as_ref()
+        let interceptor = self
+            .tool_interceptor
+            .as_ref()
             .ok_or_else(|| anyhow!("No tool interceptor configured for MockAcpClient"))?;
 
         // Convert MockMcpToolCall to ToolCall
@@ -227,7 +233,18 @@ impl MockAcpClient {
                 success: *success,
                 message: message.clone(),
             },
-            MockMcpToolCall::Implement { task } => ToolCall::Implement { task: task.clone() },
+            MockMcpToolCall::SpawnAgents { task } => {
+                // Create a single-agent spawn for backward compatibility
+                ToolCall::SpawnAgents {
+                    agents: vec![crate::mcp_server::AgentSpec {
+                        role: "implementer".to_string(),
+                        task: task.clone(),
+                        prompt: None,
+                        tools: None,
+                    }],
+                    wait: crate::mcp_server::WaitMode::All,
+                }
+            }
             MockMcpToolCall::Decompose { task } => ToolCall::Decompose { task: task.clone() },
         };
 
@@ -254,8 +271,12 @@ impl MockAcpClient {
         };
 
         // Use try_send to avoid blocking - if the channel is full, that's a test bug
-        tool_tx.try_send(ToolMessage::Request { request, response_tx })
-            .map_err(|e| anyhow!("Failed to send tool call (channel full or closed): {}", e))?;
+        tool_tx
+            .try_send(ToolMessage::Request {
+                request,
+                response_tx,
+            })
+            .map_err(|e| anyhow!("Failed to send tool call (channel full or closed): {e}"))?;
 
         Ok(())
     }
@@ -351,9 +372,7 @@ impl AcpClientTrait for MockAcpClient {
                     for pattern in patterns {
                         if !prompt.contains(pattern) {
                             return Err(anyhow!(
-                                "Prompt validation failed: expected prompt to contain '{}', got: {}",
-                                pattern,
-                                prompt
+                                "Prompt validation failed: expected prompt to contain '{pattern}', got: {prompt}"
                             ));
                         }
                     }
@@ -383,6 +402,12 @@ impl AcpClientTrait for MockAcpClient {
             // In real usage, this would block until a message arrives
             Err(anyhow!("No more mock updates available"))
         }
+    }
+
+    fn take_notification_rx(&mut self) -> Option<mpsc::Receiver<Value>> {
+        // Mock client doesn't have a real notification receiver to take.
+        // For testing, we return None since mock clients use the update_queue directly.
+        None
     }
 
     async fn shutdown(&mut self) -> Result<()> {
@@ -459,7 +484,10 @@ mod tests {
 
         let prompts = client.captured_prompts();
         assert_eq!(prompts.len(), 1);
-        assert_eq!(prompts[0], ("impl-001".to_string(), "Do something".to_string()));
+        assert_eq!(
+            prompts[0],
+            ("impl-001".to_string(), "Do something".to_string())
+        );
     }
 
     #[tokio::test]

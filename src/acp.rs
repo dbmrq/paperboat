@@ -39,6 +39,15 @@ pub trait AcpClientTrait: Send + Sync {
     /// Use this to monitor agent progress, receive plans, tool calls, etc.
     async fn recv(&mut self) -> Result<Value>;
 
+    /// Take the notification receiver for external routing.
+    ///
+    /// This extracts the internal notification receiver so it can be used by
+    /// a background routing task. After calling this, `recv()` will return
+    /// an error immediately since there's no receiver.
+    ///
+    /// Returns `None` if the receiver has already been taken.
+    fn take_notification_rx(&mut self) -> Option<mpsc::Receiver<Value>>;
+
     /// Gracefully shutdown the ACP client.
     ///
     /// This closes stdin (signaling EOF to the child), waits for the child process
@@ -55,8 +64,9 @@ pub struct AcpClient {
     tx: mpsc::Sender<String>,
     /// Map of pending request IDs to their response channels
     pending_requests: PendingRequests,
-    /// Channel for JSON-RPC notifications (messages without an "id" field)
-    notification_rx: mpsc::Receiver<Value>,
+    /// Channel for JSON-RPC notifications (messages without an "id" field).
+    /// This is `Option` because it can be taken by `take_notification_rx()` for external routing.
+    notification_rx: Option<mpsc::Receiver<Value>>,
     /// Handle to the stdin writer task
     stdin_task: Option<JoinHandle<()>>,
     /// Handle to the stdout reader task
@@ -71,18 +81,7 @@ pub struct SessionNewResponse {
     pub session_id: String,
 }
 
-/// Default request timeout in seconds (60 seconds)
-const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
-
 impl AcpClient {
-    /// Spawn a new ACP agent process with default timeout.
-    ///
-    /// If `cache_dir` is provided, auggie will use that directory for its settings,
-    /// allowing different agents to have different tool configurations.
-    pub async fn spawn(cache_dir: Option<&str>) -> Result<Self> {
-        Self::spawn_with_timeout(cache_dir, Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS)).await
-    }
-
     /// Spawn a new ACP agent process with custom request timeout.
     ///
     /// If `cache_dir` is provided, auggie will use that directory for its settings,
@@ -150,7 +149,7 @@ impl AcpClient {
                     if let Some(id) = value
                         .get("id")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
+                        .map(std::string::ToString::to_string)
                     {
                         // Look up the pending request and send the response
                         let mut pending = pending_requests_clone.lock().await;
@@ -168,10 +167,8 @@ impl AcpClient {
                                 id
                             );
                         }
-                    } else {
-                        if tx_notifications.send(value).await.is_err() {
-                            break;
-                        }
+                    } else if tx_notifications.send(value).await.is_err() {
+                        break;
                     }
                 } else {
                     tracing::warn!(
@@ -186,7 +183,7 @@ impl AcpClient {
             child,
             tx,
             pending_requests,
-            notification_rx,
+            notification_rx: Some(notification_rx),
             stdin_task: Some(stdin_task),
             stdout_task: Some(stdout_task),
             request_timeout,
@@ -214,8 +211,7 @@ impl AcpClient {
                 params
                     .get("mcpServers")
                     .and_then(|v| v.as_array())
-                    .map(|a| a.len())
-                    .unwrap_or(0)
+                    .map_or(0, std::vec::Vec::len)
             );
         } else {
             tracing::debug!("📤 ACP {}: id={}", method, id);
@@ -283,7 +279,7 @@ impl AcpClient {
         }
 
         if let Some(error) = response.get("error") {
-            anyhow::bail!("ACP error: {}", error);
+            anyhow::bail!("ACP error: {error}");
         }
 
         response
@@ -291,7 +287,6 @@ impl AcpClient {
             .cloned()
             .context("No result in response")
     }
-
 }
 
 #[async_trait]
@@ -348,8 +343,19 @@ impl AcpClientTrait for AcpClient {
     ///
     /// Notifications are server-initiated messages (no "id" field) like session/update.
     /// Use this to monitor agent progress, receive plans, tool calls, etc.
+    ///
+    /// Returns an error if the notification receiver has been taken via `take_notification_rx()`.
     async fn recv(&mut self) -> Result<Value> {
-        self.notification_rx.recv().await.context("Failed to receive notification")
+        let rx = self
+            .notification_rx
+            .as_mut()
+            .context("Notification receiver has been taken")?;
+        rx.recv().await.context("Failed to receive notification")
+    }
+
+    /// Take the notification receiver for external routing.
+    fn take_notification_rx(&mut self) -> Option<mpsc::Receiver<Value>> {
+        self.notification_rx.take()
     }
 
     /// Gracefully shutdown the ACP client.
@@ -380,10 +386,7 @@ impl AcpClientTrait for AcpClient {
         }
 
         // Wait for the child to exit with a timeout
-        let wait_result = tokio::time::timeout(
-            Duration::from_secs(5),
-            self.child.wait()
-        ).await;
+        let wait_result = tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await;
 
         match wait_result {
             Ok(Ok(status)) => {

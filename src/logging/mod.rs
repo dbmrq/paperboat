@@ -32,6 +32,8 @@ mod writer;
 
 pub use manager::RunLogManager;
 pub use scope::LogScope;
+#[allow(unused_imports)]
 pub use stream::LogEvent;
-pub use writer::{AgentType, AgentWriter};
-
+#[allow(unused_imports)]
+pub use writer::AgentType;
+pub use writer::AgentWriter;

@@ -3,6 +3,38 @@
 //! This module contains shared types used by the MCP server for communication
 //! between the orchestrator agent and the main application.
 
+/// Specification for an agent to be spawned.
+///
+/// Used by the orchestrator to describe worker agents when making
+/// `spawn_agents` tool calls.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AgentSpec {
+    /// The role of the agent (e.g., "implementer", "verifier", "explorer", "custom")
+    pub role: String,
+    /// The task to be performed by this agent
+    pub task: String,
+    /// Custom prompt (required for role="custom", optional for others)
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// Explicit tool whitelist (required for role="custom")
+    #[serde(default)]
+    pub tools: Option<Vec<String>>,
+}
+
+/// Wait mode for spawned agents.
+///
+/// Controls how the orchestrator waits for spawned agents to complete.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum WaitMode {
+    /// Wait for all agents to complete before continuing
+    #[default]
+    All,
+    /// Wait for any one agent to complete before continuing
+    Any,
+    /// Don't wait; fire and forget
+    None,
+}
+
 /// Request sent from MCP server to the app via Unix socket.
 ///
 /// Wraps a tool call with a unique request ID for response correlation.
@@ -33,7 +65,7 @@ pub struct ToolResponse {
 
 impl ToolResponse {
     /// Create a successful response
-    pub fn success(request_id: String, summary: String) -> Self {
+    pub const fn success(request_id: String, summary: String) -> Self {
         Self {
             request_id,
             success: true,
@@ -44,7 +76,12 @@ impl ToolResponse {
     }
 
     /// Create a successful response with file list
-    pub fn success_with_files(request_id: String, summary: String, files: Vec<String>) -> Self {
+    #[allow(dead_code)]
+    pub const fn success_with_files(
+        request_id: String,
+        summary: String,
+        files: Vec<String>,
+    ) -> Self {
         Self {
             request_id,
             success: true,
@@ -55,7 +92,7 @@ impl ToolResponse {
     }
 
     /// Create a failure response
-    pub fn failure(request_id: String, error: String) -> Self {
+    pub const fn failure(request_id: String, error: String) -> Self {
         Self {
             request_id,
             success: false,
@@ -75,9 +112,10 @@ impl ToolResponse {
 /// # Variants
 ///
 /// - `Decompose` - Request to break down a task into smaller subtasks
-/// - `Implement` - Request to implement a specific task
+/// - `SpawnAgents` - Request to spawn one or more worker agents
 /// - `Complete` - Signal that the orchestrator has finished processing
-/// - `WritePlan` - Write a structured plan (planner agent only)
+/// - `WritePlan` - Submit a plan (planner agent only)
+/// - `CreateTask` - Create a task (planner agent only)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ToolCall {
     /// Request to decompose a task into subtasks.
@@ -85,10 +123,13 @@ pub enum ToolCall {
         /// The task description to decompose.
         task: String,
     },
-    /// Request to implement a specific task.
-    Implement {
-        /// The task description to implement.
-        task: String,
+    /// Request to spawn one or more worker agents.
+    SpawnAgents {
+        /// The agents to spawn with their roles and tasks.
+        agents: Vec<AgentSpec>,
+        /// How to wait for the spawned agents.
+        #[serde(default)]
+        wait: WaitMode,
     },
     /// Signal completion of an agent's work.
     Complete {
@@ -97,23 +138,32 @@ pub enum ToolCall {
         /// Optional message providing details about the completion.
         message: Option<String>,
     },
-    /// Write a structured plan (used by planner agents).
-    /// This stores the plan for the orchestrator to retrieve.
+    /// Submit a plan (used by planner agents).
     WritePlan {
-        /// The structured plan content.
+        /// The plan content as markdown.
         plan: String,
+    },
+    /// Create a task (used by planner agents).
+    /// This creates a task for the orchestrator to track and execute.
+    CreateTask {
+        /// The name of the task.
+        name: String,
+        /// The description of the task.
+        description: String,
+        /// Names of tasks that this task depends on.
+        dependencies: Vec<String>,
     },
 }
 
 impl ToolCall {
     /// Returns the type of tool call as a string.
-    pub fn tool_type(&self) -> &'static str {
+    pub const fn tool_type(&self) -> &'static str {
         match self {
-            ToolCall::Decompose { .. } => "decompose",
-            ToolCall::Implement { .. } => "implement",
-            ToolCall::Complete { .. } => "complete",
-            ToolCall::WritePlan { .. } => "write_plan",
+            Self::Decompose { .. } => "decompose",
+            Self::SpawnAgents { .. } => "spawn_agents",
+            Self::Complete { .. } => "complete",
+            Self::WritePlan { .. } => "write_plan",
+            Self::CreateTask { .. } => "create_task",
         }
     }
 }
-
