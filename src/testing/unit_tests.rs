@@ -127,3 +127,69 @@ fn test_mock_scenario_find_tool_response() {
     let response = scenario.find_tool_response(MockToolType::Decompose, "any task");
     assert!(response.is_none());
 }
+
+#[test]
+fn test_mock_session_builder_with_skip_tasks() {
+    let session = MockSessionBuilder::new("orch-001")
+        .with_message_chunk("Executing...", 0)
+        .with_skip_tasks(
+            vec!["task001".to_string(), "task002".to_string()],
+            Some("Not needed".to_string()),
+            50,
+        )
+        .with_complete(true, Some("Done".to_string()), 0)
+        .with_turn_finished(0)
+        .build();
+
+    assert_eq!(session.session_id, "orch-001");
+    assert_eq!(session.updates.len(), 4);
+
+    // Find the skip_tasks update
+    let skip_update = session
+        .updates
+        .iter()
+        .find(|u| {
+            matches!(
+                &u.inject_mcp_tool_call,
+                Some(MockMcpToolCall::SkipTasks { .. })
+            )
+        })
+        .expect("Should have skip_tasks injection");
+
+    match &skip_update.inject_mcp_tool_call {
+        Some(MockMcpToolCall::SkipTasks { task_ids, reason }) => {
+            assert_eq!(
+                task_ids,
+                &vec!["task001".to_string(), "task002".to_string()]
+            );
+            assert_eq!(reason, &Some("Not needed".to_string()));
+        }
+        _ => panic!("Expected SkipTasks injection"),
+    }
+}
+
+#[test]
+fn test_mock_session_builder_with_skip_tasks_no_reason() {
+    let session = MockSessionBuilder::new("orch-002")
+        .with_skip_tasks(vec!["task003".to_string()], None, 0)
+        .build();
+
+    let skip_update = session
+        .updates
+        .iter()
+        .find(|u| {
+            matches!(
+                &u.inject_mcp_tool_call,
+                Some(MockMcpToolCall::SkipTasks { .. })
+            )
+        })
+        .expect("Should have skip_tasks injection");
+
+    match &skip_update.inject_mcp_tool_call {
+        Some(MockMcpToolCall::SkipTasks { task_ids, reason }) => {
+            assert_eq!(task_ids, &vec!["task003".to_string()]);
+            assert!(reason.is_none());
+        }
+        _ => panic!("Expected SkipTasks injection"),
+    }
+}

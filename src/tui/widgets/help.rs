@@ -21,6 +21,17 @@ const HELP_SECTIONS: &[HelpSection] = &[
             ("Tab", "Cycle focus between panels"),
             ("q", "Quit TUI"),
             ("?", "Toggle this help"),
+            ("s", "Open model settings"),
+        ],
+    },
+    HelpSection {
+        title: "Model Settings (when open)",
+        shortcuts: &[
+            ("←/→/Tab", "Switch agent type tab"),
+            ("↑/↓", "Navigate models"),
+            ("Enter", "Select model"),
+            ("s", "Save changes and close"),
+            ("Esc", "Discard changes and close"),
         ],
     },
     HelpSection {

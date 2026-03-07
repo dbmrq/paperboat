@@ -159,6 +159,17 @@ content = "Auth system decomposed and implemented. Now implementing rate limitin
 tool = "spawn_agents"
 task = "Add rate limiting middleware to protect API endpoints"
 
+# Skip the planner's tracked tasks (since we're using decompose and raw task descriptions)
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Skipping tracked tasks since we used decompose and custom descriptions]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "skip_tasks"
+task_ids = ["task001", "task002"]
+reason = "Handled via decompose and custom descriptions"
+
 # Complete the main orchestration
 [[orchestrator_sessions.updates]]
 delay_ms = 50
@@ -202,6 +213,17 @@ content = "[Implementing registration flow]"
 [orchestrator_sessions.updates.inject_mcp_tool_call]
 tool = "spawn_agents"
 task = "Implement registration flow with email validation and password hashing"
+
+# Skip the sub-planner's tracked tasks (since we're using raw task descriptions)
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Skipping tracked subtasks since we used custom descriptions]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "skip_tasks"
+task_ids = ["task001", "task002"]
+reason = "Implemented with custom descriptions"
 
 # Sub-orchestrator completes
 [[orchestrator_sessions.updates]]

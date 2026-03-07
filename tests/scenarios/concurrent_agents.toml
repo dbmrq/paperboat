@@ -111,6 +111,17 @@ content = "[Calling spawn_agents with 3 concurrent agents]"
 tool = "spawn_agents"
 task = "Implement all three modules concurrently"
 
+# Skip the planner's tracked tasks (since we're using raw task descriptions)
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Skipping tracked tasks since we used custom descriptions]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "skip_tasks"
+task_ids = ["task001", "task002", "task003"]
+reason = "Implemented concurrently with custom descriptions"
+
 # Orchestrator completes after all agents finish
 [[orchestrator_sessions.updates]]
 delay_ms = 50

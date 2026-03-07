@@ -76,7 +76,9 @@ mod colors {
 /// ```
 pub fn render_agent_tree(frame: &mut Frame, area: Rect, state: &mut TuiState, focused: bool) {
     // Build tree items from the agent tree state
-    let items = state.agent_tree_state.build_tree_items();
+    let items = state
+        .agent_tree_state
+        .build_tree_items(state.animation_frame);
 
     // Create the border block with focus-dependent styling
     let border_color = if focused {

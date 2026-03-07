@@ -1,0 +1,67 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+# Root options
+[graph]
+targets = []
+all-features = true
+no-default-features = false
+
+# Advisories configuration - security vulnerability checking
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Ignore specific advisories (add IDs here if needed)
+ignore = []
+
+# Licenses configuration
+[licenses]
+# Confidence threshold for license detection (0.0-1.0)
+confidence-threshold = 0.8
+# Allow common open source licenses
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",       # Common permissive license
+    "BSD-3-Clause",       # Common permissive license
+    "ISC",                # Common permissive license
+    "Unlicense",
+    "Zlib",
+    "CC0-1.0",            # Public domain dedication
+    "MPL-2.0",
+    "Unicode-DFS-2016",   # Unicode data files
+    "Unicode-3.0",        # Unicode license v3
+]
+# Clarify licenses for specific crates if detection fails
+clarify = []
+# Exceptions for specific crates (use sparingly)
+exceptions = []
+
+# Bans configuration - dependency restrictions
+[bans]
+# Warn on multiple versions of same crate
+multiple-versions = "warn"
+# Warn on wildcards in dependencies
+wildcards = "warn"
+# Allow multiple versions of these crates (common transitive deps)
+skip = []
+# Deny specific crates entirely
+deny = [
+    # Unmaintained crates to avoid
+    { crate = "openssl", wrappers = [] },  # Prefer rustls for TLS
+]
+# Allow specific crates to have multiple versions
+skip-tree = []
+
+# Sources configuration - where dependencies can come from
+[sources]
+# Allow crates.io as the only source
+unknown-registry = "deny"
+unknown-git = "deny"
+# Allow specific registries
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Allow specific sources for specific crates
+[sources.allow-org]
+github = []
+

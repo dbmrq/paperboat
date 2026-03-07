@@ -420,6 +420,8 @@ async fn test_e2e_prompt_content_verification() {
                     inject_mcp_tool_call: Some(MockMcpToolCall::Complete {
                         success: true,
                         message: Some("Plan created".to_string()),
+                        notes: None,
+                        add_tasks: None,
                     }),
                 },
                 MockSessionUpdate {
@@ -437,6 +439,12 @@ async fn test_e2e_prompt_content_verification() {
         orchestrator_sessions: vec![MockSessionBuilder::new("orch-prompt-001")
             .with_message_chunk("Executing plan...", 50)
             .with_implement("Implement feature X", 50)
+            // Skip the planner's tracked task since we used a raw task description
+            .with_skip_tasks(
+                vec!["task001".to_string()],
+                Some("Implemented via spawn_agents".to_string()),
+                50,
+            )
             .with_complete(true, Some("Done".to_string()), 50)
             .with_turn_finished(50)
             .build()],

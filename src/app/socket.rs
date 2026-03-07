@@ -76,10 +76,16 @@ pub async fn setup_agent_socket(agent_id: &str) -> Result<AgentSocketHandle> {
     }
 
     let listener = UnixListener::bind(&socket_path).with_context(|| {
-        format!(
-            "Failed to bind agent socket at {socket_path:?} (agent_id={agent_id})"
-        )
+        format!("Failed to bind agent socket at {socket_path:?} (agent_id={agent_id})")
     })?;
+
+    // Verify the socket file exists before proceeding
+    // This ensures the socket is ready for MCP server connections
+    if !socket_path.exists() {
+        anyhow::bail!(
+            "Socket file was not created at {socket_path:?} after bind (agent_id={agent_id})"
+        );
+    }
 
     tracing::debug!(
         "Agent socket listening at: {:?} (agent_id={})",
@@ -109,6 +115,11 @@ pub async fn setup_agent_socket(agent_id: &str) -> Result<AgentSocketHandle> {
             }
         }
     });
+
+    // Yield to let the listener task start running
+    // This helps prevent race conditions where the MCP server tries to connect
+    // before the listener is ready to accept connections
+    tokio::task::yield_now().await;
 
     Ok(AgentSocketHandle {
         socket_path,

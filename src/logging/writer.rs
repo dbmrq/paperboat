@@ -260,7 +260,8 @@ impl AgentWriter {
             ("❌", "FAILED")
         };
         // Leading newline ensures separation from previous content (e.g., agent output)
-        let line = format!("\n[{timestamp}] {icon} MCP result: {tool_name} - {summary} ({status})\n");
+        let line =
+            format!("\n[{timestamp}] {icon} MCP result: {tool_name} - {summary} ({status})\n");
         self.file.write_all(line.as_bytes()).await?;
         self.file.flush().await?;
 

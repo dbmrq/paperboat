@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Pre-commit hook for Paperboat
+# Runs formatting and linting checks before each commit.
+#
+# To install: ./scripts/install-hooks.sh
+# Or manually: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+
+set -e
+
+echo "🔍 Running pre-commit checks..."
+
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Check if cargo is available
+if ! command -v cargo &> /dev/null; then
+    echo -e "${RED}Error: cargo not found. Please install Rust.${NC}"
+    exit 1
+fi
+
+# Store the original directory
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+# Track failures
+FAILED=0
+
+# Run cargo fmt check
+echo -e "${YELLOW}Checking formatting...${NC}"
+if ! cargo fmt -- --check; then
+    echo -e "${RED}❌ Formatting check failed!${NC}"
+    echo -e "   Run 'cargo fmt' to fix formatting issues."
+    FAILED=1
+else
+    echo -e "${GREEN}✓ Formatting check passed${NC}"
+fi
+
+# Run cargo clippy
+echo -e "${YELLOW}Running clippy...${NC}"
+if ! cargo clippy --all-features -- -D warnings 2>/dev/null; then
+    echo -e "${RED}❌ Clippy check failed!${NC}"
+    echo -e "   Fix the issues above before committing."
+    FAILED=1
+else
+    echo -e "${GREEN}✓ Clippy check passed${NC}"
+fi
+
+# Summary
+if [ $FAILED -ne 0 ]; then
+    echo ""
+    echo -e "${RED}Pre-commit checks failed. Commit aborted.${NC}"
+    echo -e "You can skip hooks with 'git commit --no-verify' (not recommended)."
+    exit 1
+fi
+
+echo ""
+echo -e "${GREEN}✅ All pre-commit checks passed!${NC}"
+exit 0
+

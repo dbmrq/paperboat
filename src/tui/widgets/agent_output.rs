@@ -49,7 +49,7 @@ pub fn render_agent_output(frame: &mut Frame, area: Rect, state: &mut TuiState, 
     };
 
     let title = if let Some(agent) = state.selected_agent() {
-        format!(" {} Output ", agent.display_name())
+        format!(" {} Output ", agent.display_name(state.animation_frame))
     } else {
         " Agent Output ".to_string()
     };
@@ -63,8 +63,8 @@ pub fn render_agent_output(frame: &mut Frame, area: Rect, state: &mut TuiState, 
     let messages = state.selected_agent_messages();
 
     // Handle empty selection or no messages
-    let (content, total_lines) = if state.selected_agent_id.is_none() {
-        let text = Text::from(vec![
+    let content = if state.selected_agent_id.is_none() {
+        Text::from(vec![
             Line::from(""),
             Line::from(Span::styled(
                 "No agent selected",
@@ -75,27 +75,33 @@ pub fn render_agent_output(frame: &mut Frame, area: Rect, state: &mut TuiState, 
                 "Select an agent from the tree on the left",
                 Style::default().fg(Color::DarkGray),
             )),
-        ]);
-        (text, 4)
-    } else if messages.is_none() || messages.is_none_or(Vec::is_empty) {
-        let text = Text::from(vec![
+        ])
+    } else if let Some(msgs) = messages.filter(|v| !v.is_empty()) {
+        // Format messages with styling
+        let lines = format_messages(msgs);
+        Text::from(lines)
+    } else {
+        Text::from(vec![
             Line::from(""),
             Line::from(Span::styled(
                 "Waiting for output...",
                 Style::default().fg(Color::DarkGray).italic(),
             )),
-        ]);
-        (text, 2)
-    } else {
-        // Format messages with styling
-        let msgs = messages.unwrap();
-        let lines = format_messages(msgs);
-        let line_count = lines.len();
-        (Text::from(lines), line_count)
+        ])
     };
 
     // Calculate visible area (minus borders)
     let inner_height = area.height.saturating_sub(2) as usize;
+
+    // Create the paragraph with block and wrapping to calculate line count.
+    // This gives us the actual rendered line count, accounting for wrapped lines.
+    let paragraph = Paragraph::new(content)
+        .block(block)
+        .wrap(Wrap { trim: false });
+
+    // Use line_count() to get actual rendered lines including wrapped lines.
+    // This accounts for the block borders internally.
+    let total_lines = paragraph.line_count(area.width);
 
     // Auto-scroll: if new messages arrived, scroll to bottom
     let current_message_count = messages.map_or(0, Vec::len);
@@ -115,11 +121,8 @@ pub fn render_agent_output(frame: &mut Frame, area: Rect, state: &mut TuiState, 
         state.agent_output_scroll = max_scroll as u16;
     }
 
-    // Create the paragraph with scroll
-    let paragraph = Paragraph::new(content)
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((state.agent_output_scroll, 0));
+    // Add scroll offset to the paragraph and render
+    let paragraph = paragraph.scroll((state.agent_output_scroll, 0));
 
     frame.render_widget(paragraph, area);
 
@@ -142,9 +145,15 @@ pub fn render_agent_output(frame: &mut Frame, area: Rect, state: &mut TuiState, 
 /// Formats messages for display with styling.
 ///
 /// Tool calls are highlighted with emoji indicators and different colors.
-/// Single line breaks are preserved as blank lines, while consecutive empty
-/// messages (from double/multiple line breaks) are collapsed to a single
-/// blank line to avoid wasting space.
+///
+/// # Line Break Handling
+///
+/// - Single `\n` in content creates separate messages (via `handle_agent_message`)
+///   which display as consecutive lines (no blank line between)
+/// - Double `\n\n` creates an empty message between two content messages,
+///   displaying as content, blank line, content
+/// - Consecutive empty messages are collapsed to a single blank line
+/// - Messages with embedded newlines are split via `.lines()` for proper display
 fn format_messages(messages: &[String]) -> Vec<Line<'static>> {
     let mut result: Vec<Line<'static>> = Vec::new();
     let mut prev_was_empty = false;
@@ -182,20 +191,41 @@ fn format_line(line: &str) -> Line<'static> {
     let line_owned = line.to_string();
 
     // Tool call indicators (using simple text symbols, not image emoji)
-    if line_owned.starts_with(">") {
+    if line_owned.starts_with('>') {
         Line::from(Span::styled(
             line_owned,
             Style::default().fg(Color::Yellow).bold(),
         ))
-    } else if line_owned.starts_with("✓") {
+    } else if line_owned.starts_with('✓') {
         Line::from(Span::styled(line_owned, Style::default().fg(Color::Green)))
-    } else if line_owned.starts_with("✗") {
+    } else if line_owned.starts_with('✗') {
         Line::from(Span::styled(line_owned, Style::default().fg(Color::Red)))
-    } else if line_owned.starts_with("+") {
+    } else if line_owned.starts_with('+') {
         Line::from(Span::styled(line_owned, Style::default().fg(Color::Blue)))
     } else {
         Line::from(line_owned)
     }
+}
+
+/// Calculates the total rendered line count for agent messages, accounting for text wrapping.
+///
+/// This function creates a temporary Paragraph to get the accurate wrapped line count,
+/// matching the rendering logic in `render_agent_output`.
+///
+/// # Arguments
+///
+/// * `messages` - The agent messages to count lines for
+/// * `inner_width` - The inner width of the panel (excluding borders)
+///
+/// # Returns
+///
+/// The total number of rendered lines, including wrapped lines.
+#[must_use]
+pub fn calculate_wrapped_line_count(messages: &[String], inner_width: u16) -> usize {
+    let lines = format_messages(messages);
+    let content = Text::from(lines);
+    let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
+    paragraph.line_count(inner_width)
 }
 
 /// Scrolls the agent output up by the specified number of lines.
@@ -243,15 +273,21 @@ pub fn handle_agent_output_key(
     state: &mut TuiState,
     key_code: crossterm::event::KeyCode,
     visible_height: u16,
+    visible_width: u16,
 ) -> bool {
     use crossterm::event::KeyCode;
 
-    // Calculate total lines from current messages
-    // This must match format_messages() logic: single empty messages become blank lines,
-    // consecutive empty messages are collapsed
-    let total_lines = state
-        .selected_agent_messages()
-        .map_or(0, |msgs| format_messages(msgs).len());
+    // Calculate total lines from current messages, accounting for text wrapping.
+    // We need to create a temporary Paragraph to get the accurate wrapped line count.
+    // Subtract 2 from width to account for left/right borders, matching render_agent_output
+    // which creates a paragraph with Block::default().borders(Borders::ALL).
+    let inner_width = visible_width.saturating_sub(2);
+    let total_lines = state.selected_agent_messages().map_or(0, |msgs| {
+        let lines = format_messages(msgs);
+        let content = Text::from(lines);
+        let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
+        paragraph.line_count(inner_width)
+    });
 
     let page_size = visible_height.saturating_sub(2); // Account for borders
 
@@ -281,5 +317,130 @@ pub fn handle_agent_output_key(
             true
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_messages_single_line_break() {
+        // Simulates "Line 1\nLine 2" which gets split into ["Line 1", "Line 2"]
+        let messages = vec!["Line 1".to_string(), "Line 2".to_string()];
+        let lines = format_messages(&messages);
+
+        // Should produce two separate lines
+        assert_eq!(lines.len(), 2);
+
+        // Verify the actual content
+        let line1_spans = &lines[0].spans;
+        let line2_spans = &lines[1].spans;
+        assert_eq!(line1_spans.len(), 1);
+        assert_eq!(line2_spans.len(), 1);
+        assert_eq!(line1_spans[0].content.as_ref(), "Line 1");
+        assert_eq!(line2_spans[0].content.as_ref(), "Line 2");
+    }
+
+    #[test]
+    fn test_format_messages_double_line_break() {
+        // Simulates "Line 1\n\nLine 2" which gets split into ["Line 1", "", "Line 2"]
+        let messages = vec!["Line 1".to_string(), "".to_string(), "Line 2".to_string()];
+        let lines = format_messages(&messages);
+
+        // Should produce 3 lines: Line 1, blank, Line 2
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn test_format_messages_consecutive_empty() {
+        // Simulates "Line 1\n\n\nLine 2" which gets split into ["Line 1", "", "", "Line 2"]
+        let messages = vec![
+            "Line 1".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "Line 2".to_string(),
+        ];
+        let lines = format_messages(&messages);
+
+        // Consecutive empty messages should be collapsed to one blank line
+        // So: Line 1, blank (collapsed), Line 2 = 3 lines
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn test_format_messages_embedded_newline() {
+        // Message with embedded newline (from standalone_message that wasn't split)
+        let messages = vec!["Line 1\nLine 2".to_string()];
+        let lines = format_messages(&messages);
+
+        // msg.lines() should split this into two lines
+        assert_eq!(lines.len(), 2);
+
+        // Verify the content is correct
+        assert_eq!(lines[0].spans[0].content.as_ref(), "Line 1");
+        assert_eq!(lines[1].spans[0].content.as_ref(), "Line 2");
+    }
+
+    #[test]
+    fn test_lines_behavior() {
+        // Verify that .lines() behaves as expected
+        let s = "Line 1\nLine 2";
+        let lines: Vec<_> = s.lines().collect();
+        assert_eq!(lines, vec!["Line 1", "Line 2"]);
+
+        // With trailing newline
+        let s2 = "Line 1\nLine 2\n";
+        let lines2: Vec<_> = s2.lines().collect();
+        assert_eq!(lines2, vec!["Line 1", "Line 2"]); // trailing newline is stripped
+    }
+
+    /// Test that verifies the exact scenario mentioned in the task:
+    /// "Line 1\nLine 2" should display as two separate lines
+    #[test]
+    fn test_single_newline_splits_correctly() {
+        // Simulate the input as it would come from handle_agent_message
+        // with content "Line 1\nLine 2"
+        // split('\n') gives ["Line 1", "Line 2"]
+        let messages = vec!["Line 1".to_string(), "Line 2".to_string()];
+        let lines = format_messages(&messages);
+
+        // Should produce exactly 2 lines
+        assert_eq!(lines.len(), 2, "Expected 2 lines, got {}", lines.len());
+
+        // Verify content
+        assert_eq!(lines[0].spans[0].content.as_ref(), "Line 1");
+        assert_eq!(lines[1].spans[0].content.as_ref(), "Line 2");
+
+        // Ensure they are NOT merged into one line
+        // (if they were merged, we'd have 1 line with content "Line 1Line 2")
+    }
+
+    #[test]
+    fn test_format_messages_text_followed_by_empty() {
+        // Simulates streaming: "Hello" then "\n" arrives
+        // handle_agent_message would produce ["Hello", ""]
+        let messages = vec!["Hello".to_string(), "".to_string()];
+        let lines = format_messages(&messages);
+
+        // Should be: Hello, then a blank line = 2 lines
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn test_format_messages_mixed_content() {
+        // Mixed: text, empty (newline), text, empty, empty (collapsed), text
+        let messages = vec![
+            "Line 1".to_string(),
+            "".to_string(),
+            "Line 2".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "Line 3".to_string(),
+        ];
+        let lines = format_messages(&messages);
+
+        // Line 1 + blank + Line 2 + blank (collapsed from 2 empties) + Line 3 = 5 lines
+        assert_eq!(lines.len(), 5);
     }
 }

@@ -97,6 +97,17 @@ content = "First attempt failed. Retrying with more specific instructions.\n"
 tool = "spawn_agents"
 task = "Fix database connection timeout bug - focus on connection pool settings and add exponential backoff retry"
 
+# Skip the planner's tracked task (since we're using raw task descriptions)
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Skipping tracked task since we used custom description]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "skip_tasks"
+task_ids = ["task001"]
+reason = "Implemented with custom description"
+
 # After successful retry, complete
 [[orchestrator_sessions.updates]]
 delay_ms = 50

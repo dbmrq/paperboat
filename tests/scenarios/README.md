@@ -10,6 +10,7 @@ This directory contains TOML scenario files that define scripted behaviors for i
 | `planning_only.toml` | Plan creation without implementation | Planner → Orchestrator (complete immediately) |
 | `multi_implement.toml` | Multiple sequential tasks | Planner → Orchestrator → 3 Implementers |
 | `nested_decompose.toml` | Complex task decomposition | Planner → Orchestrator → decompose() → Sub-Planner → Sub-Orchestrator → Implementers |
+| `concurrent_agents.toml` | Multiple concurrent agents | Planner → Orchestrator → 3 Implementers (parallel) |
 | `error_recovery.toml` | Implementation failure and retry | Planner → Orchestrator → Fail → Retry → Success |
 | `planner_failure.toml` | Planner fails to create plan | Planner (complete with failure) |
 
@@ -52,6 +53,16 @@ Tests hierarchical task decomposition:
 
 **Use for**: Testing decomposition logic and nested orchestration.
 
+### `concurrent_agents.toml`
+Tests concurrent execution of multiple agents:
+1. Planner creates a 3-task plan with independent tasks
+2. Orchestrator spawns 3 agents concurrently
+3. All implementers run in parallel
+4. Results are aggregated
+5. Orchestrator completes successfully
+
+**Use for**: Verifying concurrent agent spawning and execution.
+
 ### `error_recovery.toml`
 Tests failure handling and retry:
 1. Planner creates plan
@@ -89,12 +100,11 @@ cargo test test_simple_implement_flow -- --nocapture
 
 ## Writing a New Scenario
 
-See [MOCK_DATA_SYSTEM_ARCHITECTURE.md](../../docs/MOCK_DATA_SYSTEM_ARCHITECTURE.md) for complete documentation on:
-- Scenario file structure
-- Session update types
-- Injecting MCP tool calls
-- Mock tool responses
-- Common pitfalls
+The scenario system supports the following features:
+- **Session updates**: `agent_message_chunk`, `agent_turn_finished`
+- **Injected MCP tool calls**: `complete`, `create_task`, `set_goal`
+- **Mock tool responses**: Define responses for `implement()` and `decompose()` calls
+- **Task patterns**: Regex matching for task-based responses
 
 ### Quick Start Template
 

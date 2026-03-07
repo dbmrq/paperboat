@@ -141,6 +141,16 @@ impl TaskListState {
             None => 0,
         });
     }
+
+    /// Selects a task by index with bounds checking.
+    ///
+    /// Only sets the selected index if it is within bounds.
+    /// Used by mouse click handler to select tasks.
+    pub fn select_index(&mut self, index: usize) {
+        if index < self.task_order.len() {
+            self.selected_index = Some(index);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -265,5 +275,85 @@ mod tests {
         // Try to change state of a task that doesn't exist - should not panic
         list.handle_task_state_changed("nonexistent", "in_progress");
         assert_eq!(list.len(), 0);
+    }
+
+    #[test]
+    fn test_select_index_within_bounds() {
+        let mut list = TaskListState::new();
+
+        list.handle_task_created(
+            "t1".to_string(),
+            "T1".to_string(),
+            "D".to_string(),
+            vec![],
+            0,
+        );
+        list.handle_task_created(
+            "t2".to_string(),
+            "T2".to_string(),
+            "D".to_string(),
+            vec![],
+            0,
+        );
+        list.handle_task_created(
+            "t3".to_string(),
+            "T3".to_string(),
+            "D".to_string(),
+            vec![],
+            0,
+        );
+
+        // Select first task
+        list.select_index(0);
+        assert_eq!(list.selected_index, Some(0));
+
+        // Select middle task
+        list.select_index(1);
+        assert_eq!(list.selected_index, Some(1));
+
+        // Select last task
+        list.select_index(2);
+        assert_eq!(list.selected_index, Some(2));
+    }
+
+    #[test]
+    fn test_select_index_out_of_bounds_ignored() {
+        let mut list = TaskListState::new();
+
+        list.handle_task_created(
+            "t1".to_string(),
+            "T1".to_string(),
+            "D".to_string(),
+            vec![],
+            0,
+        );
+        list.handle_task_created(
+            "t2".to_string(),
+            "T2".to_string(),
+            "D".to_string(),
+            vec![],
+            0,
+        );
+
+        // Set a valid selection first
+        list.select_index(0);
+        assert_eq!(list.selected_index, Some(0));
+
+        // Try to select out of bounds - should be ignored
+        list.select_index(5);
+        assert_eq!(list.selected_index, Some(0)); // Still at 0
+
+        // Try to select exactly at len - should be ignored
+        list.select_index(2);
+        assert_eq!(list.selected_index, Some(0)); // Still at 0
+    }
+
+    #[test]
+    fn test_select_index_on_empty_list() {
+        let mut list = TaskListState::new();
+
+        // Try to select on empty list - should be ignored
+        list.select_index(0);
+        assert!(list.selected_index.is_none());
     }
 }

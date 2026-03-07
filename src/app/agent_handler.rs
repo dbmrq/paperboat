@@ -47,24 +47,20 @@ pub async fn update_task_completion(
     message: Option<&str>,
 ) {
     let mut tm = task_manager.write().await;
-    if success {
-        tm.update_status(
-            &task_id.to_string(),
-            &TaskStatus::Complete {
-                success: true,
-                summary: message.unwrap_or("Task completed").to_string(),
-            },
-        );
+    let id = task_id.to_string();
+    let status = if success {
         tracing::info!("📋 Task {} marked as Complete", task_id);
+        TaskStatus::Complete {
+            success: true,
+            summary: message.unwrap_or("Task completed").to_string(),
+        }
     } else {
-        tm.update_status(
-            &task_id.to_string(),
-            &TaskStatus::Failed {
-                error: message.unwrap_or("Task failed").to_string(),
-            },
-        );
         tracing::info!("📋 Task {} marked as Failed", task_id);
-    }
+        TaskStatus::Failed {
+            error: message.unwrap_or("Task failed").to_string(),
+        }
+    };
+    tm.update_status(&id, &status);
 }
 
 /// Run the agent handler task, processing tool calls until completion.
@@ -184,17 +180,20 @@ pub async fn run_agent_handler(
                                             let clean_title = strip_mcp_prefix(title);
                                             let _ = writer.write_tool_call(clean_title).await;
                                             tracing::info!("🔧 [{}] tool call: {}", agent_name, clean_title);
+
+                                            // Record tool call metric
+                                            crate::metrics::record_tool_call(clean_title);
                                         }
                                     }
                                     "tool_result" => {
                                         // Log tool errors (successes are not logged to keep logs clean)
-                                        if let Some(is_error) = update.get("isError").and_then(|v| v.as_bool()) {
+                                        if let Some(is_error) = update.get("isError").and_then(serde_json::Value::as_bool) {
                                             if is_error {
                                                 let tool_name = update.get("toolName")
-                                                    .and_then(|t| t.as_str())
+                                                    .and_then(serde_json::Value::as_str)
                                                     .unwrap_or("unknown");
                                                 let content = update.get("content")
-                                                    .and_then(|c| c.as_str())
+                                                    .and_then(serde_json::Value::as_str)
                                                     .unwrap_or("");
                                                 let _ = writer.write_tool_result(tool_name, true, content).await;
                                             }

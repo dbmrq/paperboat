@@ -53,7 +53,10 @@ impl App {
                 neighbor_lines.push("## Previous Tasks".to_string());
                 for agent in agents.iter().take(index).skip(prev_start) {
                     // Use get_by_id_or_name for flexible lookup
-                    let task = agent.task_id.as_ref().and_then(|id| tm.get_by_id_or_name(id));
+                    let task = agent
+                        .task_id
+                        .as_ref()
+                        .and_then(|id| tm.get_by_id_or_name(id));
                     neighbor_lines.push(format!(
                         "- {}",
                         truncate_for_log(&format_task_label(agent, task), 100)
@@ -67,7 +70,10 @@ impl App {
                 neighbor_lines.push("## Next Tasks".to_string());
                 for agent in agents.iter().take(next_end).skip(index + 1) {
                     // Use get_by_id_or_name for flexible lookup
-                    let task = agent.task_id.as_ref().and_then(|id| tm.get_by_id_or_name(id));
+                    let task = agent
+                        .task_id
+                        .as_ref()
+                        .and_then(|id| tm.get_by_id_or_name(id));
                     neighbor_lines.push(format!(
                         "- {}",
                         truncate_for_log(&format_task_label(agent, task), 100)
@@ -83,4 +89,3 @@ impl App {
         sections.join("\n\n")
     }
 }
-

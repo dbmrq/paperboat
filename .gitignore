@@ -16,9 +16,8 @@
 *.swo
 .DS_Store
 
-# Logs (keep directory structure via .gitkeep)
-/logs/*
-!/logs/.gitkeep
+# Logs (stored in .paperboat/logs/)
+.paperboat/logs/
 *.log
 
 # Environment files (may contain secrets)
@@ -51,3 +50,12 @@ tarpaulin-report.html
 
 # Test output
 test-output/
+
+# Benchmark outputs
+target/criterion/
+
+# cargo-deny cache
+.cargo-deny/
+
+# Documentation output (generated docs)
+target/doc/

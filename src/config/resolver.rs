@@ -38,7 +38,7 @@ use crate::models::AvailableModel;
 ///
 /// # Returns
 ///
-/// A tuple of (family, Option<version>) where:
+/// A tuple of `(family, Option<version>)` where:
 /// - `family` is the alphabetic prefix (e.g., "sonnet", "gpt", "opus")
 /// - `version` is `Some(f32)` if a version number is present, `None` otherwise
 ///

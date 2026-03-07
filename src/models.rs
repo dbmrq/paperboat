@@ -13,6 +13,10 @@ use tokio::process::Command;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelId {
+    /// Auto mode: allows the orchestrator to choose the model based on task complexity.
+    /// When set, the system will dynamically select an appropriate model for each task.
+    #[serde(rename = "auto")]
+    Auto,
     #[serde(rename = "haiku4.5")]
     Haiku4_5,
     #[serde(rename = "opus4.5")]
@@ -32,6 +36,7 @@ impl ModelId {
     /// Returns the CLI id string for this model
     pub const fn as_str(&self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::Haiku4_5 => "haiku4.5",
             Self::Opus4_5 => "opus4.5",
             Self::Sonnet4 => "sonnet4",
@@ -41,10 +46,11 @@ impl ModelId {
         }
     }
 
-    /// Returns all known model IDs
+    /// Returns all known model IDs (including Auto)
     #[allow(dead_code)]
     pub const fn all() -> &'static [Self] {
         &[
+            Self::Auto,
             Self::Haiku4_5,
             Self::Opus4_5,
             Self::Sonnet4,
@@ -53,6 +59,42 @@ impl ModelId {
             Self::Gpt5_1,
         ]
     }
+
+    /// Returns `true` if this is the `Auto` variant
+    pub const fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+
+    /// Resolves the "auto" model to a concrete model based on complexity.
+    ///
+    /// If this model is not "auto", returns itself unchanged.
+    /// If this model is "auto", maps the complexity to an appropriate model:
+    /// - Simple → Haiku 4.5 (fast, efficient)
+    /// - Medium → Sonnet 4.5 (balanced)
+    /// - Complex → Opus 4.5 (most capable)
+    ///
+    /// If complexity is None and model is Auto, defaults to Sonnet 4.5.
+    #[allow(clippy::missing_const_for_fn)] // Uses imported type in match, not const-compatible
+    pub fn resolve_auto(&self, complexity: Option<crate::mcp_server::ModelComplexity>) -> Self {
+        use crate::mcp_server::ModelComplexity;
+
+        if !self.is_auto() {
+            return *self;
+        }
+
+        // Each case intentionally mapped explicitly for clarity:
+        // - Simple tasks get fast/cheap model (Haiku)
+        // - Medium tasks get balanced model (Sonnet)
+        // - Complex tasks get most capable model (Opus)
+        // - Default (None) uses Sonnet as a safe middle ground
+        #[allow(clippy::match_same_arms)]
+        match complexity {
+            Some(ModelComplexity::Simple) => Self::Haiku4_5,
+            Some(ModelComplexity::Medium) => Self::Sonnet4_5,
+            Some(ModelComplexity::Complex) => Self::Opus4_5,
+            None => Self::Sonnet4_5,
+        }
+    }
 }
 
 impl FromStr for ModelId {
@@ -60,6 +102,7 @@ impl FromStr for ModelId {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
+            "auto" => Ok(Self::Auto),
             "haiku4.5" => Ok(Self::Haiku4_5),
             "opus4.5" => Ok(Self::Opus4_5),
             "sonnet4" => Ok(Self::Sonnet4),
@@ -160,29 +203,32 @@ impl ModelConfig {
 
     /// Applies debug build model override (no-op in release builds).
     #[cfg(not(debug_assertions))]
+    #[allow(clippy::missing_const_for_fn)] // Paired with debug version which cannot be const
     pub fn apply_debug_override(&mut self) {
         // Release build: respect user configuration
     }
 
-    /// Validates that all selected models are in the available list
+    /// Validates that all selected models are in the available list.
+    /// The `Auto` variant is always valid (it will be resolved at runtime).
     pub fn validate(&self) -> Result<()> {
         let available_ids: Vec<ModelId> = self.available_models.iter().map(|m| m.id).collect();
 
-        if !available_ids.contains(&self.orchestrator_model) {
+        // Auto is always valid - it will be resolved at runtime
+        if !self.orchestrator_model.is_auto() && !available_ids.contains(&self.orchestrator_model) {
             return Err(anyhow!(
                 "Orchestrator model '{}' is not available",
                 self.orchestrator_model
             ));
         }
 
-        if !available_ids.contains(&self.planner_model) {
+        if !self.planner_model.is_auto() && !available_ids.contains(&self.planner_model) {
             return Err(anyhow!(
                 "Planner model '{}' is not available",
                 self.planner_model
             ));
         }
 
-        if !available_ids.contains(&self.implementer_model) {
+        if !self.implementer_model.is_auto() && !available_ids.contains(&self.implementer_model) {
             return Err(anyhow!(
                 "Implementer model '{}' is not available",
                 self.implementer_model
@@ -276,6 +322,7 @@ mod tests {
 
     #[test]
     fn test_model_id_as_str() {
+        assert_eq!(ModelId::Auto.as_str(), "auto");
         assert_eq!(ModelId::Haiku4_5.as_str(), "haiku4.5");
         assert_eq!(ModelId::Opus4_5.as_str(), "opus4.5");
         assert_eq!(ModelId::Sonnet4.as_str(), "sonnet4");
@@ -286,6 +333,7 @@ mod tests {
 
     #[test]
     fn test_model_id_from_str() {
+        assert_eq!(ModelId::from_str("auto").unwrap(), ModelId::Auto);
         assert_eq!(ModelId::from_str("haiku4.5").unwrap(), ModelId::Haiku4_5);
         assert_eq!(ModelId::from_str("opus4.5").unwrap(), ModelId::Opus4_5);
         assert_eq!(ModelId::from_str("sonnet4").unwrap(), ModelId::Sonnet4);
@@ -333,13 +381,81 @@ mod tests {
     #[test]
     fn test_model_id_all() {
         let all = ModelId::all();
-        assert_eq!(all.len(), 6);
+        assert_eq!(all.len(), 7);
+        assert!(all.contains(&ModelId::Auto));
         assert!(all.contains(&ModelId::Haiku4_5));
         assert!(all.contains(&ModelId::Opus4_5));
         assert!(all.contains(&ModelId::Sonnet4));
         assert!(all.contains(&ModelId::Sonnet4_5));
         assert!(all.contains(&ModelId::Gpt5));
         assert!(all.contains(&ModelId::Gpt5_1));
+    }
+
+    #[test]
+    fn test_model_id_is_auto() {
+        assert!(ModelId::Auto.is_auto());
+        assert!(!ModelId::Haiku4_5.is_auto());
+        assert!(!ModelId::Opus4_5.is_auto());
+        assert!(!ModelId::Sonnet4.is_auto());
+        assert!(!ModelId::Sonnet4_5.is_auto());
+        assert!(!ModelId::Gpt5.is_auto());
+        assert!(!ModelId::Gpt5_1.is_auto());
+    }
+
+    #[test]
+    fn test_model_id_auto_serde() {
+        let json = serde_json::to_string(&ModelId::Auto).unwrap();
+        assert_eq!(json, "\"auto\"");
+
+        let parsed: ModelId = serde_json::from_str("\"auto\"").unwrap();
+        assert_eq!(parsed, ModelId::Auto);
+    }
+
+    #[test]
+    fn test_model_id_resolve_auto_simple() {
+        use crate::mcp_server::ModelComplexity;
+        let model = ModelId::Auto;
+        let resolved = model.resolve_auto(Some(ModelComplexity::Simple));
+        assert_eq!(resolved, ModelId::Haiku4_5);
+    }
+
+    #[test]
+    fn test_model_id_resolve_auto_medium() {
+        use crate::mcp_server::ModelComplexity;
+        let model = ModelId::Auto;
+        let resolved = model.resolve_auto(Some(ModelComplexity::Medium));
+        assert_eq!(resolved, ModelId::Sonnet4_5);
+    }
+
+    #[test]
+    fn test_model_id_resolve_auto_complex() {
+        use crate::mcp_server::ModelComplexity;
+        let model = ModelId::Auto;
+        let resolved = model.resolve_auto(Some(ModelComplexity::Complex));
+        assert_eq!(resolved, ModelId::Opus4_5);
+    }
+
+    #[test]
+    fn test_model_id_resolve_auto_none_defaults_to_medium() {
+        let model = ModelId::Auto;
+        let resolved = model.resolve_auto(None);
+        assert_eq!(resolved, ModelId::Sonnet4_5);
+    }
+
+    #[test]
+    fn test_model_id_resolve_auto_non_auto_unchanged() {
+        use crate::mcp_server::ModelComplexity;
+
+        // Non-auto models should be unchanged regardless of complexity
+        assert_eq!(
+            ModelId::Haiku4_5.resolve_auto(Some(ModelComplexity::Complex)),
+            ModelId::Haiku4_5
+        );
+        assert_eq!(
+            ModelId::Opus4_5.resolve_auto(Some(ModelComplexity::Simple)),
+            ModelId::Opus4_5
+        );
+        assert_eq!(ModelId::Sonnet4_5.resolve_auto(None), ModelId::Sonnet4_5);
     }
 
     // ========================================================================
@@ -434,6 +550,24 @@ mod tests {
         assert!(err.to_string().contains("Planner model"));
     }
 
+    #[test]
+    fn test_model_config_validate_auto_always_valid() {
+        // Auto should be valid even if not in available_models list
+        let models = vec![AvailableModel {
+            id: ModelId::Sonnet4_5,
+            name: "Sonnet 4.5".to_string(),
+            description: "Great for everyday tasks".to_string(),
+        }];
+
+        let mut config = ModelConfig::new(models);
+        config.orchestrator_model = ModelId::Auto;
+        config.planner_model = ModelId::Auto;
+        config.implementer_model = ModelId::Auto;
+
+        // Should pass validation because Auto is always valid
+        assert!(config.validate().is_ok());
+    }
+
     // ========================================================================
     // parse_model_list Tests
     // ========================================================================
@@ -510,7 +644,10 @@ mod tests {
     // ========================================================================
 
     // Use a mutex to serialize tests that modify PAPERBOAT_MODEL env var
+    // Only needed for debug-mode tests
+    #[cfg(debug_assertions)]
     use std::sync::Mutex;
+    #[cfg(debug_assertions)]
     static ENV_VAR_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]

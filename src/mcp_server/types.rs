@@ -3,6 +3,43 @@
 //! This module contains shared types used by the MCP server for communication
 //! between the orchestrator agent and the main application.
 
+/// Model complexity hint for auto mode.
+///
+/// When the model is set to "auto", this tells the system what level of capability
+/// is needed for the task. The system will select an appropriate model based on
+/// this complexity level.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelComplexity {
+    /// Simple tasks: straightforward edits, small changes, well-defined work.
+    /// Maps to faster, more cost-effective models (e.g., Haiku).
+    Simple,
+    /// Medium complexity: typical development tasks, moderate reasoning required.
+    /// Maps to balanced models (e.g., Sonnet).
+    #[default]
+    Medium,
+    /// Complex tasks: architectural decisions, complex refactoring, nuanced judgment.
+    /// Maps to the most capable models (e.g., Opus).
+    Complex,
+}
+
+impl ModelComplexity {
+    /// Returns the string representation of this complexity level.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Simple => "simple",
+            Self::Medium => "medium",
+            Self::Complex => "complex",
+        }
+    }
+}
+
+impl std::fmt::Display for ModelComplexity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// Specification for an agent to be spawned.
 ///
 /// Used by the orchestrator to describe worker agents when making
@@ -36,6 +73,11 @@ pub struct AgentSpec {
     /// Explicit tool whitelist (required for role="custom")
     #[serde(default)]
     pub tools: Option<Vec<String>>,
+    /// Model complexity hint for auto mode.
+    /// Required when the implementer model is set to "auto".
+    /// Tells the system what capability level is needed for this task.
+    #[serde(default)]
+    pub model_complexity: Option<ModelComplexity>,
 }
 
 /// A fully resolved agent specification with all required fields populated.
@@ -53,6 +95,9 @@ pub struct ResolvedAgentSpec {
     pub prompt: Option<String>,
     /// Explicit tool whitelist (for role="custom")
     pub tools: Option<Vec<String>>,
+    /// Model complexity hint for auto mode.
+    /// Used to select an appropriate model when `implementer_model` is set to "auto".
+    pub model_complexity: Option<ModelComplexity>,
 }
 
 impl AgentSpec {
@@ -87,6 +132,7 @@ impl AgentSpec {
             task_id: self.task_id.clone(),
             prompt: self.prompt.clone(),
             tools: self.tools.clone(),
+            model_complexity: self.model_complexity,
         })
     }
 }
@@ -94,7 +140,7 @@ impl AgentSpec {
 /// Wait mode for spawned agents.
 ///
 /// Controls how the orchestrator waits for spawned agents to complete.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum WaitMode {
     /// Wait for all agents to complete before continuing
     #[default]
@@ -116,6 +162,31 @@ pub struct ToolRequest {
     pub tool_call: ToolCall,
 }
 
+/// Task state information for context-aware response building.
+///
+/// This struct captures the current task state snapshot that response builders
+/// use to generate dynamic "What's Next" guidance. It's created from `TaskManager`
+/// helper methods and passed through the response chain.
+///
+/// # Example
+///
+/// ```ignore
+/// let state = TaskStateInfo {
+///     pending_count: 3,
+///     parallel_tasks: vec!["task004".into(), "task005".into()],
+///     blocked_tasks: vec![("task006".into(), vec!["task005".into()])],
+/// };
+/// ```
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct TaskStateInfo {
+    /// Number of tasks in `NotStarted` status.
+    pub pending_count: usize,
+    /// Task IDs that can be executed now (no unmet dependencies).
+    pub parallel_tasks: Vec<String>,
+    /// Blocked tasks as `(task_id, blocking_task_ids)` pairs.
+    pub blocked_tasks: Vec<(String, Vec<String>)>,
+}
+
 /// Response sent from the app back to the MCP server via Unix socket.
 ///
 /// Contains the result of executing a tool call, correlated by request ID.
@@ -131,6 +202,11 @@ pub struct ToolResponse {
     pub files_modified: Option<Vec<String>>,
     /// Optional error message if the operation failed
     pub error: Option<String>,
+    /// Optional task state for context-aware responses.
+    /// Contains information about pending, parallel-ready, and blocked tasks.
+    /// Used by response builders to provide actionable "What's Next" guidance.
+    #[serde(default)]
+    pub task_state: Option<TaskStateInfo>,
 }
 
 impl ToolResponse {
@@ -142,6 +218,7 @@ impl ToolResponse {
             summary,
             files_modified: None,
             error: None,
+            task_state: None,
         }
     }
 
@@ -158,6 +235,7 @@ impl ToolResponse {
             summary,
             files_modified: Some(files),
             error: None,
+            task_state: None,
         }
     }
 
@@ -169,7 +247,18 @@ impl ToolResponse {
             summary: String::new(),
             files_modified: None,
             error: Some(error),
+            task_state: None,
         }
+    }
+
+    /// Builder method to add task state to an existing response.
+    ///
+    /// Use this to attach task state information for context-aware responses.
+    /// The task state is typically created from `TaskManager` helper methods.
+    #[must_use]
+    pub fn with_task_state(mut self, task_state: TaskStateInfo) -> Self {
+        self.task_state = Some(task_state);
+        self
     }
 }
 
@@ -196,10 +285,12 @@ pub struct SuggestedTask {
 ///
 /// # Variants
 ///
-/// - `Decompose` - Request to break down a task into smaller subtasks
-/// - `SpawnAgents` - Request to spawn one or more worker agents
-/// - `Complete` - Signal that the orchestrator has finished processing
-/// - `CreateTask` - Create a task (planner agent only)
+/// - `Decompose` - Break down a task into smaller subtasks (orchestrator only)
+/// - `SpawnAgents` - Spawn one or more worker agents (orchestrator only)
+/// - `Complete` - Signal that the agent has finished processing
+/// - `CreateTask` - Create a task in the plan (planner and orchestrator)
+/// - `SetGoal` - Set the goal summary (planner only)
+/// - `SkipTasks` - Mark tasks as skipped/not needed (orchestrator only)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ToolCall {
     /// Request to decompose a task into subtasks.
@@ -254,6 +345,22 @@ pub enum ToolCall {
         #[serde(default)]
         acceptance_criteria: Option<String>,
     },
+    /// Skip one or more tasks (used by orchestrator agents).
+    /// Marks tasks as not needed rather than leaving them pending.
+    SkipTasks {
+        /// IDs of tasks to skip (e.g., `["task001", "task002"]`).
+        task_ids: Vec<String>,
+        /// Optional explanation for why tasks are being skipped.
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    /// List tasks with their current status (used by orchestrator agents).
+    /// Useful for checking progress and finding tasks that need attention.
+    ListTasks {
+        /// Optional status filter (e.g., "pending", "in_progress", "all").
+        #[serde(default)]
+        status_filter: Option<String>,
+    },
 }
 
 impl ToolCall {
@@ -265,6 +372,121 @@ impl ToolCall {
             Self::Complete { .. } => "complete",
             Self::CreateTask { .. } => "create_task",
             Self::SetGoal { .. } => "set_goal",
+            Self::SkipTasks { .. } => "skip_tasks",
+            Self::ListTasks { .. } => "list_tasks",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================================================
+    // ModelComplexity Tests
+    // ========================================================================
+
+    #[test]
+    fn test_model_complexity_as_str() {
+        assert_eq!(ModelComplexity::Simple.as_str(), "simple");
+        assert_eq!(ModelComplexity::Medium.as_str(), "medium");
+        assert_eq!(ModelComplexity::Complex.as_str(), "complex");
+    }
+
+    #[test]
+    fn test_model_complexity_display() {
+        assert_eq!(format!("{}", ModelComplexity::Simple), "simple");
+        assert_eq!(format!("{}", ModelComplexity::Medium), "medium");
+        assert_eq!(format!("{}", ModelComplexity::Complex), "complex");
+    }
+
+    #[test]
+    fn test_model_complexity_default() {
+        assert_eq!(ModelComplexity::default(), ModelComplexity::Medium);
+    }
+
+    #[test]
+    fn test_model_complexity_serde_roundtrip() {
+        let complexities = [
+            ModelComplexity::Simple,
+            ModelComplexity::Medium,
+            ModelComplexity::Complex,
+        ];
+        for complexity in complexities {
+            let json = serde_json::to_string(&complexity).unwrap();
+            let parsed: ModelComplexity = serde_json::from_str(&json).unwrap();
+            assert_eq!(complexity, parsed);
+        }
+    }
+
+    #[test]
+    fn test_model_complexity_serde_format() {
+        assert_eq!(
+            serde_json::to_string(&ModelComplexity::Simple).unwrap(),
+            "\"simple\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ModelComplexity::Medium).unwrap(),
+            "\"medium\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ModelComplexity::Complex).unwrap(),
+            "\"complex\""
+        );
+    }
+
+    // ========================================================================
+    // AgentSpec with ModelComplexity Tests
+    // ========================================================================
+
+    #[test]
+    fn test_agent_spec_with_model_complexity() {
+        let spec = AgentSpec {
+            role: Some("implementer".to_string()),
+            task: Some("Test task".to_string()),
+            task_id: None,
+            prompt: None,
+            tools: None,
+            model_complexity: Some(ModelComplexity::Complex),
+        };
+
+        let resolved = spec.resolve(|_| None).unwrap();
+        assert_eq!(resolved.model_complexity, Some(ModelComplexity::Complex));
+    }
+
+    #[test]
+    fn test_agent_spec_without_model_complexity() {
+        let spec = AgentSpec {
+            role: Some("implementer".to_string()),
+            task: Some("Test task".to_string()),
+            task_id: None,
+            prompt: None,
+            tools: None,
+            model_complexity: None,
+        };
+
+        let resolved = spec.resolve(|_| None).unwrap();
+        assert_eq!(resolved.model_complexity, None);
+    }
+
+    #[test]
+    fn test_agent_spec_deserialize_with_complexity() {
+        let json = r#"{
+            "role": "implementer",
+            "task": "Test task",
+            "model_complexity": "simple"
+        }"#;
+        let spec: AgentSpec = serde_json::from_str(json).unwrap();
+        assert_eq!(spec.model_complexity, Some(ModelComplexity::Simple));
+    }
+
+    #[test]
+    fn test_agent_spec_deserialize_without_complexity() {
+        let json = r#"{
+            "role": "implementer",
+            "task": "Test task"
+        }"#;
+        let spec: AgentSpec = serde_json::from_str(json).unwrap();
+        assert_eq!(spec.model_complexity, None);
     }
 }

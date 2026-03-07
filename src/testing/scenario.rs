@@ -59,12 +59,25 @@ pub struct ScenarioMetadata {
 
 impl MockScenario {
     /// Load a scenario from a TOML file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The file cannot be read
+    /// - The file contains invalid TOML syntax
+    /// - The TOML does not conform to the expected scenario schema
     pub fn from_file(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
         Self::parse(&content)
     }
 
     /// Load a scenario from a TOML string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The string contains invalid TOML syntax
+    /// - The TOML does not conform to the expected scenario schema
     pub fn parse(toml_content: &str) -> Result<Self> {
         let scenario: Self = toml::from_str(toml_content)?;
         Ok(scenario)

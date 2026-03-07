@@ -106,6 +106,11 @@ impl App {
 
     /// Drain remaining messages for an orchestrator session after `complete()` is called.
     /// Similar to `drain_session_messages` but uses `acp_orchestrator` channel.
+    ///
+    /// This is critical for nested orchestrator scenarios: we must stop draining
+    /// when we see a message for a DIFFERENT session, as that indicates our
+    /// session's updates are exhausted and we'd be consuming another session's
+    /// updates (e.g., the parent orchestrator's updates).
     pub(crate) async fn drain_orchestrator_messages(
         &mut self,
         session_id: &str,
@@ -115,42 +120,61 @@ impl App {
             match self.acp_orchestrator.recv().await {
                 Ok(msg) => {
                     let method = msg.get("method").and_then(|v| v.as_str());
-                    if method == Some("session/update") {
-                        if let Some(params) = msg.get("params") {
-                            let msg_session_id = params.get("sessionId").and_then(|v| v.as_str());
+                    if method != Some("session/update") {
+                        // Non-update message, ignore and continue
+                        tracing::trace!("Drain ignoring non-update message: {:?}", method);
+                        continue;
+                    }
 
-                            // Only process messages for this session
-                            if msg_session_id == Some(session_id) {
-                                if let Some(update) = params.get("update") {
-                                    let session_update =
-                                        update.get("sessionUpdate").and_then(|v| v.as_str());
+                    let Some(params) = msg.get("params") else {
+                        tracing::trace!("Drain: session/update missing params, continuing");
+                        continue;
+                    };
 
-                                    if let Some(update_type) = session_update {
-                                        match update_type {
-                                            "session_finished" | "agent_turn_finished" => {
-                                                tracing::debug!(
-                                                    "✅ Orchestrator session {} properly finished",
-                                                    session_id
-                                                );
-                                                return;
-                                            }
-                                            "agent_message_chunk" | "agent_thought_chunk" => {
-                                                // Continue logging any remaining output
-                                                if let Some(text) = update
-                                                    .get("content")
-                                                    .and_then(|c| c.get("text"))
-                                                    .and_then(|t| t.as_str())
-                                                {
-                                                    let _ = writer.write_message_chunk(text).await;
-                                                }
-                                            }
-                                            _ => {
-                                                // Silently ignore other update types during drain
-                                            }
-                                        }
-                                    }
-                                }
+                    let msg_session_id = params.get("sessionId").and_then(|v| v.as_str());
+
+                    // Check if this message is for our session
+                    if msg_session_id != Some(session_id) {
+                        // Message for a different session - our session is done.
+                        // This happens in nested orchestrator scenarios where after
+                        // the child orchestrator finishes, recv() returns the parent's
+                        // pending updates. We must NOT consume those.
+                        tracing::debug!(
+                            "Drain received message for different session {} (expected {}), stopping",
+                            msg_session_id.unwrap_or("unknown"),
+                            session_id
+                        );
+                        return;
+                    }
+
+                    // Message is for our session - process it
+                    let Some(update) = params.get("update") else {
+                        tracing::trace!("Drain: update field missing, continuing");
+                        continue;
+                    };
+
+                    let session_update = update.get("sessionUpdate").and_then(|v| v.as_str());
+
+                    match session_update {
+                        Some("session_finished" | "agent_turn_finished") => {
+                            tracing::debug!(
+                                "✅ Orchestrator session {} properly finished",
+                                session_id
+                            );
+                            return;
+                        }
+                        Some("agent_message_chunk" | "agent_thought_chunk") => {
+                            // Continue logging any remaining output
+                            if let Some(text) = update
+                                .get("content")
+                                .and_then(|c| c.get("text"))
+                                .and_then(|t| t.as_str())
+                            {
+                                let _ = writer.write_message_chunk(text).await;
                             }
+                        }
+                        _ => {
+                            // Silently ignore other update types during drain
                         }
                     }
                 }

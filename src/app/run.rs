@@ -10,6 +10,7 @@ impl App {
     ///
     /// This first spawns a Planner to create a high-level plan, then spawns
     /// an Orchestrator to execute the plan by delegating to implementers.
+    #[tracing::instrument(skip(self))]
     pub async fn run(&mut self, goal: &str) -> Result<TaskResult> {
         tracing::info!("Starting with goal: {}", goal);
 
@@ -51,6 +52,7 @@ impl App {
     }
 
     /// Run the planning phase: spawn a planner and collect its plan.
+    #[tracing::instrument(skip(self), fields(phase = "planning"))]
     async fn run_planning_phase(&mut self, goal: &str) -> Result<String> {
         // Create planner writer at root scope
         let mut planner_writer = self
@@ -78,7 +80,10 @@ impl App {
                     tracing::warn!("Failed to write spawn error to planner log: {}", write_err);
                 }
                 if let Err(finalize_err) = planner_writer.finalize(false).await {
-                    tracing::warn!("Failed to finalize planner log after spawn error: {}", finalize_err);
+                    tracing::warn!(
+                        "Failed to finalize planner log after spawn error: {}",
+                        finalize_err
+                    );
                 }
                 return Err(e);
             }
@@ -94,7 +99,10 @@ impl App {
                 // Finalize planner log with failure status before returning
                 tracing::error!("❌ Planner session failed: {}", e);
                 if let Err(finalize_err) = planner_writer.finalize(false).await {
-                    tracing::warn!("Failed to finalize planner log after session error: {}", finalize_err);
+                    tracing::warn!(
+                        "Failed to finalize planner log after session error: {}",
+                        finalize_err
+                    );
                 }
                 return Err(anyhow::anyhow!("{e}"));
             }
@@ -132,6 +140,7 @@ impl App {
     }
 
     /// Run the execution phase: spawn an orchestrator to execute the plan.
+    #[tracing::instrument(skip(self, plan_to_execute), fields(phase = "execution"))]
     async fn run_execution_phase(&mut self, plan_to_execute: &str) -> Result<TaskResult> {
         // Create orchestrator writer
         let mut orchestrator_writer = self
@@ -153,6 +162,32 @@ impl App {
             tracing::warn!("Failed to finalize orchestrator log: {}", e);
         }
 
+        // Save the final task list to the logs folder
+        self.save_task_list().await;
+
         result
+    }
+
+    /// Save the task list to a tasks.json file in the logs folder.
+    async fn save_task_list(&self) {
+        let task_list_path = self.current_scope.dir().join("tasks.json");
+        let task_manager = self.task_manager.read().await;
+
+        match task_manager.export_as_json() {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&task_list_path, &json) {
+                    tracing::warn!("Failed to write task list to {:?}: {}", task_list_path, e);
+                } else {
+                    tracing::info!(
+                        "📋 Saved task list ({} tasks) to {:?}",
+                        task_manager.all_tasks().len(),
+                        task_list_path
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to serialize task list: {}", e);
+            }
+        }
     }
 }

@@ -9,18 +9,32 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 /// Connect to Unix socket with retry logic
+///
+/// Uses exponential backoff with jitter to handle timing issues when the
+/// main app's socket listener might not be ready yet.
 pub async fn connect_with_retry(socket_path: &PathBuf) -> Result<UnixStream> {
-    let delays = [100, 500, 2000];
+    // Delays in ms: 50, 100, 200, 500, 1000, 2000 (total ~4s max wait)
+    let delays = [50, 100, 200, 500, 1000, 2000];
     let mut last_error = None;
+
+    // First, verify the socket file exists
+    if !socket_path.exists() {
+        eprintln!("⚠️  Socket file does not exist yet: {socket_path:?}");
+    }
 
     for (attempt, delay_ms) in delays.iter().enumerate() {
         match UnixStream::connect(socket_path).await {
-            Ok(stream) => return Ok(stream),
+            Ok(stream) => {
+                if attempt > 0 {
+                    let attempt_num = attempt + 1;
+                    eprintln!("✅ Socket connection succeeded on attempt {attempt_num}");
+                }
+                return Ok(stream);
+            }
             Err(e) => {
-                tracing::warn!(
-                    "Connection attempt {} failed: {}. Retrying...",
-                    attempt + 1,
-                    e
+                let attempt_num = attempt + 1;
+                eprintln!(
+                    "⚠️  Socket connection attempt {attempt_num} failed: {e}. Retrying in {delay_ms}ms..."
                 );
                 last_error = Some(e);
                 tokio::time::sleep(Duration::from_millis(*delay_ms)).await;
@@ -28,10 +42,16 @@ pub async fn connect_with_retry(socket_path: &PathBuf) -> Result<UnixStream> {
         }
     }
 
-    // Final attempt
-    UnixStream::connect(socket_path)
-        .await
-        .map_err(|e| last_error.unwrap_or(e).into())
+    // Final attempt with detailed error message
+    eprintln!("🔌 Final socket connection attempt to {socket_path:?}");
+    UnixStream::connect(socket_path).await.with_context(|| {
+        format!(
+            "Failed to connect to app socket at {:?} after {} retries. Last error: {:?}",
+            socket_path,
+            delays.len(),
+            last_error
+        )
+    })
 }
 
 /// Send a response to stdout, handling errors gracefully

@@ -17,10 +17,14 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
-/// Pending tool call that needs to be injected when `recv()` is called.
+/// A session update paired with its optional associated tool call.
+/// Tool calls are injected when the corresponding update is returned.
 #[derive(Debug)]
-struct PendingToolCall {
-    tool_call: MockMcpToolCall,
+struct QueuedUpdate {
+    /// The ACP notification to return from `recv()`.
+    notification: Value,
+    /// Optional tool call to inject when this update is returned.
+    tool_call: Option<MockMcpToolCall>,
 }
 
 /// Mock ACP client that returns scripted responses.
@@ -28,11 +32,14 @@ struct PendingToolCall {
 /// This client simulates ACP behavior using data from a `MockScenario`,
 /// allowing tests to run without spawning actual agent processes.
 pub struct MockAcpClient {
-    /// Queue of session updates to return from `recv()`.
-    update_queue: VecDeque<Value>,
+    /// Session-specific update queues, keyed by session ID.
+    /// This ensures updates for different sessions don't get interleaved,
+    /// which is critical for nested orchestrator scenarios (e.g., decompose).
+    session_queues: std::collections::HashMap<String, VecDeque<QueuedUpdate>>,
 
-    /// Queue of pending tool calls to inject.
-    pending_tool_calls: VecDeque<PendingToolCall>,
+    /// Stack of active session IDs. The top of the stack is the current session.
+    /// This tracks which session's updates should be returned by `recv()`.
+    active_sessions: Vec<String>,
 
     /// Counter for generating unique session IDs.
     session_counter: usize,
@@ -67,8 +74,8 @@ impl MockAcpClient {
     /// Create a new mock ACP client from a scenario.
     pub fn from_scenario(scenario: &MockScenario) -> Self {
         Self {
-            update_queue: VecDeque::new(),
-            pending_tool_calls: VecDeque::new(),
+            session_queues: std::collections::HashMap::new(),
+            active_sessions: Vec::new(),
             session_counter: 0,
             captured_prompts: Vec::new(),
             planner_sessions: scenario.planner_sessions.clone(),
@@ -115,7 +122,7 @@ impl MockAcpClient {
         self.planner_index >= self.planner_sessions.len()
             && self.orchestrator_index >= self.orchestrator_sessions.len()
             && self.implementer_index >= self.implementer_sessions.len()
-            && self.update_queue.is_empty()
+            && self.session_queues.values().all(VecDeque::is_empty)
     }
 
     /// Get the next session for the given agent type.
@@ -199,24 +206,28 @@ impl MockAcpClient {
     }
 
     /// Queue updates from a session for the given `session_id`.
+    /// Each update is paired with its optional associated tool call.
+    /// Updates are stored in a session-specific queue to prevent interleaving.
     fn queue_updates(&mut self, session_id: &str, updates: &[MockSessionUpdate]) {
+        let queue = self
+            .session_queues
+            .entry(session_id.to_string())
+            .or_default();
         for update in updates {
             let notification = mock_session_update_to_notification(session_id, update);
-            self.update_queue.push_back(notification);
-
-            // Also queue any MCP tool calls that should be injected
-            if let Some(ref tool_call) = update.inject_mcp_tool_call {
-                self.pending_tool_calls.push_back(PendingToolCall {
-                    tool_call: tool_call.clone(),
-                });
-            }
+            queue.push_back(QueuedUpdate {
+                notification,
+                tool_call: update.inject_mcp_tool_call.clone(),
+            });
         }
+        // Push this session to the active sessions stack
+        self.active_sessions.push(session_id.to_string());
     }
 
-    /// Inject a pending tool call through the tool channel.
+    /// Inject a tool call through the tool channel.
     /// This is fire-and-forget - we don't wait for the App's response.
     /// The tool interceptor has already provided the mock response.
-    async fn inject_tool_call(&mut self, pending: PendingToolCall) -> Result<()> {
+    async fn inject_tool_call(&mut self, mock_tool_call: &MockMcpToolCall) -> Result<()> {
         let tool_tx = self
             .tool_tx
             .as_ref()
@@ -227,7 +238,7 @@ impl MockAcpClient {
             .ok_or_else(|| anyhow!("No tool interceptor configured for MockAcpClient"))?;
 
         // Convert MockMcpToolCall to ToolCall
-        let tool_call = match &pending.tool_call {
+        let tool_call = match mock_tool_call {
             MockMcpToolCall::CreateTask {
                 name,
                 description,
@@ -237,11 +248,25 @@ impl MockAcpClient {
                 description: description.clone(),
                 dependencies: dependencies.clone(),
             },
-            MockMcpToolCall::Complete { success, message } => ToolCall::Complete {
+            MockMcpToolCall::Complete {
+                success,
+                message,
+                notes,
+                add_tasks,
+            } => ToolCall::Complete {
                 success: *success,
                 message: message.clone(),
-                notes: None,
-                add_tasks: None,
+                notes: notes.clone(),
+                add_tasks: add_tasks.as_ref().map(|tasks| {
+                    tasks
+                        .iter()
+                        .map(|t| crate::mcp_server::SuggestedTask {
+                            name: t.name.clone(),
+                            description: t.description.clone(),
+                            depends_on: t.depends_on.clone(),
+                        })
+                        .collect()
+                }),
             },
             MockMcpToolCall::SpawnAgents { task } => {
                 // Create a single-agent spawn for backward compatibility
@@ -252,6 +277,7 @@ impl MockAcpClient {
                         task_id: None,
                         prompt: None,
                         tools: None,
+                        model_complexity: None,
                     }],
                     wait: crate::mcp_server::WaitMode::All,
                 }
@@ -259,6 +285,10 @@ impl MockAcpClient {
             MockMcpToolCall::Decompose { task } => ToolCall::Decompose {
                 task_id: None,
                 task: Some(task.clone()),
+            },
+            MockMcpToolCall::SkipTasks { task_ids, reason } => ToolCall::SkipTasks {
+                task_ids: task_ids.clone(),
+                reason: reason.clone(),
             },
         };
 
@@ -399,22 +429,70 @@ impl AcpClientTrait for MockAcpClient {
     }
 
     async fn recv(&mut self) -> Result<Value> {
-        // First, check if there are pending tool calls to inject
-        // Tool calls should be injected before returning the corresponding ACP update
-        while let Some(pending) = self.pending_tool_calls.pop_front() {
-            // Inject the tool call - this sends it to the App's tool_rx
-            if let Err(e) = self.inject_tool_call(pending).await {
-                tracing::warn!("Failed to inject mock tool call: {}", e);
-                // Continue anyway - the test may still work
-            }
-        }
+        // Get the current active session (most recently started)
+        // We use the LAST session in the stack - this is the most recently started session
+        // which should be the one currently being processed
+        let Some(current_session) = self.active_sessions.last().cloned() else {
+            eprintln!("[MockAcpClient::recv] No active session, stack empty");
+            return Err(anyhow!("No active session"));
+        };
 
-        if let Some(notification) = self.update_queue.pop_front() {
-            Ok(notification)
+        eprintln!(
+            "[MockAcpClient::recv] session={}, stack={:?}",
+            current_session, self.active_sessions
+        );
+
+        // Get the next update from the current session's queue
+        let queue = self.session_queues.get_mut(&current_session);
+        let queued = queue.and_then(VecDeque::pop_front);
+
+        if let Some(queued) = queued {
+            // If this update has an associated tool call, inject it
+            // The tool call is injected AFTER returning the update notification,
+            // simulating the real behavior where the agent sends a message chunk
+            // like "[calling create_task]" followed by the actual tool call.
+            if let Some(ref tool_call) = queued.tool_call {
+                if let Err(e) = self.inject_tool_call(tool_call).await {
+                    tracing::warn!("Failed to inject mock tool call: {}", e);
+                    // Continue anyway - the test may still work
+                }
+            }
+
+            // Check if this session's queue is now empty AND it was the last update
+            // (agent_turn_finished or similar)
+            let queue_empty = self
+                .session_queues
+                .get(&current_session)
+                .map_or(true, VecDeque::is_empty);
+
+            // Extract session_update from notification to check if this is the end
+            // Path is: params.update.sessionUpdate
+            let session_update = queued
+                .notification
+                .get("params")
+                .and_then(|p| p.get("update"))
+                .and_then(|u| u.get("sessionUpdate"))
+                .and_then(|s| s.as_str())
+                .unwrap_or("");
+
+            if queue_empty
+                && (session_update == "agent_turn_finished" || session_update == "session_finished")
+            {
+                // This session is complete - remove it from active sessions
+                eprintln!(
+                    "[MockAcpClient::recv] Session {current_session} complete, removing from stack"
+                );
+                self.active_sessions.retain(|s| s != &current_session);
+            }
+
+            Ok(queued.notification)
         } else {
-            // No more updates - return a generic "done" signal
-            // In real usage, this would block until a message arrives
-            Err(anyhow!("No more mock updates available"))
+            // No more updates for this session - remove it from active
+            self.active_sessions.retain(|s| s != &current_session);
+            // Return an error to signal exhaustion of this session
+            Err(anyhow!(
+                "No more mock updates available for session {current_session}"
+            ))
         }
     }
 

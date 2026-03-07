@@ -33,13 +33,23 @@ pub async fn run_stdio_server(socket_path: PathBuf) -> Result<()> {
         std::process::id()
     );
 
+    // Log whether socket file exists at startup (for debugging connection issues)
+    if socket_path.exists() {
+        eprintln!("✅ Socket file exists at startup: {socket_path:?}");
+    } else {
+        eprintln!(
+            "⚠️  Socket file does NOT exist at startup: {socket_path:?}. \
+            Will retry connections when making tool calls."
+        );
+    }
+
     let stdin = tokio::io::stdin();
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
     let reader = BufReader::new(stdin);
     let mut lines = reader.lines();
     let socket_path = Arc::new(socket_path);
 
-    eprintln!("✅ MCP server started");
+    eprintln!("✅ MCP server started (waiting for JSON-RPC messages)");
 
     loop {
         // Read the next line, handling stdin errors gracefully
@@ -149,6 +159,7 @@ mod tests {
                 task_id: None,
                 prompt: None,
                 tools: None,
+                model_complexity: None,
             }],
             wait: super::super::types::WaitMode::All,
         };
@@ -214,6 +225,7 @@ mod tests {
                 task_id: None,
                 prompt: None,
                 tools: None,
+                model_complexity: None,
             }],
             wait: super::super::types::WaitMode::All,
         };
@@ -357,11 +369,11 @@ mod tests {
         let resp = response.unwrap();
         let tools = resp["result"]["tools"].as_array().unwrap();
 
-        // Orchestrator has 4 tools: decompose, spawn_agents, complete, create_task
+        // Orchestrator has 6 tools: decompose, spawn_agents, complete, create_task, skip_tasks, list_tasks
         assert_eq!(
             tools.len(),
-            4,
-            "Expected 4 orchestrator tools, got: {:?}",
+            6,
+            "Expected 6 orchestrator tools, got: {:?}",
             tools
                 .iter()
                 .map(|t| t["name"].as_str().unwrap_or("?"))
@@ -374,6 +386,8 @@ mod tests {
         assert!(tool_names.contains(&"spawn_agents"));
         assert!(tool_names.contains(&"complete"));
         assert!(tool_names.contains(&"create_task"));
+        assert!(tool_names.contains(&"skip_tasks"));
+        assert!(tool_names.contains(&"list_tasks"));
     }
 
     #[tokio::test]
@@ -392,9 +406,12 @@ mod tests {
         // Find decompose tool and verify schema
         let decompose = tools.iter().find(|t| t["name"] == "decompose").unwrap();
         assert_eq!(decompose["inputSchema"]["type"], "object");
-        // Either task_id or task can be provided (both optional, but at least one required at runtime)
-        assert!(decompose["inputSchema"]["properties"]["task"].is_object());
+        // task_id is required for proper tracking
         assert!(decompose["inputSchema"]["properties"]["task_id"].is_object());
+        assert!(decompose["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("task_id")));
 
         // Find complete tool and verify schema
         let complete = tools.iter().find(|t| t["name"] == "complete").unwrap();

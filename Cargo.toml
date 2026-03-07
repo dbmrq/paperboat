@@ -2,6 +2,7 @@
 name = "paperboat"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [workspace]
 
@@ -11,6 +12,8 @@ default = ["tui"]
 testing = ["dep:tempfile"]
 # Enable the TUI interface (enabled by default)
 tui = ["dep:ratatui", "dep:crossterm", "dep:tui-tree-widget", "dep:tui-logger"]
+# Enable metrics collection and Prometheus export
+metrics = ["dep:metrics", "dep:metrics-exporter-prometheus"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -19,7 +22,7 @@ serde_json = "1"
 anyhow = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2.4"
 shellexpand = "3.1.2"
 regex = "1.12.3"
@@ -27,10 +30,13 @@ chrono = "0.4.44"
 toml = "1.0.4"
 async-trait = "0.1.89"
 tempfile = { version = "3.26.0", optional = true }
-ratatui = { version = "0.30", optional = true }
+ratatui = { version = "0.30", optional = true, features = ["unstable-rendered-line-info"] }
 crossterm = { version = "0.28", optional = true }
 tui-tree-widget = { version = "0.24", optional = true }
 tui-logger = { version = "0.18", features = ["tracing-support"], optional = true }
+thiserror = "2.0.18"
+metrics = { version = "0.24", optional = true }
+metrics-exporter-prometheus = { version = "0.16", optional = true, default-features = false, features = ["http-listener"] }
 
 [dev-dependencies]
 serial_test = "3.4.0"
@@ -47,8 +53,8 @@ nursery = { level = "warn", priority = -1 }
 # Allow specific patterns with justification
 module_name_repetitions = "allow"  # Module names naturally repeat in types
 must_use_candidate = "allow"       # Too noisy for builder patterns
-missing_errors_doc = "allow"       # Will add later but not required for MVP
-missing_panics_doc = "allow"       # Will add later but not required for MVP
+missing_errors_doc = "warn"        # Enabled for documentation
+missing_panics_doc = "warn"        # Enabled for documentation
 future_not_send = "allow"          # App is single-threaded, futures don't need Send
 significant_drop_tightening = "allow"  # False positives in async code
 option_if_let_else = "allow"       # Often less readable than match

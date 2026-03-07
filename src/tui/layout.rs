@@ -108,8 +108,8 @@ pub fn calculate_layout(area: Rect) -> PanelLayout {
     let vertical_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Fill(70),                             // Top section (70% of remaining)
-            Constraint::Fill(30),                             // App logs (30% of remaining)
+            Constraint::Fill(70), // Top section (70% of remaining)
+            Constraint::Fill(30), // App logs (30% of remaining)
             Constraint::Length(min_sizes::STATUS_BAR_HEIGHT), // Status bar (1 line)
         ])
         .split(area);

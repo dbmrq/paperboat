@@ -15,12 +15,14 @@ use super::super::state::TuiState;
 /// - `[/]` - `InProgress`
 /// - `[✓]` - Complete (success)
 /// - `[✗]` - Failed
+/// - `[-]` - Skipped
 fn status_indicator(status: &str) -> &'static str {
     match status {
         "pending" => "[ ]",
         "in_progress" => "[/]",
         "completed" => "[✓]",
         "failed" => "[✗]",
+        "skipped" => "[-]",
         _ => "[?]",
     }
 }
@@ -32,6 +34,7 @@ fn status_color(status: &str) -> Color {
         "in_progress" => Color::Yellow,
         "completed" => Color::Green,
         "failed" => Color::Red,
+        "skipped" => Color::DarkGray,
         _ => Color::White,
     }
 }
@@ -97,11 +100,7 @@ pub fn render_task_list(frame: &mut Frame, area: Rect, state: &TuiState, focused
     // Create the list widget
     let list = List::new(items)
         .block(block)
-        .highlight_style(
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .add_modifier(Modifier::REVERSED),
-        )
+        .highlight_style(Style::default().fg(Color::Yellow).bold())
         .highlight_symbol("> ");
 
     // Create list state for selection and scrolling
@@ -135,6 +134,7 @@ mod tests {
         assert_eq!(status_indicator("in_progress"), "[/]");
         assert_eq!(status_indicator("completed"), "[✓]");
         assert_eq!(status_indicator("failed"), "[✗]");
+        assert_eq!(status_indicator("skipped"), "[-]");
 
         // Unknown status shows question mark
         assert_eq!(status_indicator("unknown"), "[?]");
@@ -148,6 +148,7 @@ mod tests {
         assert_eq!(status_color("in_progress"), Color::Yellow);
         assert_eq!(status_color("completed"), Color::Green);
         assert_eq!(status_color("failed"), Color::Red);
+        assert_eq!(status_color("skipped"), Color::DarkGray);
 
         // Unknown status defaults to white
         assert_eq!(status_color("unknown"), Color::White);

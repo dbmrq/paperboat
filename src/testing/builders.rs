@@ -4,8 +4,8 @@
 //! for constructing mock test data programmatically.
 
 use super::types::{
-    MockAgentSession, MockMcpToolCall, MockSessionUpdate, MockToolCallResponse,
-    MockToolResponseData, MockToolResult, MockToolType,
+    MockAgentSession, MockMcpToolCall, MockSessionUpdate, MockSuggestedTask,
+    MockToolCallResponse, MockToolResponseData, MockToolResult, MockToolType,
 };
 
 // ============================================================================
@@ -188,7 +188,37 @@ impl MockSessionBuilder {
             content: Some("[calling complete]".to_string()),
             tool_title: None,
             tool_result: None,
-            inject_mcp_tool_call: Some(MockMcpToolCall::Complete { success, message }),
+            inject_mcp_tool_call: Some(MockMcpToolCall::Complete {
+                success,
+                message,
+                notes: None,
+                add_tasks: None,
+            }),
+        });
+        self
+    }
+
+    /// Add a complete MCP tool call with suggested tasks.
+    /// This simulates an agent calling `complete()` with `add_tasks`.
+    pub fn with_complete_and_tasks(
+        mut self,
+        success: bool,
+        message: Option<String>,
+        add_tasks: Vec<MockSuggestedTask>,
+        delay_ms: u64,
+    ) -> Self {
+        self.updates.push(MockSessionUpdate {
+            delay_ms,
+            session_update: "agent_message_chunk".to_string(),
+            content: Some("[calling complete with suggested tasks]".to_string()),
+            tool_title: None,
+            tool_result: None,
+            inject_mcp_tool_call: Some(MockMcpToolCall::Complete {
+                success,
+                message,
+                notes: None,
+                add_tasks: Some(add_tasks),
+            }),
         });
         self
     }
@@ -217,6 +247,25 @@ impl MockSessionBuilder {
             tool_title: None,
             tool_result: None,
             inject_mcp_tool_call: Some(MockMcpToolCall::Decompose { task: task.into() }),
+        });
+        self
+    }
+
+    /// Add a `skip_tasks` MCP tool call injection.
+    /// This simulates the orchestrator agent calling `skip_tasks()`.
+    pub fn with_skip_tasks(
+        mut self,
+        task_ids: Vec<String>,
+        reason: Option<String>,
+        delay_ms: u64,
+    ) -> Self {
+        self.updates.push(MockSessionUpdate {
+            delay_ms,
+            session_update: "agent_message_chunk".to_string(), // Dummy update to trigger injection
+            content: Some("[calling skip_tasks]".to_string()),
+            tool_title: None,
+            tool_result: None,
+            inject_mcp_tool_call: Some(MockMcpToolCall::SkipTasks { task_ids, reason }),
         });
         self
     }

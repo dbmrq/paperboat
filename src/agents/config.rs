@@ -92,7 +92,14 @@ pub const PLANNER_CONFIG: AgentToolConfig = AgentToolConfig {
 
 /// Orchestrator: Coordinates task execution. No direct editing or execution.
 pub const ORCHESTRATOR_CONFIG: AgentToolConfig = AgentToolConfig {
-    mcp_tools: &["decompose", "spawn_agents", "complete", "create_task"],
+    mcp_tools: &[
+        "decompose",
+        "spawn_agents",
+        "complete",
+        "create_task",
+        "skip_tasks",
+        "list_tasks",
+    ],
     removed_auggie_tools: &[
         // No file editing - orchestrator delegates to implementers
         "str-replace-editor",
@@ -266,6 +273,7 @@ mod tests {
         // Planner should NOT have orchestrator tools
         assert!(!PLANNER_CONFIG.mcp_tools.contains(&"spawn_agents"));
         assert!(!PLANNER_CONFIG.mcp_tools.contains(&"decompose"));
+        assert!(!PLANNER_CONFIG.mcp_tools.contains(&"skip_tasks"));
     }
 
     #[test]
@@ -289,6 +297,8 @@ mod tests {
         assert!(ORCHESTRATOR_CONFIG.mcp_tools.contains(&"complete"));
         // Orchestrator can now create tasks dynamically (e.g., from agent suggestions)
         assert!(ORCHESTRATOR_CONFIG.mcp_tools.contains(&"create_task"));
+        // Orchestrator can skip tasks when appropriate
+        assert!(ORCHESTRATOR_CONFIG.mcp_tools.contains(&"skip_tasks"));
     }
 
     #[test]
@@ -314,6 +324,9 @@ mod tests {
     fn test_implementer_mcp_tools() {
         // Implementer only gets complete
         assert_eq!(IMPLEMENTER_CONFIG.mcp_tools, &["complete"]);
+
+        // Implementer should NOT have orchestrator tools
+        assert!(!IMPLEMENTER_CONFIG.mcp_tools.contains(&"skip_tasks"));
     }
 
     #[test]
@@ -326,6 +339,15 @@ mod tests {
 
         // Verifier SHOULD run processes (for tests)
         assert!(allowed.contains(&"launch-process"));
+    }
+
+    #[test]
+    fn test_verifier_mcp_tools() {
+        // Verifier only gets complete
+        assert_eq!(VERIFIER_CONFIG.mcp_tools, &["complete"]);
+
+        // Verifier should NOT have orchestrator tools
+        assert!(!VERIFIER_CONFIG.mcp_tools.contains(&"skip_tasks"));
     }
 
     #[test]

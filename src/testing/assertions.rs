@@ -21,6 +21,20 @@ pub struct TestRunResult {
     pub prompts_sent: Vec<(String, String)>,
     /// Session IDs of all sessions created during the run.
     pub sessions_created: Vec<String>,
+    /// Final task states loaded from tasks.json (task_id, task_name, status).
+    /// Status is one of: "pending", "in_progress", "completed", "failed", "skipped".
+    pub final_tasks: Vec<FinalTaskState>,
+}
+
+/// Final state of a task at the end of a test run.
+#[derive(Debug, Clone)]
+pub struct FinalTaskState {
+    /// Task ID (e.g., "task001").
+    pub task_id: String,
+    /// Task name.
+    pub name: String,
+    /// Final status (e.g., "completed", "failed", "skipped", "pending", "in_progress").
+    pub status: String,
 }
 
 impl TestRunResult {
@@ -79,6 +93,32 @@ impl TestRunResult {
             })
             .collect()
     }
+
+    /// Get all `skip_tasks()` tool calls as (`task_ids`, reason) tuples.
+    pub fn skip_tasks_calls(&self) -> Vec<(Vec<String>, Option<String>)> {
+        self.tool_calls
+            .iter()
+            .filter_map(|c| match &c.call {
+                ToolCall::SkipTasks { task_ids, reason } => {
+                    Some((task_ids.clone(), reason.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Get all `complete()` tool calls as (success, message) tuples.
+    pub fn complete_calls(&self) -> Vec<(bool, Option<String>)> {
+        self.tool_calls
+            .iter()
+            .filter_map(|c| match &c.call {
+                ToolCall::Complete {
+                    success, message, ..
+                } => Some((*success, message.clone())),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// A captured tool call with its response.
@@ -95,6 +135,11 @@ pub struct CapturedToolCall {
 // ============================================================================
 
 /// Assert that a planner was spawned during the test.
+///
+/// # Panics
+///
+/// Panics if no planner session was found in the test result, indicating the planner
+/// agent was not spawned during the test run.
 pub fn assert_planner_spawned(result: &TestRunResult) {
     assert!(
         result.planner_was_spawned(),
@@ -105,6 +150,11 @@ pub fn assert_planner_spawned(result: &TestRunResult) {
 }
 
 /// Assert that an orchestrator was spawned during the test.
+///
+/// # Panics
+///
+/// Panics if no orchestrator session was found in the test result, indicating the
+/// orchestrator agent was not spawned during the test run.
 pub fn assert_orchestrator_spawned(result: &TestRunResult) {
     assert!(
         result.orchestrator_was_spawned(),
@@ -115,6 +165,11 @@ pub fn assert_orchestrator_spawned(result: &TestRunResult) {
 }
 
 /// Assert that an implementer was spawned during the test.
+///
+/// # Panics
+///
+/// Panics if no implementer session was found in the test result, indicating the
+/// implementer agent was not spawned during the test run.
 pub fn assert_implementer_spawned(result: &TestRunResult) {
     assert!(
         result.implementer_was_spawned(),
@@ -125,6 +180,11 @@ pub fn assert_implementer_spawned(result: &TestRunResult) {
 }
 
 /// Assert that at least one `implement()` call was made.
+///
+/// # Panics
+///
+/// Panics if no implement tool calls were made during the test run, indicating the
+/// implementation flow was not triggered.
 pub fn assert_implement_called(result: &TestRunResult) {
     assert!(
         !result.implement_calls().is_empty(),
@@ -139,6 +199,11 @@ pub fn assert_implement_called(result: &TestRunResult) {
 }
 
 /// Assert that at least one `decompose()` call was made.
+///
+/// # Panics
+///
+/// Panics if no decompose tool calls were made during the test run, indicating the
+/// task decomposition flow was not triggered.
 pub fn assert_decompose_called(result: &TestRunResult) {
     assert!(
         !result.decompose_calls().is_empty(),
@@ -153,6 +218,10 @@ pub fn assert_decompose_called(result: &TestRunResult) {
 }
 
 /// Assert that the test completed successfully.
+///
+/// # Panics
+///
+/// Panics if the task result indicates failure (success field is false).
 pub fn assert_success(result: &TestRunResult) {
     assert!(
         result.task_result.success,
@@ -163,6 +232,10 @@ pub fn assert_success(result: &TestRunResult) {
 }
 
 /// Assert that the test failed.
+///
+/// # Panics
+///
+/// Panics if the task result indicates success (success field is true).
 pub fn assert_failure(result: &TestRunResult) {
     assert!(
         !result.task_result.success,
@@ -196,6 +269,7 @@ mod tests {
                             task_id: None,
                             prompt: None,
                             tools: None,
+                            model_complexity: None,
                         }],
                         wait: crate::mcp_server::WaitMode::All,
                     },
@@ -215,6 +289,7 @@ mod tests {
                 "orchestrator-001".to_string(),
                 "impl-001".to_string(),
             ],
+            final_tasks: vec![],
         };
 
         assert!(result.planner_was_spawned());
@@ -240,10 +315,94 @@ mod tests {
             tool_calls: vec![],
             prompts_sent: vec![],
             sessions_created: vec!["orchestrator-001".to_string()],
+            final_tasks: vec![],
         };
 
         assert!(!result.planner_was_spawned());
         assert!(result.orchestrator_was_spawned());
         assert!(!result.implementer_was_spawned());
+    }
+
+    #[test]
+    fn test_skip_tasks_calls_helper() {
+        let result = TestRunResult {
+            task_result: TaskResult {
+                success: true,
+                message: Some("Done".to_string()),
+            },
+            tool_calls: vec![
+                CapturedToolCall {
+                    call: ToolCall::SkipTasks {
+                        task_ids: vec!["task001".to_string(), "task002".to_string()],
+                        reason: Some("Not needed".to_string()),
+                    },
+                    response: ToolResponse::success("req-1".to_string(), "Skipped 2".to_string()),
+                },
+                CapturedToolCall {
+                    call: ToolCall::SkipTasks {
+                        task_ids: vec!["task003".to_string()],
+                        reason: None,
+                    },
+                    response: ToolResponse::success("req-2".to_string(), "Skipped 1".to_string()),
+                },
+            ],
+            prompts_sent: vec![],
+            sessions_created: vec![],
+            final_tasks: vec![],
+        };
+
+        let skip_calls = result.skip_tasks_calls();
+        assert_eq!(skip_calls.len(), 2);
+
+        assert_eq!(
+            skip_calls[0].0,
+            vec!["task001".to_string(), "task002".to_string()]
+        );
+        assert_eq!(skip_calls[0].1, Some("Not needed".to_string()));
+
+        assert_eq!(skip_calls[1].0, vec!["task003".to_string()]);
+        assert!(skip_calls[1].1.is_none());
+    }
+
+    #[test]
+    fn test_complete_calls_helper() {
+        let result = TestRunResult {
+            task_result: TaskResult {
+                success: true,
+                message: Some("Done".to_string()),
+            },
+            tool_calls: vec![
+                CapturedToolCall {
+                    call: ToolCall::Complete {
+                        success: true,
+                        message: Some("Plan created".to_string()),
+                        notes: None,
+                        add_tasks: None,
+                    },
+                    response: ToolResponse::success("req-1".to_string(), "OK".to_string()),
+                },
+                CapturedToolCall {
+                    call: ToolCall::Complete {
+                        success: false,
+                        message: Some("Task failed".to_string()),
+                        notes: None,
+                        add_tasks: None,
+                    },
+                    response: ToolResponse::success("req-2".to_string(), "OK".to_string()),
+                },
+            ],
+            prompts_sent: vec![],
+            sessions_created: vec![],
+            final_tasks: vec![],
+        };
+
+        let complete_calls = result.complete_calls();
+        assert_eq!(complete_calls.len(), 2);
+
+        assert!(complete_calls[0].0); // success=true
+        assert_eq!(complete_calls[0].1, Some("Plan created".to_string()));
+
+        assert!(!complete_calls[1].0); // success=false
+        assert_eq!(complete_calls[1].1, Some("Task failed".to_string()));
     }
 }

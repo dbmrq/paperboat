@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 
 impl App {
     /// Handle ACP messages and stream agent output.
+    #[tracing::instrument(skip(self, msg), fields(agent_type = %agent_type))]
     pub(crate) async fn handle_acp_message(&self, msg: &serde_json::Value, agent_type: &str) {
         if let Some(method) = msg.get("method").and_then(|v| v.as_str()) {
             if method == "session/update" {
@@ -64,6 +65,7 @@ impl App {
     ///
     /// This should be called before waiting for session output.
     /// The session should be unregistered after completion via `unregister_session`.
+    #[tracing::instrument(skip(self), fields(session_id = %session_id))]
     pub(crate) async fn register_session(&self, session_id: &str) -> mpsc::Receiver<Value> {
         let mut router = self.session_router.write().await;
         let rx = router.register(session_id);
@@ -74,6 +76,7 @@ impl App {
     /// Unregister a session from the router.
     ///
     /// This should be called after the session completes to clean up.
+    #[tracing::instrument(skip(self), fields(session_id = %session_id))]
     pub(crate) async fn unregister_session(&self, session_id: &str) {
         let mut router = self.session_router.write().await;
         router.unregister(session_id);
@@ -82,6 +85,7 @@ impl App {
 
     /// Wait for a session to complete, collecting all message output.
     /// This is the unified wait function for all agent types (planner, implementer, etc.)
+    #[tracing::instrument(skip(self, writer), fields(session_id = %session_id))]
     pub(crate) async fn wait_for_session_output(
         &mut self,
         session_id: &str,
@@ -145,6 +149,8 @@ impl App {
     }
 
     /// Wait for session output using routed mode (per-session receiver from router).
+    #[allow(clippy::ignored_unit_patterns)] // `update` pattern is () when tui feature disabled
+    #[tracing::instrument(skip(self, writer, session_rx), fields(session_id = %session_id, mode = "routed"))]
     async fn wait_for_session_output_routed(
         &mut self,
         session_id: &str,
@@ -158,8 +164,35 @@ impl App {
 
         let mut tool_rx = self.tool_rx.take().context("Tool receiver not set up")?;
 
+        // Take the config update receiver out of self so we don't hold a mutable borrow
+        #[cfg(feature = "tui")]
+        let mut config_update_rx = self.config_update_rx.take();
+
         loop {
+            // Config update future - receives from TUI channel when available
+            #[cfg(feature = "tui")]
+            let config_update_fut = async {
+                match config_update_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            };
+            #[cfg(not(feature = "tui"))]
+            let config_update_fut = std::future::pending::<Option<()>>();
+
             tokio::select! {
+                // Use biased selection to ensure tool_rx is checked first.
+                // This is critical for tests: when mock ACP recv() injects a tool call,
+                // we must process it before polling recv() again.
+                biased;
+
+                // Handle config updates from TUI (update is only used with tui feature)
+                Some(update) = config_update_fut => {
+                    let _ = &update; // Suppress unused variable warning when tui feature is disabled
+                    #[cfg(feature = "tui")]
+                    self.apply_model_config_update(&update);
+                }
+
                 Some(tool_msg) = tool_rx.recv() => {
                     let ToolMessage::Request { request, response_tx } = tool_msg;
 
@@ -193,6 +226,10 @@ impl App {
                             }
 
                             self.tool_rx = Some(tool_rx);
+                            #[cfg(feature = "tui")]
+                            {
+                                self.config_update_rx = config_update_rx;
+                            }
                             return Ok(output);
                         }
                         ToolCall::CreateTask { name, description, dependencies } => {
@@ -244,6 +281,10 @@ impl App {
                     let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
                     if finished {
                         self.tool_rx = Some(tool_rx);
+                        #[cfg(feature = "tui")]
+                        {
+                            self.config_update_rx = config_update_rx;
+                        }
                         return Ok(output);
                     }
                 }
@@ -254,6 +295,8 @@ impl App {
     /// Wait for session output using direct mode (polling ACP clients directly).
     /// Used for tests with mock clients that don't support the routing infrastructure.
     /// Polls both planner and worker clients to handle all session types.
+    #[allow(clippy::ignored_unit_patterns)] // `update` pattern is () when tui feature disabled
+    #[tracing::instrument(skip(self, writer), fields(session_id = %session_id, mode = "direct"))]
     async fn wait_for_session_output_direct(
         &mut self,
         session_id: &str,
@@ -266,6 +309,10 @@ impl App {
 
         let mut tool_rx = self.tool_rx.take().context("Tool receiver not set up")?;
 
+        // Take the config update receiver out of self so we don't hold a mutable borrow
+        #[cfg(feature = "tui")]
+        let mut config_update_rx = self.config_update_rx.take();
+
         // Track which clients have been exhausted (for mock clients)
         let mut worker_exhausted = false;
         let mut planner_exhausted = false;
@@ -274,10 +321,38 @@ impl App {
             // If both clients are exhausted and no tool messages, we're stuck
             if worker_exhausted && planner_exhausted {
                 self.tool_rx = Some(tool_rx);
+                #[cfg(feature = "tui")]
+                {
+                    self.config_update_rx = config_update_rx;
+                }
                 return Err(anyhow::anyhow!("No more mock updates available"));
             }
 
+            // Config update future - receives from TUI channel when available
+            #[cfg(feature = "tui")]
+            let config_update_fut = async {
+                match config_update_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            };
+            #[cfg(not(feature = "tui"))]
+            let config_update_fut = std::future::pending::<Option<()>>();
+
             tokio::select! {
+                // Use biased selection to ensure tool_rx is checked first.
+                // This is critical for tests: when mock ACP recv() injects a tool call,
+                // we must process it before polling recv() again, or tool calls may
+                // be interleaved.
+                biased;
+
+                // Handle config updates from TUI (update is only used with tui feature)
+                Some(update) = config_update_fut => {
+                    let _ = &update; // Suppress unused variable warning when tui feature is disabled
+                    #[cfg(feature = "tui")]
+                    self.apply_model_config_update(&update);
+                }
+
                 Some(tool_msg) = tool_rx.recv() => {
                     let ToolMessage::Request { request, response_tx } = tool_msg;
 
@@ -311,6 +386,10 @@ impl App {
                             }
 
                             self.tool_rx = Some(tool_rx);
+                            #[cfg(feature = "tui")]
+                            {
+                                self.config_update_rx = config_update_rx;
+                            }
                             return Ok(output);
                         }
                         ToolCall::CreateTask { name, description, dependencies } => {
@@ -364,6 +443,10 @@ impl App {
                         let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
                         if finished {
                             self.tool_rx = Some(tool_rx);
+                            #[cfg(feature = "tui")]
+                            {
+                                self.config_update_rx = config_update_rx;
+                            }
                             return Ok(output);
                         }
                     } else {
@@ -379,6 +462,10 @@ impl App {
                         let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
                         if finished {
                             self.tool_rx = Some(tool_rx);
+                            #[cfg(feature = "tui")]
+                            {
+                                self.config_update_rx = config_update_rx;
+                            }
                             return Ok(output);
                         }
                     } else {

@@ -11,5 +11,9 @@ mod types;
 // Re-export for backward compatibility and easy access
 pub use server::run_stdio_server;
 pub use types::{
-    AgentSpec, ResolvedAgentSpec, SuggestedTask, ToolCall, ToolRequest, ToolResponse, WaitMode,
+    AgentSpec, ModelComplexity, ResolvedAgentSpec, SuggestedTask, TaskStateInfo, ToolCall,
+    ToolRequest, ToolResponse, WaitMode,
 };
+
+// Re-export response builder types for context-aware responses
+pub use handlers::build_response_text_with_state;

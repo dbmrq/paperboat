@@ -66,6 +66,13 @@ impl TestHarness {
     }
 
     /// Create a new test harness by loading a scenario from a file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The file cannot be read
+    /// - The file contains invalid TOML syntax
+    /// - The TOML does not conform to the expected scenario schema
     pub fn with_scenario_file(path: &Path) -> Result<Self> {
         let scenario = MockScenario::from_file(path)
             .with_context(|| format!("Failed to load scenario from {path:?}"))?;
@@ -90,10 +97,16 @@ impl TestHarness {
     /// A `TestRunResult` containing the task result and captured interactions.
     ///
     /// # Errors
+    ///
     /// Returns an error if:
     /// - Log manager creation fails
     /// - The test times out
     /// - Mock responses are exhausted unexpectedly
+    ///
+    /// # Panics
+    ///
+    /// Panics if the temporary directory path cannot be converted to a UTF-8 string
+    /// (should never happen on any standard platform).
     pub async fn run_goal(&mut self, goal: &str) -> Result<TestRunResult> {
         // Create temporary directory for test logs
         let temp_dir = tempfile::tempdir().context("Failed to create temp directory for logs")?;
@@ -173,6 +186,7 @@ impl TestHarness {
             tool_calls,
             prompts_sent: Vec::new(), // Would need to capture from mock clients
             sessions_created,
+            final_tasks: Vec::new(), // TODO: Read from tasks.json if needed
         })
     }
 

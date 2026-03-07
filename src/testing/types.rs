@@ -58,12 +58,25 @@ pub enum MockMcpToolCall {
     Complete {
         success: bool,
         message: Option<String>,
+        /// Optional notes for context sharing (implementers typically use this).
+        #[serde(default)]
+        notes: Option<String>,
+        /// Optional tasks to suggest to the parent orchestrator.
+        #[serde(default)]
+        add_tasks: Option<Vec<MockSuggestedTask>>,
     },
     /// Call the `spawn_agents` tool (orchestrator only).
     /// For backward compatibility, this accepts a single task and spawns one agent.
     SpawnAgents { task: String },
     /// Call the decompose tool (orchestrator only).
     Decompose { task: String },
+    /// Call the `skip_tasks` tool (orchestrator only).
+    /// Marks tasks as skipped rather than leaving them pending.
+    SkipTasks {
+        task_ids: Vec<String>,
+        #[serde(default)]
+        reason: Option<String>,
+    },
 }
 
 /// Tool result content for mock `tool_result` updates.
@@ -115,6 +128,7 @@ pub enum MockToolType {
     Decompose,
     SpawnAgents,
     Complete,
+    SkipTasks,
 }
 
 /// Response data for mock tool calls (mirrors `ToolResponse` structure).
@@ -145,6 +159,7 @@ impl MockToolResponseData {
             summary: self.summary.clone(),
             files_modified: self.files_modified.clone(),
             error: self.error.clone(),
+            task_state: None,
         }
     }
 }
@@ -171,6 +186,18 @@ pub struct MockAcpResponse {
 pub struct MockAcpError {
     pub code: i32,
     pub message: String,
+}
+
+/// A suggested task in the complete tool's add_tasks field.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MockSuggestedTask {
+    /// Name of the suggested task.
+    pub name: String,
+    /// Description of what needs to be done.
+    pub description: String,
+    /// Optional task IDs that this task depends on.
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
 }
 
 /// Types of agents in the system.

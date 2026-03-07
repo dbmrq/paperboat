@@ -48,7 +48,10 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &TuiState) {
         Span::styled(format!("✗{failed}"), Style::default().fg(Color::Red)),
         Span::raw(" "),
         // In-progress count (yellow)
-        Span::styled(format!("~{in_progress}"), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            format!("~{in_progress}"),
+            Style::default().fg(Color::Yellow),
+        ),
         Span::raw(" "),
         // Total and active (cyan)
         Span::styled(
@@ -78,14 +81,11 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &TuiState) {
         ));
     }
 
-    // Always add help hint at the end
+    // Always add help and settings hints at the end
     spans.push(Span::raw(" │ "));
-    spans.push(Span::styled(
-        "?=help",
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM),
-    ));
+    spans.push(Span::styled("?=help", Style::default().fg(Color::Gray)));
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled("s=settings", Style::default().fg(Color::Gray)));
 
     // End with single space padding
     spans.push(Span::raw(" "));

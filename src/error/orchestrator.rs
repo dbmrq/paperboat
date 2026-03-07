@@ -1,15 +1,16 @@
-//! Error types for the Villalobos orchestrator.
+//! Orchestrator-level error types.
 //!
-//! This module defines error types for orchestrator-level operations,
-//! including timeout handling for planning and session completion.
+//! Errors related to orchestrator operations, including timeout handling
+//! for planning and session completion.
 
-use std::fmt;
 use std::time::Duration;
+use thiserror::Error;
 
 /// Errors that can occur during orchestrator operations.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum OrchestratorError {
     /// A timeout occurred while waiting for an operation to complete.
+    #[error("Timeout after {duration:?} while {operation}{}", .context.as_ref().map(|c| format!(" ({c})")).unwrap_or_default())]
     Timeout {
         /// Description of the operation that timed out.
         operation: TimeoutOperation,
@@ -18,8 +19,10 @@ pub enum OrchestratorError {
         /// Optional additional context (e.g., session ID).
         context: Option<String>,
     },
+
     /// An internal error occurred (wraps `anyhow::Error` for compatibility).
-    Internal(anyhow::Error),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
 }
 
 /// Types of operations that can time out.
@@ -32,46 +35,12 @@ pub enum TimeoutOperation {
     AcpRequest,
 }
 
-impl fmt::Display for TimeoutOperation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for TimeoutOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::WaitForSession => write!(f, "waiting for session"),
             Self::AcpRequest => write!(f, "waiting for ACP response"),
         }
-    }
-}
-
-impl fmt::Display for OrchestratorError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Timeout {
-                operation,
-                duration,
-                context,
-            } => {
-                write!(f, "Timeout after {duration:?} while {operation}",)?;
-                if let Some(ctx) = context {
-                    write!(f, " ({ctx})")?;
-                }
-                Ok(())
-            }
-            Self::Internal(e) => write!(f, "Internal error: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for OrchestratorError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Internal(e) => Some(e.as_ref()),
-            Self::Timeout { .. } => None,
-        }
-    }
-}
-
-impl From<anyhow::Error> for OrchestratorError {
-    fn from(e: anyhow::Error) -> Self {
-        Self::Internal(e)
     }
 }
 

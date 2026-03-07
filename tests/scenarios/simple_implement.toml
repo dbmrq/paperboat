@@ -77,11 +77,23 @@ delay_ms = 100
 session_update = "agent_message_chunk"
 content = "Executing the plan. Calling implement for the error handling task.\n\n"
 
-# Orchestrator calls implement tool via MCP
+# Orchestrator calls skip_tasks to mark the tracked task as not needed
+# (since we're using a raw task description, not task_id)
 [[orchestrator_sessions.updates]]
 delay_ms = 50
 session_update = "agent_message_chunk"
-content = "[Calling implement tool]"
+content = "[Calling skip_tasks to skip the planner's tracked task]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "skip_tasks"
+task_ids = ["task001"]
+reason = "Implementing directly with custom description"
+
+# Orchestrator calls spawn_agents tool via MCP
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Calling spawn_agents tool]"
 
 [orchestrator_sessions.updates.inject_mcp_tool_call]
 tool = "spawn_agents"

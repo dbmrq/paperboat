@@ -97,6 +97,17 @@ delay_ms = 100
 session_update = "agent_message_chunk"
 content = "Reviewing the plan. No implementation tasks need to be executed at this time.\n\n"
 
+# Skip all tasks since this is a planning-only flow
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Skipping all tasks - planning only mode]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "skip_tasks"
+task_ids = ["task001", "task002", "task003"]
+reason = "Planning-only mode - no implementation needed"
+
 # Orchestrator calls complete without calling implement
 [[orchestrator_sessions.updates]]
 delay_ms = 50
