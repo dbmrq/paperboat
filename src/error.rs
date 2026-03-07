@@ -79,11 +79,11 @@ impl From<anyhow::Error> for OrchestratorError {
 #[derive(Debug, Clone)]
 pub struct TimeoutConfig {
     /// Timeout for waiting for any session to complete.
-    /// Default: 30 minutes. Env: `VILLALOBOS_SESSION_TIMEOUT`
+    /// Default: 30 minutes. Env: `PAPERBOAT_SESSION_TIMEOUT`
     pub session_timeout: Duration,
 
     /// Timeout for ACP request/response (e.g., session/new, initialize).
-    /// Default: 60 seconds. Env: `VILLALOBOS_REQUEST_TIMEOUT`
+    /// Default: 60 seconds. Env: `PAPERBOAT_REQUEST_TIMEOUT`
     pub request_timeout: Duration,
 }
 
@@ -112,10 +112,10 @@ impl TimeoutConfig {
     /// Create a `TimeoutConfig` from environment variables.
     ///
     /// Supported environment variables:
-    /// - `VILLALOBOS_SESSION_TIMEOUT`: Session timeout in seconds (default: 1800)
-    /// - `VILLALOBOS_REQUEST_TIMEOUT`: ACP request timeout in seconds (default: 60)
+    /// - `PAPERBOAT_SESSION_TIMEOUT`: Session timeout in seconds (default: 1800)
+    /// - `PAPERBOAT_REQUEST_TIMEOUT`: ACP request timeout in seconds (default: 60)
     pub fn from_env() -> Self {
-        let session_timeout = std::env::var("VILLALOBOS_SESSION_TIMEOUT")
+        let session_timeout = std::env::var("PAPERBOAT_SESSION_TIMEOUT")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .map_or_else(
@@ -123,7 +123,7 @@ impl TimeoutConfig {
                 Duration::from_secs,
             );
 
-        let request_timeout = std::env::var("VILLALOBOS_REQUEST_TIMEOUT")
+        let request_timeout = std::env::var("PAPERBOAT_REQUEST_TIMEOUT")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .map_or_else(

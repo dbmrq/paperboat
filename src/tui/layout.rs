@@ -86,7 +86,7 @@ impl PanelLayout {
 ///
 /// ```ignore
 /// use ratatui::layout::Rect;
-/// use villalobos::tui::layout::calculate_layout;
+/// use paperboat::tui::layout::calculate_layout;
 ///
 /// let area = Rect::new(0, 0, 120, 40);
 /// let layout = calculate_layout(area);

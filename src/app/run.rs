@@ -21,7 +21,7 @@ impl App {
             // Test mode: tool_rx is already injected, skip socket setup
             // Use a placeholder socket path for MCP server config (won't actually be used)
             tracing::debug!("Test mode: skipping socket setup, tool_rx already set");
-            let placeholder = PathBuf::from("/tmp/villalobos-test-socket-placeholder");
+            let placeholder = PathBuf::from("/tmp/paperboat-test-socket-placeholder");
             self.socket_path = Some(placeholder.clone());
             Some(placeholder)
         } else {

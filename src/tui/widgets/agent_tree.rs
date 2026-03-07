@@ -66,8 +66,8 @@ mod colors {
 /// ```ignore
 /// use ratatui::Frame;
 /// use ratatui::layout::Rect;
-/// use villalobos::tui::widgets::render_agent_tree;
-/// use villalobos::tui::TuiState;
+/// use paperboat::tui::widgets::render_agent_tree;
+/// use paperboat::tui::TuiState;
 ///
 /// fn render(frame: &mut Frame, area: Rect, state: &TuiState) {
 ///     let focused = state.current_focus == FocusedPanel::AgentTree;

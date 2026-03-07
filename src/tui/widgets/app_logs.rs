@@ -63,8 +63,8 @@ pub mod colors {
 /// ```ignore
 /// use ratatui::Frame;
 /// use ratatui::layout::Rect;
-/// use villalobos::tui::widgets::render_app_logs;
-/// use villalobos::tui::TuiState;
+/// use paperboat::tui::widgets::render_app_logs;
+/// use paperboat::tui::TuiState;
 /// use tui_logger::TuiWidgetState;
 ///
 /// fn render(frame: &mut Frame, area: Rect, state: &TuiState, logger_state: &TuiWidgetState) {

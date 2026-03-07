@@ -86,8 +86,8 @@ pub enum EventResult {
 ///
 /// ```ignore
 /// use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-/// use villalobos::tui::events::{handle_key_event, EventResult};
-/// use villalobos::tui::TuiState;
+/// use paperboat::tui::events::{handle_key_event, EventResult};
+/// use paperboat::tui::TuiState;
 ///
 /// let mut state = TuiState::new();
 /// let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::empty());

@@ -13,18 +13,18 @@ use tokio::sync::RwLock;
 
 /// Strip MCP server prefixes from tool names for cleaner logging.
 ///
-/// Augment's ACP prefixes tool names with the MCP server name (e.g., `complete_villalobos-implementer`
+/// Augment's ACP prefixes tool names with the MCP server name (e.g., `complete_paperboat-implementer`
 /// instead of just `complete`). This function extracts the base tool name for readability.
 ///
 /// Returns the original title if no prefix pattern is found.
 fn strip_mcp_prefix(title: &str) -> &str {
-    // Pattern: toolname_servername (e.g., "complete_villalobos-implementer-abc123")
+    // Pattern: toolname_servername (e.g., "complete_paperboat-implementer-abc123")
     // We want to extract just "toolname"
     if let Some(underscore_pos) = title.find('_') {
         let potential_prefix = &title[..underscore_pos];
         let potential_suffix = &title[underscore_pos + 1..];
         // Check if suffix looks like our MCP server name
-        if potential_suffix.starts_with("villalobos-") {
+        if potential_suffix.starts_with("paperboat-") {
             return potential_prefix;
         }
     }
@@ -180,7 +180,7 @@ pub async fn run_agent_handler(
                                     "tool_call" => {
                                         // Log tool calls made by the agent
                                         if let Some(title) = update.get("title").and_then(|t| t.as_str()) {
-                                            // Strip MCP prefix if present (e.g., "mcp_villalobos-implementer_" -> "")
+                                            // Strip MCP prefix if present (e.g., "mcp_paperboat-implementer_" -> "")
                                             let clean_title = strip_mcp_prefix(title);
                                             let _ = writer.write_tool_call(clean_title).await;
                                             tracing::info!("🔧 [{}] tool call: {}", agent_name, clean_title);

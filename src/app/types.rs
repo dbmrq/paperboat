@@ -21,12 +21,12 @@ pub enum ToolMessage {
 /// Path to the orchestrator-specific auggie cache directory.
 /// This directory has a settings.json with editing tools removed,
 /// forcing the orchestrator to delegate work to worker agents.
-pub const ORCHESTRATOR_CACHE_DIR: &str = "~/.villalobos/augment-orchestrator";
+pub const ORCHESTRATOR_CACHE_DIR: &str = "~/.paperboat/augment-orchestrator";
 
 /// Path to the planner-specific auggie cache directory.
 /// This directory has a settings.json with built-in task management tools removed,
 /// so the planner uses our custom `create_task` tool instead.
-pub const PLANNER_CACHE_DIR: &str = "~/.villalobos/augment-planner";
+pub const PLANNER_CACHE_DIR: &str = "~/.paperboat/augment-planner";
 
 // NOTE: Tool removal configuration is now centralized in `crate::agents::config`.
 // Use ORCHESTRATOR_CONFIG and PLANNER_CONFIG from there for removed_auggie_tools.

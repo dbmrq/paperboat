@@ -154,7 +154,7 @@ impl MockAcpClient {
     /// Determine agent type from model name and MCP server configuration.
     ///
     /// The agent type is primarily determined from the MCP server's environment
-    /// variables (`VILLALOBOS_AGENT_TYPE`), with fallback to model name heuristics.
+    /// variables (`PAPERBOAT_AGENT_TYPE`), with fallback to model name heuristics.
     fn agent_type_from_config(&self, model: &str, mcp_servers: &[Value]) -> AgentType {
         // First, try to detect from MCP server environment variables
         for server in mcp_servers {
@@ -163,7 +163,7 @@ impl MockAcpClient {
                     let name = env_var.get("name").and_then(|n| n.as_str());
                     let value = env_var.get("value").and_then(|v| v.as_str());
 
-                    if name == Some("VILLALOBOS_AGENT_TYPE") {
+                    if name == Some("PAPERBOAT_AGENT_TYPE") {
                         match value {
                             Some("planner") => return AgentType::Planner,
                             Some("implementer") => return AgentType::Implementer,

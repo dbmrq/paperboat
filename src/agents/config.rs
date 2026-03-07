@@ -5,8 +5,8 @@
 //! - **Auggie tools**: The agent's built-in tools (str-replace-editor, save-file, etc.)
 //!
 //! Tool access is controlled via:
-//! - `VILLALOBOS_AGENT_TYPE` env var: Controls which MCP tools are exposed
-//! - `VILLALOBOS_REMOVED_TOOLS` env var: Controls which auggie tools are removed
+//! - `PAPERBOAT_AGENT_TYPE` env var: Controls which MCP tools are exposed
+//! - `PAPERBOAT_REMOVED_TOOLS` env var: Controls which auggie tools are removed
 
 /// All auggie tools that can be filtered (used in tests).
 /// These are the tools provided by the Augment platform.

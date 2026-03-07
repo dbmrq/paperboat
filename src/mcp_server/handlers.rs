@@ -29,7 +29,7 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                     "tools": {}
                 },
                 "serverInfo": {
-                    "name": "villalobos-orchestrator",
+                    "name": "paperboat-orchestrator",
                     "version": "0.1.0"
                 }
             });
@@ -42,7 +42,7 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
         }
         "tools/list" => {
             // Get agent type from environment to filter available tools
-            let agent_type = std::env::var("VILLALOBOS_AGENT_TYPE")
+            let agent_type = std::env::var("PAPERBOAT_AGENT_TYPE")
                 .unwrap_or_else(|_| "orchestrator".to_string());
 
             let tools = match agent_type.as_str() {
@@ -682,12 +682,12 @@ mod tests {
     }
 
     /// Test that planner agents only get `create_task` and complete tools.
-    /// Uses #[serial] because these tests modify the `VILLALOBOS_AGENT_TYPE` env var.
+    /// Uses #[serial] because these tests modify the `PAPERBOAT_AGENT_TYPE` env var.
     #[tokio::test]
     #[serial]
     async fn test_planner_tool_access() {
         // Set agent type to planner
-        std::env::set_var("VILLALOBOS_AGENT_TYPE", "planner");
+        std::env::set_var("PAPERBOAT_AGENT_TYPE", "planner");
 
         let request = json!({
             "jsonrpc": "2.0",
@@ -742,7 +742,7 @@ mod tests {
     #[serial]
     async fn test_orchestrator_tool_access() {
         // Set agent type to orchestrator
-        std::env::set_var("VILLALOBOS_AGENT_TYPE", "orchestrator");
+        std::env::set_var("PAPERBOAT_AGENT_TYPE", "orchestrator");
 
         let request = json!({
             "jsonrpc": "2.0",
@@ -789,7 +789,7 @@ mod tests {
     #[serial]
     async fn test_implementer_tool_access() {
         // Set agent type to implementer
-        std::env::set_var("VILLALOBOS_AGENT_TYPE", "implementer");
+        std::env::set_var("PAPERBOAT_AGENT_TYPE", "implementer");
 
         let request = json!({
             "jsonrpc": "2.0",
@@ -838,7 +838,7 @@ mod tests {
     #[serial]
     async fn test_unknown_agent_type_defaults_to_orchestrator() {
         // Set agent type to something unknown
-        std::env::set_var("VILLALOBOS_AGENT_TYPE", "unknown_type");
+        std::env::set_var("PAPERBOAT_AGENT_TYPE", "unknown_type");
 
         let request = json!({
             "jsonrpc": "2.0",
@@ -874,7 +874,7 @@ mod tests {
     #[serial]
     async fn test_missing_agent_type_defaults_to_orchestrator() {
         // Remove the agent type env var
-        std::env::remove_var("VILLALOBOS_AGENT_TYPE");
+        std::env::remove_var("PAPERBOAT_AGENT_TYPE");
 
         let request = json!({
             "jsonrpc": "2.0",
@@ -907,7 +907,7 @@ mod tests {
         let socket_path = PathBuf::from("/tmp/test-socket");
 
         // Test planner
-        std::env::set_var("VILLALOBOS_AGENT_TYPE", "planner");
+        std::env::set_var("PAPERBOAT_AGENT_TYPE", "planner");
         let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
         let response = handle_request(&request, &socket_path)
             .await
@@ -928,7 +928,7 @@ mod tests {
         );
 
         // Test orchestrator
-        std::env::set_var("VILLALOBOS_AGENT_TYPE", "orchestrator");
+        std::env::set_var("PAPERBOAT_AGENT_TYPE", "orchestrator");
         let response = handle_request(&request, &socket_path)
             .await
             .unwrap()
@@ -948,7 +948,7 @@ mod tests {
         );
 
         // Test implementer
-        std::env::set_var("VILLALOBOS_AGENT_TYPE", "implementer");
+        std::env::set_var("PAPERBOAT_AGENT_TYPE", "implementer");
         let response = handle_request(&request, &socket_path)
             .await
             .unwrap()

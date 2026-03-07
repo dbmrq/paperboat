@@ -50,24 +50,24 @@ async fn main() -> Result<()> {
     if mcp_server_mode {
         // Simple console-only logging for MCP server mode
         tracing_subscriber::fmt()
-            .with_env_filter("villalobos=info,info")
+            .with_env_filter("paperboat=info,info")
             .init();
 
-        // Get socket path from --socket argument (preferred) or VILLALOBOS_SOCKET env var (fallback)
+        // Get socket path from --socket argument (preferred) or PAPERBOAT_SOCKET env var (fallback)
         let socket_path = args
             .iter()
             .position(|a| a == "--socket")
             .and_then(|i| args.get(i + 1))
             .cloned()
-            .or_else(|| std::env::var("VILLALOBOS_SOCKET").ok())
-            .expect("Socket path required: use --socket <path> or set VILLALOBOS_SOCKET");
+            .or_else(|| std::env::var("PAPERBOAT_SOCKET").ok())
+            .expect("Socket path required: use --socket <path> or set PAPERBOAT_SOCKET");
 
         tracing::info!("Running in MCP server mode (socket={})", socket_path);
         return mcp_server::run_stdio_server(PathBuf::from(socket_path)).await;
     }
 
     // Create run directory first (so we can put logs there)
-    let log_base = std::env::var("VILLALOBOS_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
+    let log_base = std::env::var("PAPERBOAT_LOG_DIR").unwrap_or_else(|_| ".paperboat/logs".to_string());
     let log_manager = Arc::new(RunLogManager::new(&log_base)?);
     let run_dir = log_manager.run_dir().clone();
 
@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
         tui_logger::set_default_level(tui_logger::LevelFilter::Debug);
 
         // TUI mode: file logging + tui-logger (TUI takes over the terminal)
-        let file_filter = tracing_subscriber::EnvFilter::new("villalobos=debug,debug");
+        let file_filter = tracing_subscriber::EnvFilter::new("paperboat=debug,debug");
         let file_layer = fmt::layer()
             .with_ansi(false)
             .with_target(true)
@@ -111,7 +111,7 @@ async fn main() -> Result<()> {
         Some(std::thread::spawn(move || tui::run_tui(tui_rx)))
     } else {
         // Headless/console mode: normal output with ANSI colors + file logging
-        let file_filter = tracing_subscriber::EnvFilter::new("villalobos=debug,debug");
+        let file_filter = tracing_subscriber::EnvFilter::new("paperboat=debug,debug");
         let file_layer = fmt::layer()
             .with_ansi(false)
             .with_target(true)
@@ -120,7 +120,7 @@ async fn main() -> Result<()> {
             .with_filter(file_filter);
 
         let console_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "villalobos=info,info".into());
+            .unwrap_or_else(|_| "paperboat=info,info".into());
         let console_layer = fmt::layer()
             .with_ansi(true)
             .with_target(true)
@@ -138,7 +138,7 @@ async fn main() -> Result<()> {
     // Non-TUI build: standard console output + file logging
     #[cfg(not(feature = "tui"))]
     {
-        let file_filter = tracing_subscriber::EnvFilter::new("villalobos=debug,debug");
+        let file_filter = tracing_subscriber::EnvFilter::new("paperboat=debug,debug");
         let file_layer = fmt::layer()
             .with_ansi(false)
             .with_target(true)
@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
             .with_filter(file_filter);
 
         let console_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "villalobos=info,info".into());
+            .unwrap_or_else(|_| "paperboat=info,info".into());
         let console_layer = fmt::layer()
             .with_ansi(true)
             .with_target(true)
@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
     tracing::info!("📁 Run directory: {:?}", run_dir);
 
     // Load agent configurations from config files
-    // Project-level (.villalobos/agents/) overrides user-level (~/.villalobos/agents/)
+    // Project-level (.paperboat/agents/) overrides user-level (~/.paperboat/agents/)
     tracing::info!("📂 Loading agent configurations...");
     let loaded_configs = load_agent_configs()?;
     tracing::debug!("Loaded configs: {:?}", loaded_configs);

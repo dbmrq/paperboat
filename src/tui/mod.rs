@@ -10,7 +10,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! villalobos = { version = "0.1", features = ["tui"] }
+//! paperboat = { version = "0.1", features = ["tui"] }
 //! ```
 //!
 //! # Architecture
@@ -83,7 +83,7 @@ pub use task_list_state::{TaskDisplay, TaskListState};
 /// # Example
 ///
 /// ```ignore
-/// let run_log_manager = RunLogManager::new("logs")?;
+/// let run_log_manager = RunLogManager::new(".paperboat/logs")?;
 /// let broadcast_rx = run_log_manager.subscribe();
 /// let event_rx = spawn_event_bridge(broadcast_rx);
 ///

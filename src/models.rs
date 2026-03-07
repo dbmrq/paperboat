@@ -126,16 +126,16 @@ impl ModelConfig {
     /// Applies debug build model override.
     ///
     /// In debug builds, all models default to Haiku for fast, cheap testing.
-    /// This can be overridden by setting the `VILLALOBOS_MODEL` environment variable.
+    /// This can be overridden by setting the `PAPERBOAT_MODEL` environment variable.
     ///
     /// In release builds, this is a no-op (respects user configuration).
     #[cfg(debug_assertions)]
     pub fn apply_debug_override(&mut self) {
         // Check for environment variable override first
-        if let Ok(model_str) = std::env::var("VILLALOBOS_MODEL") {
+        if let Ok(model_str) = std::env::var("PAPERBOAT_MODEL") {
             if let Ok(model_id) = ModelId::from_str(&model_str) {
                 tracing::info!(
-                    "🧪 VILLALOBOS_MODEL override: using {} for all agents",
+                    "🧪 PAPERBOAT_MODEL override: using {} for all agents",
                     model_id
                 );
                 self.orchestrator_model = model_id;
@@ -144,14 +144,14 @@ impl ModelConfig {
                 return;
             }
             tracing::warn!(
-                "⚠️  Invalid VILLALOBOS_MODEL '{}', falling back to debug default (haiku)",
+                "⚠️  Invalid PAPERBOAT_MODEL '{}', falling back to debug default (haiku)",
                 model_str
             );
         }
 
         // Debug build default: use Haiku for all agents (cheap and fast)
         tracing::info!(
-            "🧪 Debug build: using haiku4.5 for all agents (override with VILLALOBOS_MODEL)"
+            "🧪 Debug build: using haiku4.5 for all agents (override with PAPERBOAT_MODEL)"
         );
         self.orchestrator_model = ModelId::Haiku4_5;
         self.planner_model = ModelId::Haiku4_5;
@@ -509,7 +509,7 @@ mod tests {
     // Debug Override Tests
     // ========================================================================
 
-    // Use a mutex to serialize tests that modify VILLALOBOS_MODEL env var
+    // Use a mutex to serialize tests that modify PAPERBOAT_MODEL env var
     use std::sync::Mutex;
     static ENV_VAR_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -519,7 +519,7 @@ mod tests {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
 
         // Clear any env var that might interfere
-        std::env::remove_var("VILLALOBOS_MODEL");
+        std::env::remove_var("PAPERBOAT_MODEL");
 
         let mut config = ModelConfig::default();
         config.apply_debug_override();
@@ -535,7 +535,7 @@ mod tests {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
 
         // Set env var to override
-        std::env::set_var("VILLALOBOS_MODEL", "sonnet4.5");
+        std::env::set_var("PAPERBOAT_MODEL", "sonnet4.5");
 
         let mut config = ModelConfig::default();
         config.apply_debug_override();
@@ -545,7 +545,7 @@ mod tests {
         assert_eq!(config.implementer_model, ModelId::Sonnet4_5);
 
         // Clean up
-        std::env::remove_var("VILLALOBOS_MODEL");
+        std::env::remove_var("PAPERBOAT_MODEL");
     }
 
     #[test]
@@ -554,7 +554,7 @@ mod tests {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
 
         // Set invalid env var
-        std::env::set_var("VILLALOBOS_MODEL", "invalid-model");
+        std::env::set_var("PAPERBOAT_MODEL", "invalid-model");
 
         let mut config = ModelConfig::default();
         config.apply_debug_override();
@@ -565,6 +565,6 @@ mod tests {
         assert_eq!(config.implementer_model, ModelId::Haiku4_5);
 
         // Clean up
-        std::env::remove_var("VILLALOBOS_MODEL");
+        std::env::remove_var("PAPERBOAT_MODEL");
     }
 }

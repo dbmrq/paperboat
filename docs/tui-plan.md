@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add a Terminal User Interface (TUI) to villalobos for real-time visibility into agent execution, task progress, and application logs.
+Add a Terminal User Interface (TUI) to paperboat for real-time visibility into agent execution, task progress, and application logs.
 
 ## Requirements
 

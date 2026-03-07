@@ -1,11 +1,11 @@
-//! Configuration file loading for Villalobos
+//! Configuration file loading for Paperboat
 //!
 //! This module handles loading agent configuration from TOML files.
 //! Configuration is loaded from two locations, with project-level
 //! settings taking priority over user-level settings:
 //!
-//! 1. User-level: `~/.villalobos/agents/`
-//! 2. Project-level: `.villalobos/agents/`
+//! 1. User-level: `~/.paperboat/agents/`
+//! 2. Project-level: `.paperboat/agents/`
 //!
 //! Each agent type has its own configuration file:
 //! - `orchestrator.toml`
@@ -34,15 +34,15 @@ pub struct LoadedAgentConfigs {
     pub implementer: AgentFileConfig,
 }
 
-/// Returns the user-level config directory path (~/.villalobos/agents/)
+/// Returns the user-level config directory path (~/.paperboat/agents/)
 fn user_config_dir() -> PathBuf {
-    let home = shellexpand::tilde("~/.villalobos/agents").to_string();
+    let home = shellexpand::tilde("~/.paperboat/agents").to_string();
     PathBuf::from(home)
 }
 
-/// Returns the project-level config directory path (.villalobos/agents/)
+/// Returns the project-level config directory path (.paperboat/agents/)
 fn project_config_dir() -> PathBuf {
-    PathBuf::from(".villalobos/agents")
+    PathBuf::from(".paperboat/agents")
 }
 
 /// Loads a single agent config file from the given path

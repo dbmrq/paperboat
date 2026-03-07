@@ -298,7 +298,7 @@ impl AcpClientTrait for AcpClient {
             "protocolVersion": 1,
             "capabilities": {},
             "clientInfo": {
-                "name": "villalobos",
+                "name": "paperboat",
                 "version": "0.1.0"
             }
         });

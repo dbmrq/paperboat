@@ -336,7 +336,7 @@ mod tests {
         assert!(resp["result"]["capabilities"]["tools"].is_object());
         assert_eq!(
             resp["result"]["serverInfo"]["name"],
-            "villalobos-orchestrator"
+            "paperboat-orchestrator"
         );
     }
 
@@ -347,7 +347,7 @@ mod tests {
     #[tokio::test]
     async fn test_tools_list_returns_all_orchestrator_tools() {
         // Explicitly set agent type to orchestrator for this test
-        std::env::set_var("VILLALOBOS_AGENT_TYPE", "orchestrator");
+        std::env::set_var("PAPERBOAT_AGENT_TYPE", "orchestrator");
 
         let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
 
@@ -379,7 +379,7 @@ mod tests {
     #[tokio::test]
     async fn test_tools_list_has_correct_schemas() {
         // Explicitly set agent type to orchestrator for this test
-        std::env::set_var("VILLALOBOS_AGENT_TYPE", "orchestrator");
+        std::env::set_var("PAPERBOAT_AGENT_TYPE", "orchestrator");
 
         let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
 

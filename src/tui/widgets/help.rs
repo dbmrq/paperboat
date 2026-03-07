@@ -67,7 +67,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
 /// # Example
 ///
 /// ```ignore
-/// use villalobos::tui::widgets::render_help_overlay;
+/// use paperboat::tui::widgets::render_help_overlay;
 ///
 /// fn render(frame: &mut Frame, state: &TuiState) {
 ///     // Render main UI first...

@@ -10,18 +10,18 @@ use tokio::sync::mpsc;
 
 /// Strip MCP server prefixes from tool names for cleaner logging.
 ///
-/// Augment's ACP prefixes tool names with the MCP server name (e.g., `complete_villalobos-planner`
+/// Augment's ACP prefixes tool names with the MCP server name (e.g., `complete_paperboat-planner`
 /// instead of just `complete`). This function extracts the base tool name for readability.
 ///
 /// Returns the original title if no prefix pattern is found.
 fn strip_mcp_prefix(title: &str) -> &str {
-    // Pattern: toolname_servername (e.g., "complete_villalobos-planner")
+    // Pattern: toolname_servername (e.g., "complete_paperboat-planner")
     // We want to extract just "toolname"
     if let Some(underscore_pos) = title.find('_') {
         let potential_prefix = &title[..underscore_pos];
         let potential_suffix = &title[underscore_pos + 1..];
         // Check if suffix looks like our MCP server name
-        if potential_suffix.starts_with("villalobos-") {
+        if potential_suffix.starts_with("paperboat-") {
             return potential_prefix;
         }
     }

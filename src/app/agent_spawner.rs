@@ -284,14 +284,14 @@ impl App {
 
         // Build environment variables for the MCP server
         let mut env_vars = vec![json!({
-            "name": "VILLALOBOS_AGENT_TYPE",
+            "name": "PAPERBOAT_AGENT_TYPE",
             "value": spec.role.clone()
         })];
 
         // Add removed tools to environment if any
         if !removed_tools.is_empty() {
             env_vars.push(
-                json!({"name": "VILLALOBOS_REMOVED_TOOLS", "value": removed_tools.join(",")}),
+                json!({"name": "PAPERBOAT_REMOVED_TOOLS", "value": removed_tools.join(",")}),
             );
         }
 
@@ -299,7 +299,7 @@ impl App {
         // Use unique name based on role to prevent MCP server caching/reuse between agent types
         // Pass --socket directly to avoid env var caching issues across auggie sessions
         let mcp_servers = vec![json!({
-            "name": format!("villalobos-{}", spec.role),
+            "name": format!("paperboat-{}", spec.role),
             "command": binary_path.to_string_lossy(),
             "args": ["--mcp-server", "--socket", &socket_path],
             "env": env_vars
@@ -448,19 +448,19 @@ impl App {
 
         // Build environment variables for the MCP server
         let mut env_vars =
-            vec![json!({"name": "VILLALOBOS_AGENT_TYPE", "value": spec.role.clone()})];
+            vec![json!({"name": "PAPERBOAT_AGENT_TYPE", "value": spec.role.clone()})];
 
         // Add removed tools to environment if any
         if !removed_tools.is_empty() {
             env_vars.push(
-                json!({"name": "VILLALOBOS_REMOVED_TOOLS", "value": removed_tools.join(",")}),
+                json!({"name": "PAPERBOAT_REMOVED_TOOLS", "value": removed_tools.join(",")}),
             );
         }
 
         // Configure MCP server with agent type
         // Pass socket path as an ARG (not just env var) to ensure auggie spawns unique processes
         // Auggie may cache MCP servers by command+args, so unique args = unique process
-        let mcp_server_name = format!("villalobos-{}-{}", spec.role, &agent_id[..8]);
+        let mcp_server_name = format!("paperboat-{}-{}", spec.role, &agent_id[..8]);
         let mcp_servers = vec![json!({
             "name": mcp_server_name.clone(),
             "command": binary_path.to_string_lossy(),

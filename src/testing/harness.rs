@@ -32,7 +32,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// # Example
 ///
 /// ```rust,ignore
-/// use villalobos::testing::{TestHarness, MockScenario};
+/// use paperboat::testing::{TestHarness, MockScenario};
 ///
 /// let scenario = MockScenario::from_file("tests/scenarios/simple_implement.toml")?;
 /// let harness = TestHarness::with_scenario(scenario);

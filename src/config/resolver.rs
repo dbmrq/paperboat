@@ -10,7 +10,7 @@
 //! # Examples
 //!
 //! ```
-//! use villalobos::config::resolver::{parse_model_string, resolve_model};
+//! use paperboat::config::resolver::{parse_model_string, resolve_model};
 //!
 //! // Parse a model string
 //! let (family, version) = parse_model_string("sonnet4.5");

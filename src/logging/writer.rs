@@ -246,7 +246,7 @@ impl AgentWriter {
     }
 
     /// Write an MCP tool result (always logs both success and failure for MCP tools).
-    /// This is used for villalobos MCP tools (implement, decompose) which are more important to track.
+    /// This is used for paperboat MCP tools (implement, decompose) which are more important to track.
     pub async fn write_mcp_tool_result(
         &mut self,
         tool_name: &str,

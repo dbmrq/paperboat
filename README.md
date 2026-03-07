@@ -1,4 +1,4 @@
-# Villalobos
+# Paperboat
 
 An agentic AI orchestration framework for autonomous task execution.
 
@@ -24,7 +24,7 @@ cargo run --release --features tui -- --tui "your task description"
 
 ## Terminal User Interface (TUI)
 
-Villalobos includes an optional Terminal User Interface for real-time monitoring of agent activity.
+Paperboat includes an optional Terminal User Interface for real-time monitoring of agent activity.
 
 ### Enabling TUI Mode
 
@@ -222,9 +222,9 @@ The TUI runs on a dedicated OS thread separate from the async Tokio runtime:
 
 ## Logs
 
-Logs are stored in the `logs/` directory with timestamped run folders:
+Logs are stored in the `.paperboat/logs/` directory with timestamped run folders:
 ```
-logs/
+.paperboat/logs/
 └── 2026-03-07_14-30-45_abc123/
     ├── app.log           # Application logs
     ├── orchestrator.log  # Root orchestrator

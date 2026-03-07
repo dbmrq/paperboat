@@ -30,14 +30,14 @@ impl App {
 
         // Configure MCP server
         // For stdio transport, env is an array of {name, value} objects
-        // Use unique name "villalobos-orchestrator" to prevent caching issues
+        // Use unique name "paperboat-orchestrator" to prevent caching issues
         // Pass --socket directly to avoid env var caching issues across auggie sessions
         let mcp_servers = vec![json!({
-            "name": "villalobos-orchestrator",
+            "name": "paperboat-orchestrator",
             "command": binary_path.to_string_lossy(),
             "args": ["--mcp-server", "--socket", &socket_path],
             "env": [{
-                "name": "VILLALOBOS_AGENT_TYPE",
+                "name": "PAPERBOAT_AGENT_TYPE",
                 "value": "orchestrator"
             }]
         })];
