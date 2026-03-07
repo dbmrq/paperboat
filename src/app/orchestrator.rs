@@ -85,12 +85,26 @@ impl App {
         prompt: &str,
         writer: &mut AgentWriter,
     ) -> Result<TaskResult> {
-        let (session_id, full_prompt) = self.spawn_orchestrator(prompt).await?;
+        let (session_id, full_prompt) = match self.spawn_orchestrator(prompt).await {
+            Ok(result) => result,
+            Err(e) => {
+                // Write error to orchestrator log so it's not empty
+                let depth = self.current_scope.depth();
+                tracing::error!("[L{}] ❌ Failed to spawn orchestrator: {:#}", depth, e);
+                if let Err(write_err) = writer.write_spawn_error(&e).await {
+                    tracing::warn!("Failed to write spawn error to orchestrator log: {}", write_err);
+                }
+                // Note: finalize is called by the caller (run_execution_phase)
+                return Err(e);
+            }
+        };
         writer.set_session_id(session_id.clone());
         // Use the plan as the task description, but log the full prompt for debugging
         if let Err(e) = writer.write_header_with_prompt(prompt, &full_prompt).await {
             tracing::warn!("Failed to write orchestrator header: {}", e);
         }
+        // Emit AgentStarted event for TUI
+        writer.emit_agent_started(prompt);
 
         // Take tool_rx for this orchestrator run, but restore it when done
         let mut tool_rx = self.tool_rx.take().context("Tool receiver not set up")?;
@@ -107,16 +121,22 @@ impl App {
                             // Resolve task description from task_id if needed
                             let resolved_task = if let Some(ref tid) = task_id {
                                 let tm = self.task_manager.read().await;
-                                tm.get(tid)
-                                    .map(|t| t.description.clone())
-                                    .unwrap_or_else(|| {
-                                        format!("(task {} not found)", tid)
-                                    })
+                                // Use get_by_id_or_name for flexible lookup (supports both IDs and names)
+                                tm.get_by_id_or_name(tid)
+                                    .map_or_else(|| {
+                                        tracing::warn!(
+                                            "Task '{}' not found in TaskManager. Available: {:?}",
+                                            tid,
+                                            tm.list_task_ids()
+                                        );
+                                        format!("(task {tid} not found)")
+                                    }, |t| t.description.clone())
                             } else {
                                 task.clone().unwrap_or_else(|| "(no task)".to_string())
                             };
 
                             // Log the MCP tool call to orchestrator log
+                            let depth = self.current_scope.depth();
                             let _ = writer
                                 .write_mcp_tool_call(
                                     "decompose",
@@ -124,7 +144,8 @@ impl App {
                                 )
                                 .await;
                             tracing::info!(
-                                "🔄 MCP tool call: decompose({})",
+                                "[L{}] 🔄 decompose({})",
+                                depth,
                                 truncate_for_log(&resolved_task, 80)
                             );
 
@@ -149,9 +170,10 @@ impl App {
                         ToolCall::SpawnAgents { ref agents, ref wait } => {
                             // Log the MCP tool call to orchestrator log
                             let agent_count = agents.len();
+                            let depth = self.current_scope.depth();
                             let desc = format!("{agent_count} agent(s), wait={wait:?}");
                             let _ = writer.write_mcp_tool_call("spawn_agents", &desc).await;
-                            tracing::info!("🚀 MCP tool call: spawn_agents({agent_count} agents, wait={wait:?})");
+                            tracing::info!("[L{}] 🚀 spawn_agents({agent_count} agents, wait={wait:?})", depth);
 
                             // Log each agent being spawned
                             for (i, agent) in agents.iter().enumerate() {
@@ -162,7 +184,8 @@ impl App {
                                     .or(agent.task_id.as_deref())
                                     .unwrap_or("(no task)");
                                 tracing::info!(
-                                    "  📋 Agent {}/{}: [{}] {}",
+                                    "[L{}]   📋 Agent {}/{}: [{}] {}",
+                                    depth,
                                     i + 1,
                                     agent_count,
                                     role,
@@ -174,14 +197,12 @@ impl App {
                             let mut validation_error: Option<String> = None;
                             for agent in agents {
                                 let role = agent.role.as_deref().unwrap_or("implementer");
-                                if role.to_lowercase() == "custom" {
-                                    if agent.prompt.is_none() {
-                                        validation_error =
-                                            Some("Custom agent requires 'prompt' field".to_string());
-                                        break;
-                                    }
-                                    // tools is optional - if not provided, all default tools are enabled
+                                if role.to_lowercase() == "custom" && agent.prompt.is_none() {
+                                    validation_error =
+                                        Some("Custom agent requires 'prompt' field".to_string());
+                                    break;
                                 }
+                                // tools is optional - if not provided, all default tools are enabled
                                 // Validate that either task or task_id is provided
                                 if agent.task.is_none() && agent.task_id.is_none() {
                                     validation_error = Some(
@@ -269,12 +290,17 @@ impl App {
                                         agent.role.as_deref().unwrap_or("implementer").to_string();
                                     let task = if let Some(ref tid) = agent.task_id {
                                         // Look up task description from task manager
+                                        // Use get_by_id_or_name for flexible lookup
                                         let tm = self.task_manager.read().await;
-                                        tm.get(tid)
-                                            .map(|t| t.description.clone())
-                                            .unwrap_or_else(|| {
-                                                format!("(task {} not found)", tid)
-                                            })
+                                        tm.get_by_id_or_name(tid)
+                                            .map_or_else(|| {
+                                                tracing::warn!(
+                                                    "Task '{}' not found in TaskManager. Available: {:?}",
+                                                    tid,
+                                                    tm.list_task_ids()
+                                                );
+                                                format!("(task {tid} not found)")
+                                            }, |t| t.description.clone())
                                     } else {
                                         agent
                                             .task
@@ -389,7 +415,7 @@ impl App {
 
                             let response = ToolResponse::success(
                                 request.request_id.clone(),
-                                format!("Task '{}' created with ID: {}", name, task_id),
+                                format!("Task '{name}' created with ID: {task_id}"),
                             );
                             let _ = response_tx.send(response);
                         }

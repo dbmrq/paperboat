@@ -76,7 +76,7 @@ pub enum LogEvent {
         depth: u32,
     },
 
-    /// A task's state changed (e.g., pending -> in_progress -> completed).
+    /// A task's state changed (e.g., pending -> `in_progress` -> completed).
     TaskStateChanged {
         task_id: String,
         name: String,
@@ -99,11 +99,8 @@ mod tests {
             content: "Hello world".to_string(),
         };
 
-        // Test Clone
-        let cloned = event.clone();
-
         // Test Debug
-        let debug_str = format!("{:?}", cloned);
+        let debug_str = format!("{event:?}");
         assert!(debug_str.contains("AgentMessage"));
         assert!(debug_str.contains("Planner"));
     }
@@ -173,8 +170,8 @@ mod tests {
 
         for event in events {
             // All events should be cloneable and debuggable
-            let _ = event.clone();
-            let _ = format!("{:?}", event);
+            drop(event.clone());
+            let _ = format!("{event:?}");
         }
     }
 }

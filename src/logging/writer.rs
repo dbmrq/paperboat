@@ -66,9 +66,25 @@ impl AgentWriter {
         &self.path
     }
 
-    /// Associate this writer with a session ID.
+    /// Get the depth of this agent in the hierarchy (0 = root).
+    pub const fn depth(&self) -> u32 {
+        self.depth
+    }
+
+    /// Associate this writer with a session ID and emit `AgentStarted` event.
     pub fn set_session_id(&mut self, session_id: String) {
         self.session_id = Some(session_id);
+    }
+
+    /// Emit an `AgentStarted` event after the session has been created.
+    /// This should be called after `set_session_id` and after writing the header.
+    pub fn emit_agent_started(&self, task: &str) {
+        let _ = self.event_tx.send(LogEvent::AgentStarted {
+            agent_type: self.agent_type.clone(),
+            session_id: self.session_id.clone().unwrap_or_default(),
+            depth: self.depth,
+            task: task.to_string(),
+        });
     }
 
     /// Get the agent name (e.g., "implementer-001", "planner", "orchestrator").
@@ -144,7 +160,7 @@ impl AgentWriter {
 
     /// Write an agent tool call event (tools used by the agent like save-file, web-search, etc).
     ///
-    /// The `title` is the human-readable description from the ACP tool_call update.
+    /// The `title` is the human-readable description from the ACP `tool_call` update.
     /// This distinguishes agent tools from MCP tools (our orchestration tools).
     pub async fn write_tool_call(&mut self, title: &str) -> std::io::Result<()> {
         let timestamp = Local::now().format("%H:%M:%S");
@@ -161,7 +177,7 @@ impl AgentWriter {
         Ok(())
     }
 
-    /// Write an MCP tool call event (our orchestration tools like spawn_agents, complete, etc).
+    /// Write an MCP tool call event (our orchestration tools like `spawn_agents`, complete, etc).
     ///
     /// The `tool_name` is the actual MCP tool name.
     /// The `description` provides context about what the tool is doing.
@@ -213,7 +229,8 @@ impl AgentWriter {
         // Only write to file if it's an error - success results are noise
         if is_error {
             let timestamp = Local::now().format("%H:%M:%S");
-            let line = format!("[{timestamp}] ❌ Tool failed: {tool_name}\n{content}\n");
+            // Leading newline ensures separation from previous content
+            let line = format!("\n[{timestamp}] ❌ Tool failed: {tool_name}\n{content}\n");
             self.file.write_all(line.as_bytes()).await?;
         }
 
@@ -242,7 +259,8 @@ impl AgentWriter {
         } else {
             ("❌", "FAILED")
         };
-        let line = format!("[{timestamp}] {icon} MCP result: {tool_name} - {summary} ({status})\n");
+        // Leading newline ensures separation from previous content (e.g., agent output)
+        let line = format!("\n[{timestamp}] {icon} MCP result: {tool_name} - {summary} ({status})\n");
         self.file.write_all(line.as_bytes()).await?;
         self.file.flush().await?;
 
@@ -381,7 +399,10 @@ mod tests {
         writer.finalize(false).await.unwrap();
 
         let content = std::fs::read_to_string(dir.path().join("tools.log")).unwrap();
-        assert!(content.contains("Agent: view"), "Expected 'Agent: view' in log, got: {}", content);
+        assert!(
+            content.contains("Agent: view"),
+            "Expected 'Agent: view' in log, got: {content}",
+        );
         // Success results are no longer logged to file (only errors)
         assert!(!content.contains("Tool result: view"));
         assert!(content.contains("❌ Tool failed: save-file"));

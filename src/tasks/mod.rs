@@ -1,11 +1,11 @@
 //! Task tracking for structured plans.
 //!
 //! This module provides types for tracking tasks in a structured plan.
-//! Tasks have dependencies, statuses, and can be managed through the TaskManager.
+//! Tasks have dependencies, statuses, and can be managed through the `TaskManager`.
 
 mod manager;
 
-pub use manager::{AgentNote, GoalSummary, TaskManager};
+pub use manager::{TaskManager, TaskManagerSnapshot};
 
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -40,10 +40,11 @@ pub struct Task {
 ///
 /// Tasks progress through these statuses as work is performed.
 /// The status is serialized with a `type` tag for clean JSON representation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TaskStatus {
     /// Task has not been started yet.
+    #[default]
     NotStarted,
     /// Task is currently being worked on.
     InProgress {
@@ -64,9 +65,16 @@ pub enum TaskStatus {
     },
 }
 
-impl Default for TaskStatus {
-    fn default() -> Self {
-        Self::NotStarted
+impl TaskStatus {
+    /// Returns a simple string representation suitable for display in TUI.
+    ///
+    /// Returns one of: "pending", `in_progress`, "completed", "failed"
+    pub const fn as_display_str(&self) -> &'static str {
+        match self {
+            Self::NotStarted => "pending",
+            Self::InProgress { .. } => "in_progress",
+            Self::Complete { .. } => "completed",
+            Self::Failed { .. } => "failed",
+        }
     }
 }
-

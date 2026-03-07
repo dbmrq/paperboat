@@ -33,7 +33,7 @@ impl RunLogManager {
         Ok(Self { run_dir, event_tx })
     }
 
-    /// Create a RunLogManager with a specific run directory (for testing).
+    /// Create a `RunLogManager` with a specific run directory (for testing).
     #[cfg(test)]
     pub fn with_run_dir(run_dir: PathBuf) -> std::io::Result<Self> {
         std::fs::create_dir_all(&run_dir)?;

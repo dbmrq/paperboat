@@ -7,7 +7,7 @@ You are part of an automated chain of agents. Previous agents have worked on thi
 
 ## When Done
 
-Call `complete` with:
+Use the custom MCP tool provided to signal completion, including:
 
 - **success**: Whether you accomplished your task (true/false)
 - **message**: Brief summary of what you did

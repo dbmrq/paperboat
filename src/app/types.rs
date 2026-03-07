@@ -25,7 +25,7 @@ pub const ORCHESTRATOR_CACHE_DIR: &str = "~/.villalobos/augment-orchestrator";
 
 /// Path to the planner-specific auggie cache directory.
 /// This directory has a settings.json with built-in task management tools removed,
-/// so the planner uses our custom create_task tool instead.
+/// so the planner uses our custom `create_task` tool instead.
 pub const PLANNER_CACHE_DIR: &str = "~/.villalobos/augment-planner";
 
 // NOTE: Tool removal configuration is now centralized in `crate::agents::config`.
@@ -38,7 +38,7 @@ pub const ORCHESTRATOR_PROMPT: &str = include_str!("../../prompts/orchestrator.t
 pub const PLANNER_PROMPT: &str = include_str!("../../prompts/planner.txt");
 
 /// System prompt for the implementer agent (loaded from prompts/implementer.txt)
-/// Note: Kept for reference; actual prompt now comes from AgentRegistry.
+/// Note: Kept for reference; actual prompt now comes from `AgentRegistry`.
 #[allow(dead_code)]
 pub const IMPLEMENTER_PROMPT: &str = include_str!("../../prompts/implementer.txt");
 

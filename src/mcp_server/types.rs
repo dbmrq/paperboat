@@ -9,25 +9,25 @@
 /// `spawn_agents` tool calls.
 ///
 /// There are two ways to specify an agent:
-/// 1. **By task_id**: Just provide `task_id` (e.g., "task001"). The task description
-///    is looked up from TaskManager, and role defaults to "implementer".
+/// 1. **By `task_id`**: Just provide `task_id` (e.g., "task001"). The task description
+///    is looked up from `TaskManager`, and role defaults to "implementer".
 /// 2. **Explicitly**: Provide `role` and `task` directly. Use this for custom agents
 ///    or when not using the task tracking system.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AgentSpec {
     /// The role of the agent (e.g., "implementer", "verifier", "explorer", "custom").
-    /// Defaults to "implementer" when task_id is provided.
+    /// Defaults to "implementer" when `task_id` is provided.
     #[serde(default)]
     pub role: Option<String>,
     /// The task to be performed by this agent.
-    /// Optional when task_id is provided (looked up from TaskManager).
+    /// Optional when `task_id` is provided (looked up from `TaskManager`).
     #[serde(default)]
     pub task: Option<String>,
     /// Task ID linking this agent to a tracked task (e.g., "task001").
     /// When provided:
     /// - Task description is looked up automatically
     /// - Role defaults to "implementer"
-    /// - Status is auto-updated: InProgress → Complete/Failed
+    /// - Status is auto-updated: `InProgress` → Complete/Failed
     #[serde(default)]
     pub task_id: Option<String>,
     /// Custom prompt (required for role="custom", optional for others)
@@ -40,12 +40,12 @@ pub struct AgentSpec {
 
 /// A fully resolved agent specification with all required fields populated.
 ///
-/// Created from an `AgentSpec` by resolving task_id lookups and applying defaults.
+/// Created from an `AgentSpec` by resolving `task_id` lookups and applying defaults.
 #[derive(Debug, Clone)]
 pub struct ResolvedAgentSpec {
     /// The role of the agent (resolved from spec or defaulted to "implementer")
     pub role: String,
-    /// The task description (resolved from TaskManager if task_id was provided)
+    /// The task description (resolved from `TaskManager` if `task_id` was provided)
     pub task: String,
     /// The task ID if this agent is linked to a tracked task
     pub task_id: Option<String>,
@@ -56,19 +56,19 @@ pub struct ResolvedAgentSpec {
 }
 
 impl AgentSpec {
-    /// Resolve this spec into a fully-populated ResolvedAgentSpec.
+    /// Resolve this spec into a fully-populated `ResolvedAgentSpec`.
     ///
-    /// If task_id is provided, looks up the task description from the provided lookup function.
+    /// If `task_id` is provided, looks up the task description from the provided lookup function.
     /// Returns an error if:
-    /// - task_id is provided but the task is not found
-    /// - Neither task_id nor task is provided
+    /// - `task_id` is provided but the task is not found
+    /// - Neither `task_id` nor task is provided
     pub fn resolve<F>(&self, task_lookup: F) -> Result<ResolvedAgentSpec, String>
     where
         F: Fn(&str) -> Option<String>,
     {
         // Resolve task: either from task_id lookup or explicit task field
         let task = if let Some(ref tid) = self.task_id {
-            task_lookup(tid).ok_or_else(|| format!("Task '{}' not found", tid))?
+            task_lookup(tid).ok_or_else(|| format!("Task '{tid}' not found"))?
         } else if let Some(ref t) = self.task {
             t.clone()
         } else {
@@ -176,7 +176,7 @@ impl ToolResponse {
 /// A task suggested by an agent during completion.
 ///
 /// Agents can suggest tasks they discovered were needed but are outside their scope.
-/// These are added to the TaskManager and the orchestrator can act on them.
+/// These are added to the `TaskManager` and the orchestrator can act on them.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SuggestedTask {
     /// The name of the suggested task.
@@ -205,7 +205,7 @@ pub enum ToolCall {
     /// Request to decompose a task into subtasks.
     /// Either `task_id` or `task` must be provided.
     Decompose {
-        /// Task ID to decompose (e.g., "task001"). Looked up from TaskManager.
+        /// Task ID to decompose (e.g., "task001"). Looked up from `TaskManager`.
         #[serde(default)]
         task_id: Option<String>,
         /// Explicit task description to decompose.

@@ -140,9 +140,15 @@ async fn test_planning_produces_valid_plan() {
     );
 
     // Verify the task has substantive content
-    if let crate::mcp_server::ToolCall::CreateTask { name, description, .. } = &create_task_calls[0].call {
+    if let crate::mcp_server::ToolCall::CreateTask {
+        name, description, ..
+    } = &create_task_calls[0].call
+    {
         assert!(!name.is_empty(), "Task name should not be empty");
-        assert!(description.len() > 10, "Task description should have substantive content");
+        assert!(
+            description.len() > 10,
+            "Task description should have substantive content"
+        );
     }
 
     // No implement calls in planning-only scenario

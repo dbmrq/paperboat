@@ -182,7 +182,7 @@ mod tests {
             duration: Duration::from_secs(300),
             context: Some("session-123".to_string()),
         };
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains("300"));
         assert!(display.contains("waiting for session"));
         assert!(display.contains("session-123"));

@@ -67,9 +67,19 @@ impl App {
                 if let Err(e) = planner_writer.write_header_with_prompt(goal, &prompt).await {
                     tracing::warn!("Failed to write planner header: {}", e);
                 }
+                // Emit AgentStarted event for TUI
+                planner_writer.emit_agent_started(goal);
                 session
             }
             Err(e) => {
+                // Write error to planner log so it's not empty
+                tracing::error!("❌ Failed to spawn planner: {:#}", e);
+                if let Err(write_err) = planner_writer.write_spawn_error(&e).await {
+                    tracing::warn!("Failed to write spawn error to planner log: {}", write_err);
+                }
+                if let Err(finalize_err) = planner_writer.finalize(false).await {
+                    tracing::warn!("Failed to finalize planner log after spawn error: {}", finalize_err);
+                }
                 return Err(e);
             }
         };
@@ -81,6 +91,11 @@ impl App {
         {
             Ok(output) => output,
             Err(e) => {
+                // Finalize planner log with failure status before returning
+                tracing::error!("❌ Planner session failed: {}", e);
+                if let Err(finalize_err) = planner_writer.finalize(false).await {
+                    tracing::warn!("Failed to finalize planner log after session error: {}", finalize_err);
+                }
                 return Err(anyhow::anyhow!("{e}"));
             }
         };
@@ -88,6 +103,12 @@ impl App {
         // Finalize planner log
         if let Err(e) = planner_writer.finalize(true).await {
             tracing::warn!("Failed to finalize planner log: {}", e);
+        }
+
+        // Renumber tasks by execution order so IDs match execution sequence
+        {
+            let mut tm = self.task_manager.write().await;
+            tm.renumber_by_execution_order();
         }
 
         // Use structured tasks from TaskManager

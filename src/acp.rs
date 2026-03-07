@@ -107,7 +107,7 @@ impl AcpClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .kill_on_drop(true)  // Kill child when parent process dies
+            .kill_on_drop(true) // Kill child when parent process dies
             .spawn()
             .context("Failed to spawn auggie")?;
 

@@ -59,7 +59,7 @@ pub enum MockMcpToolCall {
         success: bool,
         message: Option<String>,
     },
-    /// Call the spawn_agents tool (orchestrator only).
+    /// Call the `spawn_agents` tool (orchestrator only).
     /// For backward compatibility, this accepts a single task and spawns one agent.
     SpawnAgents { task: String },
     /// Call the decompose tool (orchestrator only).

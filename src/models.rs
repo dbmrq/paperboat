@@ -142,16 +142,17 @@ impl ModelConfig {
                 self.planner_model = model_id;
                 self.implementer_model = model_id;
                 return;
-            } else {
-                tracing::warn!(
-                    "⚠️  Invalid VILLALOBOS_MODEL '{}', falling back to debug default (haiku)",
-                    model_str
-                );
             }
+            tracing::warn!(
+                "⚠️  Invalid VILLALOBOS_MODEL '{}', falling back to debug default (haiku)",
+                model_str
+            );
         }
 
         // Debug build default: use Haiku for all agents (cheap and fast)
-        tracing::info!("🧪 Debug build: using haiku4.5 for all agents (override with VILLALOBOS_MODEL)");
+        tracing::info!(
+            "🧪 Debug build: using haiku4.5 for all agents (override with VILLALOBOS_MODEL)"
+        );
         self.orchestrator_model = ModelId::Haiku4_5;
         self.planner_model = ModelId::Haiku4_5;
         self.implementer_model = ModelId::Haiku4_5;
@@ -450,12 +451,12 @@ mod tests {
 
     #[test]
     fn test_parse_model_list_multiple() {
-        let output = r#" - Haiku 4.5 [haiku4.5]
+        let output = r" - Haiku 4.5 [haiku4.5]
       Fast and efficient responses
  - Opus 4.5 [opus4.5]
       Best for complex tasks
  - Sonnet 4.5 [sonnet4.5]
-      Great for everyday tasks"#;
+      Great for everyday tasks";
 
         let models = parse_model_list(output).unwrap();
 
@@ -467,12 +468,12 @@ mod tests {
 
     #[test]
     fn test_parse_model_list_skips_unknown() {
-        let output = r#" - Haiku 4.5 [haiku4.5]
+        let output = r" - Haiku 4.5 [haiku4.5]
       Fast and efficient responses
  - Unknown Model [unknown-model]
       This should be skipped
  - Sonnet 4.5 [sonnet4.5]
-      Great for everyday tasks"#;
+      Great for everyday tasks";
 
         let models = parse_model_list(output).unwrap();
 
@@ -490,10 +491,10 @@ mod tests {
 
     #[test]
     fn test_parse_model_list_multiline_description() {
-        let output = r#" - Opus 4.5 [opus4.5]
+        let output = r" - Opus 4.5 [opus4.5]
       Best for complex tasks
       with multiple lines
-      of description"#;
+      of description";
 
         let models = parse_model_list(output).unwrap();
 

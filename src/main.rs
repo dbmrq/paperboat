@@ -9,6 +9,8 @@ mod models;
 mod tasks;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+#[cfg(feature = "tui")]
+mod tui;
 mod types;
 
 use anyhow::Result;
@@ -19,18 +21,41 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
+/// Parse command-line arguments and extract flags and the goal.
+///
+/// Returns (`headless_mode`, `mcp_server_mode`, goal)
+fn parse_args(args: &[String]) -> (bool, bool, Option<String>) {
+    // --headless disables TUI mode (TUI is enabled by default)
+    let headless_mode = args.contains(&"--headless".to_string());
+    let mcp_server_mode = args.get(1).is_some_and(|a| a == "--mcp-server");
+
+    // Goal is the first non-flag argument after the program name
+    let goal = args
+        .iter()
+        .skip(1)
+        .find(|arg| !arg.starts_with("--") && !arg.starts_with('-'))
+        .cloned();
+
+    (headless_mode, mcp_server_mode, goal)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Check if we're running in MCP server mode (before setting up full logging)
+    // Parse command-line arguments
     let args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 && args[1] == "--mcp-server" {
+    let (headless_mode, mcp_server_mode, goal_arg) = parse_args(&args);
+
+    // Handle MCP server mode FIRST - MCP server is inherently headless
+    // This must be checked before TUI mode logic since MCP servers don't use TUI
+    if mcp_server_mode {
         // Simple console-only logging for MCP server mode
         tracing_subscriber::fmt()
             .with_env_filter("villalobos=info,info")
             .init();
 
         // Get socket path from --socket argument (preferred) or VILLALOBOS_SOCKET env var (fallback)
-        let socket_path = args.iter()
+        let socket_path = args
+            .iter()
             .position(|a| a == "--socket")
             .and_then(|i| args.get(i + 1))
             .cloned()
@@ -46,42 +71,98 @@ async fn main() -> Result<()> {
     let log_manager = Arc::new(RunLogManager::new(&log_base)?);
     let run_dir = log_manager.run_dir().clone();
 
-    // Initialize logging with both console and file output
-    // Console filter: respects RUST_LOG env var, defaults to info level
-    let console_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "villalobos=info,info".into());
-
-    // File filter: always captures debug level for diagnostics
-    let file_filter = tracing_subscriber::EnvFilter::new("villalobos=debug,debug");
-
     // Write app log to run directory (not a rolling file)
     let log_file = std::fs::File::create(run_dir.join("app.log"))?;
     let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
 
-    // Console layer: with ANSI colors for readability
-    let console_layer = fmt::layer()
-        .with_ansi(true)
-        .with_target(true)
-        .with_level(true)
-        .with_filter(console_filter);
+    // Conditionally set up logging based on TUI mode
+    // TUI is enabled by default unless --headless is passed or stdout is not a terminal
+    #[cfg(feature = "tui")]
+    let tui_enabled = !headless_mode && std::io::IsTerminal::is_terminal(&std::io::stdout());
 
-    // File layer: no ANSI colors, with timestamps
-    let file_layer = fmt::layer()
-        .with_ansi(false)
-        .with_target(true)
-        .with_level(true)
-        .with_writer(non_blocking)
-        .with_filter(file_filter);
+    #[cfg(feature = "tui")]
+    let tui_handle: Option<std::thread::JoinHandle<anyhow::Result<()>>> = if tui_enabled {
+        // Initialize tui-logger for the App Logs panel
+        tui_logger::init_logger(tui_logger::LevelFilter::Debug)
+            .expect("Failed to initialize tui-logger");
+        tui_logger::set_default_level(tui_logger::LevelFilter::Debug);
 
-    tracing_subscriber::registry()
-        .with(console_layer)
-        .with(file_layer)
-        .init();
+        // TUI mode: file logging + tui-logger (TUI takes over the terminal)
+        let file_filter = tracing_subscriber::EnvFilter::new("villalobos=debug,debug");
+        let file_layer = fmt::layer()
+            .with_ansi(false)
+            .with_target(true)
+            .with_level(true)
+            .with_writer(non_blocking)
+            .with_filter(file_filter);
 
-    // Get goal from command line
-    let goal = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "Create a simple hello world program in Python".to_string());
+        // Add tui-logger's tracing layer to capture logs for the App Logs panel
+        tracing_subscriber::registry()
+            .with(file_layer)
+            .with(tui_logger::TuiTracingSubscriberLayer)
+            .init();
+
+        // Subscribe to log events for TUI
+        let log_event_rx = log_manager.subscribe();
+
+        // Spawn event bridge and TUI thread
+        let tui_rx = tui::spawn_event_bridge(log_event_rx);
+
+        Some(std::thread::spawn(move || tui::run_tui(tui_rx)))
+    } else {
+        // Headless/console mode: normal output with ANSI colors + file logging
+        let file_filter = tracing_subscriber::EnvFilter::new("villalobos=debug,debug");
+        let file_layer = fmt::layer()
+            .with_ansi(false)
+            .with_target(true)
+            .with_level(true)
+            .with_writer(non_blocking)
+            .with_filter(file_filter);
+
+        let console_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "villalobos=info,info".into());
+        let console_layer = fmt::layer()
+            .with_ansi(true)
+            .with_target(true)
+            .with_level(true)
+            .with_filter(console_filter);
+
+        tracing_subscriber::registry()
+            .with(console_layer)
+            .with(file_layer)
+            .init();
+
+        None
+    };
+
+    // Non-TUI build: standard console output + file logging
+    #[cfg(not(feature = "tui"))]
+    {
+        let file_filter = tracing_subscriber::EnvFilter::new("villalobos=debug,debug");
+        let file_layer = fmt::layer()
+            .with_ansi(false)
+            .with_target(true)
+            .with_level(true)
+            .with_writer(non_blocking)
+            .with_filter(file_filter);
+
+        let console_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "villalobos=info,info".into());
+        let console_layer = fmt::layer()
+            .with_ansi(true)
+            .with_target(true)
+            .with_level(true)
+            .with_filter(console_filter);
+
+        tracing_subscriber::registry()
+            .with(console_layer)
+            .with(file_layer)
+            .init();
+    }
+
+    // Get goal from parsed arguments
+    let goal =
+        goal_arg.unwrap_or_else(|| "Create a simple hello world program in Python".to_string());
 
     tracing::info!("📁 Run directory: {:?}", run_dir);
 
@@ -130,8 +211,12 @@ async fn main() -> Result<()> {
         #[cfg(unix)]
         {
             use tokio::signal::unix::{signal, SignalKind};
-            let mut sigterm = signal(SignalKind::terminate()).expect("Failed to set up SIGTERM handler");
-            let mut sigint = signal(SignalKind::interrupt()).expect("Failed to set up SIGINT handler");
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("Failed to set up SIGTERM handler");
+            let mut sigint =
+                signal(SignalKind::interrupt()).expect("Failed to set up SIGINT handler");
+            let mut sighup =
+                signal(SignalKind::hangup()).expect("Failed to set up SIGHUP handler");
 
             tokio::select! {
                 _ = sigterm.recv() => {
@@ -140,10 +225,14 @@ async fn main() -> Result<()> {
                 _ = sigint.recv() => {
                     tracing::info!("📴 Received SIGINT, initiating shutdown...");
                 }
+                _ = sighup.recv() => {
+                    tracing::info!("📴 Received SIGHUP (terminal closed), initiating shutdown...");
+                }
             }
 
             // Signal main task to shutdown
-            if let Some(tx) = signal_shutdown_tx.lock().unwrap().take() {
+            let tx_opt = signal_shutdown_tx.lock().unwrap().take();
+            if let Some(tx) = tx_opt {
                 let _ = tx.send(());
             }
         }
@@ -161,6 +250,25 @@ async fn main() -> Result<()> {
 
     // Normal completion - gracefully shutdown all processes
     app.shutdown().await?;
+
+    // Wait for TUI thread to finish if it was started
+    #[cfg(feature = "tui")]
+    if let Some(handle) = tui_handle {
+        // The TUI thread will exit when it receives the quit command or the channel closes
+        match handle.join() {
+            Ok(Ok(())) => {
+                tracing::debug!("TUI thread exited cleanly");
+            }
+            Ok(Err(e)) => {
+                // TUI had an error but we don't want to fail the whole app
+                tracing::warn!("TUI thread exited with error: {}", e);
+            }
+            Err(_) => {
+                // Thread panicked, but we handled it with the panic hook
+                tracing::warn!("TUI thread panicked");
+            }
+        }
+    }
 
     if result.success {
         println!("\n✅ Task completed successfully!");

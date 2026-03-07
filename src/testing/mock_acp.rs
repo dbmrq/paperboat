@@ -228,7 +228,11 @@ impl MockAcpClient {
 
         // Convert MockMcpToolCall to ToolCall
         let tool_call = match &pending.tool_call {
-            MockMcpToolCall::CreateTask { name, description, dependencies } => ToolCall::CreateTask {
+            MockMcpToolCall::CreateTask {
+                name,
+                description,
+                dependencies,
+            } => ToolCall::CreateTask {
                 name: name.clone(),
                 description: description.clone(),
                 dependencies: dependencies.clone(),

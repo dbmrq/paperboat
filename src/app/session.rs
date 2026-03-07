@@ -21,9 +21,6 @@ impl App {
                             update.get("sessionUpdate").and_then(|v| v.as_str())
                         {
                             match session_update {
-                                "agent_message_chunk" | "agent_thought_chunk" => {
-                                    // Message chunks are logged by AgentWriter elsewhere
-                                }
                                 "tool_call" => {
                                     if let Some(title) =
                                         update.get("title").and_then(|t| t.as_str())
@@ -53,6 +50,7 @@ impl App {
                                         );
                                     }
                                 }
+                                // agent_message_chunk, agent_thought_chunk, and others are logged elsewhere or ignored
                                 _ => {}
                             }
                         }
@@ -210,7 +208,7 @@ impl App {
 
                             let response = ToolResponse::success(
                                 request.request_id,
-                                format!("Task '{}' created with id {}", name, task_id),
+                                format!("Task '{name}' created with id {task_id}"),
                             );
                             let _ = response_tx.send(response);
                         }
@@ -227,7 +225,7 @@ impl App {
 
                             let response = ToolResponse::success(
                                 request.request_id,
-                                format!("Goal set: {}", summary),
+                                format!("Goal set: {summary}"),
                             );
                             let _ = response_tx.send(response);
                         }
@@ -328,7 +326,7 @@ impl App {
 
                             let response = ToolResponse::success(
                                 request.request_id,
-                                format!("Task '{}' created with id {}", name, task_id),
+                                format!("Task '{name}' created with id {task_id}"),
                             );
                             let _ = response_tx.send(response);
                         }
@@ -345,7 +343,7 @@ impl App {
 
                             let response = ToolResponse::success(
                                 request.request_id,
-                                format!("Goal set: {}", summary),
+                                format!("Goal set: {summary}"),
                             );
                             let _ = response_tx.send(response);
                         }
@@ -362,37 +360,31 @@ impl App {
 
                 // Poll worker client (handles implementer sessions)
                 msg_result = self.acp_worker.recv(), if !worker_exhausted => {
-                    match msg_result {
-                        Ok(msg) => {
-                            let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
-                            if finished {
-                                self.tool_rx = Some(tool_rx);
-                                return Ok(output);
-                            }
+                    if let Ok(msg) = msg_result {
+                        let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
+                        if finished {
+                            self.tool_rx = Some(tool_rx);
+                            return Ok(output);
                         }
-                        Err(_) => {
-                            // Worker client exhausted (mock client)
-                            worker_exhausted = true;
-                            tracing::trace!("Worker client exhausted");
-                        }
+                    } else {
+                        // Worker client exhausted (mock client)
+                        worker_exhausted = true;
+                        tracing::trace!("Worker client exhausted");
                     }
                 }
 
                 // Poll planner client (handles planner sessions)
                 msg_result = self.acp_planner.recv(), if !planner_exhausted => {
-                    match msg_result {
-                        Ok(msg) => {
-                            let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
-                            if finished {
-                                self.tool_rx = Some(tool_rx);
-                                return Ok(output);
-                            }
+                    if let Ok(msg) = msg_result {
+                        let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
+                        if finished {
+                            self.tool_rx = Some(tool_rx);
+                            return Ok(output);
                         }
-                        Err(_) => {
-                            // Planner client exhausted (mock client)
-                            planner_exhausted = true;
-                            tracing::trace!("Planner client exhausted");
-                        }
+                    } else {
+                        // Planner client exhausted (mock client)
+                        planner_exhausted = true;
+                        tracing::trace!("Planner client exhausted");
                     }
                 }
             }

@@ -1,5 +1,5 @@
 //! End-to-end tests that verify the complete application flow from goal to completion.
-//! These tests exercise the full App::run() path and ensure all components integrate correctly.
+//! These tests exercise the full `App::run()` path and ensure all components integrate correctly.
 
 use super::*;
 use std::path::Path;
@@ -13,13 +13,13 @@ use std::time::Duration;
 ///
 /// This test verifies the most basic complete flow:
 /// 1. Goal is submitted
-/// 2. Planner creates tasks using create_task tool
+/// 2. Planner creates tasks using `create_task` tool
 /// 3. Planner calls complete
 /// 4. Orchestrator receives the plan
 /// 5. Orchestrator calls implement for a task
 /// 6. Implementer executes and calls complete
 /// 7. Orchestrator calls complete
-/// 8. Final TaskResult indicates success with meaningful message
+/// 8. Final `TaskResult` indicates success with meaningful message
 #[tokio::test]
 async fn test_e2e_complete_task_lifecycle() {
     // Load the simple_implement scenario which tests the basic flow
@@ -76,8 +76,7 @@ async fn test_e2e_complete_task_lifecycle() {
     // Planner should come before orchestrator
     assert!(
         planner_idx.unwrap() < orch_idx.unwrap(),
-        "Planner session should be created before orchestrator. Sessions: {:?}",
-        sessions
+        "Planner session should be created before orchestrator. Sessions: {sessions:?}",
     );
 
     // ----------------------------------------------------------------
@@ -200,13 +199,11 @@ async fn test_e2e_with_decomposition() {
     let decompose_task = &decompose_calls[0];
     assert!(
         decompose_task.len() > 10,
-        "Decompose task should have substantive content, got: {}",
-        decompose_task
+        "Decompose task should have substantive content, got: {decompose_task}",
     );
     assert!(
         decompose_task.to_lowercase().contains("auth"),
-        "Decompose task should be about authentication, got: {}",
-        decompose_task
+        "Decompose task should be about authentication, got: {decompose_task}",
     );
 
     // ----------------------------------------------------------------
@@ -220,8 +217,7 @@ async fn test_e2e_with_decomposition() {
 
     assert!(
         planner_sessions.len() >= 2,
-        "Should have at least 2 planner sessions (main + decomposed), got: {:?}",
-        planner_sessions
+        "Should have at least 2 planner sessions (main + decomposed), got: {planner_sessions:?}",
     );
 
     // ----------------------------------------------------------------
@@ -268,7 +264,7 @@ async fn test_e2e_with_decomposition() {
 /// E2E Test: Multiple implementers in sequence
 ///
 /// This test verifies that multiple implement calls are handled correctly:
-/// 1. Orchestrator makes multiple implement() calls
+/// 1. Orchestrator makes multiple `implement()` calls
 /// 2. Each implementer session is spawned and completes
 /// 3. All tool calls are captured with correct arguments
 #[tokio::test]
@@ -300,9 +296,8 @@ async fn test_e2e_multiple_implementers() {
 
     assert!(
         impl_sessions.len() >= 3,
-        "Should have at least 3 implementer sessions, got {}: {:?}",
+        "Should have at least 3 implementer sessions, got {}: {impl_sessions:?}",
         impl_sessions.len(),
-        impl_sessions
     );
 
     // ----------------------------------------------------------------
@@ -312,9 +307,8 @@ async fn test_e2e_multiple_implementers() {
     assert_eq!(
         impl_calls.len(),
         3,
-        "Should have exactly 3 implement calls, got {}: {:?}",
+        "Should have exactly 3 implement calls, got {}: {impl_calls:?}",
         impl_calls.len(),
-        impl_calls
     );
 
     // ----------------------------------------------------------------
@@ -325,18 +319,15 @@ async fn test_e2e_multiple_implementers() {
     // Each implement call should be for a different task
     assert!(
         all_calls_text.contains("database") || all_calls_text.contains("schema"),
-        "Should have a database-related task, got: {:?}",
-        impl_calls
+        "Should have a database-related task, got: {impl_calls:?}",
     );
     assert!(
         all_calls_text.contains("user") || all_calls_text.contains("service"),
-        "Should have a user service task, got: {:?}",
-        impl_calls
+        "Should have a user service task, got: {impl_calls:?}",
     );
     assert!(
         all_calls_text.contains("api") || all_calls_text.contains("endpoint"),
-        "Should have an API endpoint task, got: {:?}",
-        impl_calls
+        "Should have an API endpoint task, got: {impl_calls:?}",
     );
 
     // ----------------------------------------------------------------
@@ -354,17 +345,17 @@ async fn test_e2e_multiple_implementers() {
         "Should have 3 implement tool calls captured"
     );
 
-    for (i, tc) in impl_tool_calls.iter().enumerate() {
+    for (idx, tc) in impl_tool_calls.iter().enumerate() {
         assert!(
             tc.response.success,
             "Implement call {} should have succeeded, got: {:?}",
-            i + 1,
+            idx + 1,
             tc.response
         );
         assert!(
             !tc.response.request_id.is_empty(),
             "Implement call {} should have request_id",
-            i + 1
+            idx + 1
         );
     }
 
@@ -377,8 +368,7 @@ async fn test_e2e_multiple_implementers() {
         message.to_lowercase().contains("complet")
             || message.to_lowercase().contains("success")
             || message.to_lowercase().contains("done"),
-        "Final message should indicate completion, got: {}",
-        message
+        "Final message should indicate completion, got: {message}",
     );
 }
 
@@ -388,7 +378,7 @@ async fn test_e2e_multiple_implementers() {
 
 /// E2E Test: Verify prompts contain expected content
 ///
-/// Tests that the expected_prompt_contains validation in MockAcpClient works
+/// Tests that the `expected_prompt_contains` validation in `MockAcpClient` works
 /// and that prompts flow correctly between agents.
 #[tokio::test]
 async fn test_e2e_prompt_content_verification() {
@@ -503,11 +493,11 @@ async fn test_e2e_tool_call_arguments_verification() {
         "Should have a create_task tool call"
     );
 
-    if let crate::mcp_server::ToolCall::CreateTask { name, description, .. } = &create_task_call.unwrap().call {
-        assert!(
-            !name.is_empty(),
-            "Task name should not be empty"
-        );
+    if let crate::mcp_server::ToolCall::CreateTask {
+        name, description, ..
+    } = &create_task_call.unwrap().call
+    {
+        assert!(!name.is_empty(), "Task name should not be empty");
         assert!(
             description.len() > 10,
             "Task description should have substantive content (>10 chars), got {} chars",
@@ -541,8 +531,7 @@ async fn test_e2e_tool_call_arguments_verification() {
         assert!(!task.is_empty(), "SpawnAgents task should not be empty");
         assert!(
             task.to_lowercase().contains("error") || task.to_lowercase().contains("handling"),
-            "SpawnAgents task should relate to the goal, got: {}",
-            task
+            "SpawnAgents task should relate to the goal, got: {task}",
         );
     }
 
@@ -577,7 +566,7 @@ async fn test_e2e_tool_call_arguments_verification() {
 
 /// E2E Test: Verify final result message is meaningful
 ///
-/// Tests that the final TaskResult has a meaningful message that describes
+/// Tests that the final `TaskResult` has a meaningful message that describes
 /// what was accomplished.
 #[tokio::test]
 async fn test_e2e_final_result_message_meaningful() {

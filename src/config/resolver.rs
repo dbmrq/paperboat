@@ -196,7 +196,7 @@ mod tests {
     fn create_test_model(id: ModelId) -> AvailableModel {
         AvailableModel {
             id,
-            name: format!("{:?}", id),
+            name: format!("{id:?}"),
             description: "Test model".to_string(),
         }
     }

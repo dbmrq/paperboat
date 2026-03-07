@@ -28,7 +28,10 @@ use tokio::sync::Mutex;
 /// the MCP response back to stdout.
 pub async fn run_stdio_server(socket_path: PathBuf) -> Result<()> {
     // Log to stderr which auggie captures
-    eprintln!("🔌 MCP server PID={} starting with socket path: {socket_path:?}", std::process::id());
+    eprintln!(
+        "🔌 MCP server PID={} starting with socket path: {socket_path:?}",
+        std::process::id()
+    );
 
     let stdin = tokio::io::stdin();
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
@@ -196,7 +199,7 @@ mod tests {
 
         match deserialized {
             ToolCall::Decompose { task_id: _, task } => {
-                assert_eq!(task, Some("Build a REST API".to_string()))
+                assert_eq!(task, Some("Build a REST API".to_string()));
             }
             _ => panic!("Expected Decompose variant"),
         }
@@ -239,7 +242,9 @@ mod tests {
         let deserialized: ToolCall = serde_json::from_str(&json_str).unwrap();
 
         match deserialized {
-            ToolCall::Complete { success, message, .. } => {
+            ToolCall::Complete {
+                success, message, ..
+            } => {
                 assert!(success);
                 assert_eq!(message, Some("All done!".to_string()));
             }
@@ -259,7 +264,9 @@ mod tests {
         let deserialized: ToolCall = serde_json::from_str(&json_str).unwrap();
 
         match deserialized {
-            ToolCall::Complete { success, message, .. } => {
+            ToolCall::Complete {
+                success, message, ..
+            } => {
                 assert!(!success);
                 assert!(message.is_none());
             }
@@ -280,7 +287,7 @@ mod tests {
         let parsed: ToolCall = serde_json::from_str(&json_str).unwrap();
         match parsed {
             ToolCall::Decompose { task_id: _, task } => {
-                assert_eq!(task, Some("Test task".to_string()))
+                assert_eq!(task, Some("Test task".to_string()));
             }
             _ => panic!("Unexpected variant"),
         }
@@ -290,7 +297,7 @@ mod tests {
     // Request Builder Helpers for Testing
     // ========================================================================
 
-    fn make_json_rpc_request(id: impl Into<Value>, method: &str, params: Value) -> Value {
+    fn make_json_rpc_request(id: impl Into<Value>, method: &str, params: &Value) -> Value {
         json!({
             "jsonrpc": "2.0",
             "id": id.into(),
@@ -299,11 +306,11 @@ mod tests {
         })
     }
 
-    fn make_tool_call_request(id: impl Into<Value>, tool_name: &str, arguments: Value) -> Value {
+    fn make_tool_call_request(id: impl Into<Value>, tool_name: &str, arguments: &Value) -> Value {
         make_json_rpc_request(
             id,
             "tools/call",
-            json!({
+            &json!({
                 "name": tool_name,
                 "arguments": arguments
             }),
@@ -319,7 +326,7 @@ mod tests {
         // For non-tool-call methods, we don't need a real socket - just a dummy path
         let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
 
-        let request = make_json_rpc_request(1, "initialize", json!({}));
+        let request = make_json_rpc_request(1, "initialize", &json!({}));
         let response = handle_request(&request, &socket_path).await.unwrap();
 
         let resp = response.unwrap();
@@ -344,15 +351,22 @@ mod tests {
 
         let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
 
-        let request = make_json_rpc_request(2, "tools/list", json!({}));
+        let request = make_json_rpc_request(2, "tools/list", &json!({}));
         let response = handle_request(&request, &socket_path).await.unwrap();
 
         let resp = response.unwrap();
         let tools = resp["result"]["tools"].as_array().unwrap();
 
         // Orchestrator has 4 tools: decompose, spawn_agents, complete, create_task
-        assert_eq!(tools.len(), 4, "Expected 4 orchestrator tools, got: {:?}",
-            tools.iter().map(|t| t["name"].as_str().unwrap_or("?")).collect::<Vec<_>>());
+        assert_eq!(
+            tools.len(),
+            4,
+            "Expected 4 orchestrator tools, got: {:?}",
+            tools
+                .iter()
+                .map(|t| t["name"].as_str().unwrap_or("?"))
+                .collect::<Vec<_>>()
+        );
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
 
@@ -369,7 +383,7 @@ mod tests {
 
         let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
 
-        let request = make_json_rpc_request(3, "tools/list", json!({}));
+        let request = make_json_rpc_request(3, "tools/list", &json!({}));
         let response = handle_request(&request, &socket_path).await.unwrap();
 
         let resp = response.unwrap();
@@ -399,7 +413,7 @@ mod tests {
     async fn test_unknown_method_with_id_returns_error() {
         let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
 
-        let request = make_json_rpc_request(4, "nonexistent/method", json!({}));
+        let request = make_json_rpc_request(4, "nonexistent/method", &json!({}));
         let response = handle_request(&request, &socket_path).await.unwrap();
 
         let resp = response.unwrap();
@@ -474,7 +488,7 @@ mod tests {
         let request = make_json_rpc_request(
             11,
             "tools/call",
-            json!({
+            &json!({
                 "arguments": {"task": "test"}
             }),
         );
@@ -491,7 +505,7 @@ mod tests {
         let request = make_json_rpc_request(
             12,
             "tools/call",
-            json!({
+            &json!({
                 "name": "decompose"
             }),
         );
@@ -505,7 +519,7 @@ mod tests {
     async fn test_decompose_missing_task_returns_error() {
         let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
 
-        let request = make_tool_call_request(13, "decompose", json!({}));
+        let request = make_tool_call_request(13, "decompose", &json!({}));
         let response = handle_request(&request, &socket_path).await.unwrap();
 
         let resp = response.unwrap();
@@ -517,7 +531,7 @@ mod tests {
     async fn test_spawn_agents_missing_agents_returns_error() {
         let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
 
-        let request = make_tool_call_request(14, "spawn_agents", json!({}));
+        let request = make_tool_call_request(14, "spawn_agents", &json!({}));
         let response = handle_request(&request, &socket_path).await.unwrap();
 
         let resp = response.unwrap();
@@ -532,7 +546,7 @@ mod tests {
         let request = make_tool_call_request(
             15,
             "complete",
-            json!({
+            &json!({
                 "message": "done"
             }),
         );
@@ -550,7 +564,7 @@ mod tests {
         let request = make_tool_call_request(
             16,
             "nonexistent_tool",
-            json!({
+            &json!({
                 "arg": "value"
             }),
         );

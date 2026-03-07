@@ -161,12 +161,10 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                     // Build dynamic descriptions with auto-discovered roles
                     let roles_list = crate::agents::SPAWNABLE_ROLES.join(", ");
                     let agents_desc = format!(
-                        "List of agents to spawn. Use task_id to reference planned tasks, or provide role+task for ad-hoc agents. Available roles: {} + 'custom' (requires prompt+tools).",
-                        roles_list
+                        "List of agents to spawn. Use task_id to reference planned tasks, or provide role+task for ad-hoc agents. Available roles: {roles_list} + 'custom' (requires prompt+tools).",
                     );
                     let role_desc = format!(
-                        "Agent type. Built-in roles: {}. Use 'custom' for agents with custom prompt+tools.",
-                        roles_list
+                        "Agent type. Built-in roles: {roles_list}. Use 'custom' for agents with custom prompt+tools.",
                     );
 
                     json!({
@@ -338,11 +336,11 @@ async fn handle_tool_call(
             let task_id = arguments
                 .get("task_id")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
             let task = arguments
                 .get("task")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
 
             // Require at least one of task_id or task
             if task_id.is_none() && task.is_none() {
@@ -401,7 +399,12 @@ async fn handle_tool_call(
                 let add_tasks = arguments
                     .get("add_tasks")
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
-                ToolCall::Complete { success, message, notes, add_tasks }
+                ToolCall::Complete {
+                    success,
+                    message,
+                    notes,
+                    add_tasks,
+                }
             } else {
                 tracing::warn!("⚠️  complete tool missing 'success' argument");
                 return Ok(Some(invalid_params_error(
@@ -423,17 +426,17 @@ async fn handle_tool_call(
                 )));
             };
 
-            let description =
-                if let Some(d) = arguments.get("description").and_then(|v| v.as_str()) {
-                    d.to_string()
-                } else {
-                    tracing::warn!("⚠️  create_task tool missing 'description' argument");
-                    return Ok(Some(invalid_params_error(
-                        id.as_ref(),
-                        "create_task",
-                        "requires 'description' string argument",
-                    )));
-                };
+            let description = if let Some(d) = arguments.get("description").and_then(|v| v.as_str())
+            {
+                d.to_string()
+            } else {
+                tracing::warn!("⚠️  create_task tool missing 'description' argument");
+                return Ok(Some(invalid_params_error(
+                    id.as_ref(),
+                    "create_task",
+                    "requires 'description' string argument",
+                )));
+            };
 
             let dependencies = arguments
                 .get("dependencies")
@@ -608,7 +611,9 @@ fn build_response_text(tool_call: &ToolCall, response: &super::types::ToolRespon
                 )
             }
         }
-        ToolCall::Complete { success, message, .. } => {
+        ToolCall::Complete {
+            success, message, ..
+        } => {
             if *success {
                 format!(
                     "✅ All tasks completed successfully!\n\n\
@@ -629,7 +634,7 @@ fn build_response_text(tool_call: &ToolCall, response: &super::types::ToolRespon
         }
         ToolCall::CreateTask { name, .. } => {
             if response.success {
-                format!("✅ Task '{}' created successfully.", name)
+                format!("✅ Task '{name}' created successfully.")
             } else {
                 format!(
                     "❌ Failed to create task '{}': {}",
@@ -641,8 +646,7 @@ fn build_response_text(tool_call: &ToolCall, response: &super::types::ToolRespon
         ToolCall::SetGoal { summary, .. } => {
             if response.success {
                 format!(
-                    "✅ Goal set: {}\n\nNow create tasks to achieve this goal.",
-                    summary
+                    "✅ Goal set: {summary}\n\nNow create tasks to achieve this goal.",
                 )
             } else {
                 format!(
@@ -677,8 +681,8 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// Test that planner agents only get create_task and complete tools.
-    /// Uses #[serial] because these tests modify the VILLALOBOS_AGENT_TYPE env var.
+    /// Test that planner agents only get `create_task` and complete tools.
+    /// Uses #[serial] because these tests modify the `VILLALOBOS_AGENT_TYPE` env var.
     #[tokio::test]
     #[serial]
     async fn test_planner_tool_access() {
@@ -692,13 +696,22 @@ mod tests {
         });
 
         let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+        let response = handle_request(&request, &socket_path)
+            .await
+            .unwrap()
+            .unwrap();
 
         let tool_names = extract_tool_names(&response);
 
         // Planner should have: create_task, complete
-        assert!(tool_names.contains("create_task"), "Planner should have create_task tool");
-        assert!(tool_names.contains("complete"), "Planner should have complete tool");
+        assert!(
+            tool_names.contains("create_task"),
+            "Planner should have create_task tool"
+        );
+        assert!(
+            tool_names.contains("complete"),
+            "Planner should have complete tool"
+        );
 
         // Planner should NOT have: spawn_agents, decompose
         assert!(
@@ -720,12 +733,11 @@ mod tests {
         assert_eq!(
             tool_names.len(),
             3,
-            "Planner should have exactly 3 tools (set_goal, create_task, complete), got: {:?}",
-            tool_names
+            "Planner should have exactly 3 tools (set_goal, create_task, complete), got: {tool_names:?}",
         );
     }
 
-    /// Test that orchestrator agents get all MCP tools including spawn_agents.
+    /// Test that orchestrator agents get all MCP tools including `spawn_agents`.
     #[tokio::test]
     #[serial]
     async fn test_orchestrator_tool_access() {
@@ -739,18 +751,37 @@ mod tests {
         });
 
         let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+        let response = handle_request(&request, &socket_path)
+            .await
+            .unwrap()
+            .unwrap();
 
         let tool_names = extract_tool_names(&response);
 
         // Orchestrator should have: decompose, spawn_agents, complete, create_task
-        assert!(tool_names.contains("decompose"), "Orchestrator should have decompose tool");
-        assert!(tool_names.contains("spawn_agents"), "Orchestrator should have spawn_agents tool");
-        assert!(tool_names.contains("complete"), "Orchestrator should have complete tool");
-        assert!(tool_names.contains("create_task"), "Orchestrator should have create_task tool");
+        assert!(
+            tool_names.contains("decompose"),
+            "Orchestrator should have decompose tool"
+        );
+        assert!(
+            tool_names.contains("spawn_agents"),
+            "Orchestrator should have spawn_agents tool"
+        );
+        assert!(
+            tool_names.contains("complete"),
+            "Orchestrator should have complete tool"
+        );
+        assert!(
+            tool_names.contains("create_task"),
+            "Orchestrator should have create_task tool"
+        );
 
         // Verify exact count
-        assert_eq!(tool_names.len(), 4, "Orchestrator should have exactly 4 tools, got: {:?}", tool_names);
+        assert_eq!(
+            tool_names.len(),
+            4,
+            "Orchestrator should have exactly 4 tools, got: {tool_names:?}",
+        );
     }
 
     /// Test that implementer agents only get the complete tool.
@@ -767,20 +798,39 @@ mod tests {
         });
 
         let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+        let response = handle_request(&request, &socket_path)
+            .await
+            .unwrap()
+            .unwrap();
 
         let tool_names = extract_tool_names(&response);
 
         // Implementer should only have: complete
-        assert!(tool_names.contains("complete"), "Implementer should have complete tool");
+        assert!(
+            tool_names.contains("complete"),
+            "Implementer should have complete tool"
+        );
 
         // Implementer should NOT have any other MCP tools
-        assert!(!tool_names.contains("spawn_agents"), "Implementer should NOT have spawn_agents tool");
-        assert!(!tool_names.contains("decompose"), "Implementer should NOT have decompose tool");
-        assert!(!tool_names.contains("create_task"), "Implementer should NOT have create_task tool");
+        assert!(
+            !tool_names.contains("spawn_agents"),
+            "Implementer should NOT have spawn_agents tool"
+        );
+        assert!(
+            !tool_names.contains("decompose"),
+            "Implementer should NOT have decompose tool"
+        );
+        assert!(
+            !tool_names.contains("create_task"),
+            "Implementer should NOT have create_task tool"
+        );
 
         // Verify exact count
-        assert_eq!(tool_names.len(), 1, "Implementer should have exactly 1 tool, got: {:?}", tool_names);
+        assert_eq!(
+            tool_names.len(),
+            1,
+            "Implementer should have exactly 1 tool, got: {tool_names:?}",
+        );
     }
 
     /// Test that unknown agent types default to orchestrator tools (fail-safe).
@@ -797,14 +847,26 @@ mod tests {
         });
 
         let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+        let response = handle_request(&request, &socket_path)
+            .await
+            .unwrap()
+            .unwrap();
 
         let tool_names = extract_tool_names(&response);
 
         // Unknown types should default to orchestrator tools
-        assert!(tool_names.contains("spawn_agents"), "Unknown agent type should default to having spawn_agents");
-        assert!(tool_names.contains("decompose"), "Unknown agent type should default to having decompose");
-        assert!(tool_names.contains("complete"), "Unknown agent type should default to having complete");
+        assert!(
+            tool_names.contains("spawn_agents"),
+            "Unknown agent type should default to having spawn_agents"
+        );
+        assert!(
+            tool_names.contains("decompose"),
+            "Unknown agent type should default to having decompose"
+        );
+        assert!(
+            tool_names.contains("complete"),
+            "Unknown agent type should default to having complete"
+        );
     }
 
     /// Test that missing agent type env var defaults to orchestrator tools.
@@ -821,12 +883,18 @@ mod tests {
         });
 
         let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+        let response = handle_request(&request, &socket_path)
+            .await
+            .unwrap()
+            .unwrap();
 
         let tool_names = extract_tool_names(&response);
 
         // Missing type should default to orchestrator tools
-        assert!(tool_names.contains("spawn_agents"), "Missing agent type should default to having spawn_agents");
+        assert!(
+            tool_names.contains("spawn_agents"),
+            "Missing agent type should default to having spawn_agents"
+        );
     }
 
     /// Test that MCP tools match the centralized config.
@@ -834,45 +902,69 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_mcp_tools_match_centralized_config() {
-        use crate::agents::{PLANNER_CONFIG, ORCHESTRATOR_CONFIG, IMPLEMENTER_CONFIG};
+        use crate::agents::{IMPLEMENTER_CONFIG, ORCHESTRATOR_CONFIG, PLANNER_CONFIG};
 
         let socket_path = PathBuf::from("/tmp/test-socket");
 
         // Test planner
         std::env::set_var("VILLALOBOS_AGENT_TYPE", "planner");
         let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
-        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+        let response = handle_request(&request, &socket_path)
+            .await
+            .unwrap()
+            .unwrap();
         let tool_names = extract_tool_names(&response);
 
         for expected_tool in PLANNER_CONFIG.mcp_tools {
-            assert!(tool_names.contains(*expected_tool),
-                    "Planner should have {} (from centralized config)", expected_tool);
+            assert!(
+                tool_names.contains(*expected_tool),
+                "Planner should have {expected_tool} (from centralized config)",
+            );
         }
-        assert_eq!(tool_names.len(), PLANNER_CONFIG.mcp_tools.len(),
-                   "Planner tool count should match config");
+        assert_eq!(
+            tool_names.len(),
+            PLANNER_CONFIG.mcp_tools.len(),
+            "Planner tool count should match config"
+        );
 
         // Test orchestrator
         std::env::set_var("VILLALOBOS_AGENT_TYPE", "orchestrator");
-        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+        let response = handle_request(&request, &socket_path)
+            .await
+            .unwrap()
+            .unwrap();
         let tool_names = extract_tool_names(&response);
 
         for expected_tool in ORCHESTRATOR_CONFIG.mcp_tools {
-            assert!(tool_names.contains(*expected_tool),
-                    "Orchestrator should have {} (from centralized config)", expected_tool);
+            assert!(
+                tool_names.contains(*expected_tool),
+                "Orchestrator should have {expected_tool} (from centralized config)",
+            );
         }
-        assert_eq!(tool_names.len(), ORCHESTRATOR_CONFIG.mcp_tools.len(),
-                   "Orchestrator tool count should match config");
+        assert_eq!(
+            tool_names.len(),
+            ORCHESTRATOR_CONFIG.mcp_tools.len(),
+            "Orchestrator tool count should match config"
+        );
 
         // Test implementer
         std::env::set_var("VILLALOBOS_AGENT_TYPE", "implementer");
-        let response = handle_request(&request, &socket_path).await.unwrap().unwrap();
+        let response = handle_request(&request, &socket_path)
+            .await
+            .unwrap()
+            .unwrap();
         let tool_names = extract_tool_names(&response);
 
         for expected_tool in IMPLEMENTER_CONFIG.mcp_tools {
-            assert!(tool_names.contains(*expected_tool),
-                    "Implementer should have {} (from centralized config)", expected_tool);
+            assert!(
+                tool_names.contains(*expected_tool),
+                "Implementer should have {expected_tool} (from centralized config)",
+            );
         }
-        assert_eq!(tool_names.len(), IMPLEMENTER_CONFIG.mcp_tools.len(),
-                   "Implementer tool count should match config");
+        assert_eq!(
+            tool_names.len(),
+            IMPLEMENTER_CONFIG.mcp_tools.len(),
+            "Implementer tool count should match config"
+        );
     }
 }

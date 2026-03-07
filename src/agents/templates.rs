@@ -3,12 +3,12 @@
 //! Templates are auto-discovered from the `prompts/` directory at compile time.
 //! Tool restrictions are configured in `config.rs` - new roles default to implementer permissions.
 
-use super::config::{get_tool_config, AgentToolConfig, IMPLEMENTER_CONFIG};
+use super::config::get_tool_config;
 use super::{get_prompt, AgentRole, SPAWNABLE_ROLES};
 
 /// Template defining an agent's prompt and tool restrictions.
 pub struct AgentTemplate {
-    /// The prompt template with {task} and {user_goal}/{context} placeholders.
+    /// The prompt template with `{task}` and `{user_goal}/{context}` placeholders.
     pub prompt_template: &'static str,
     /// Tools to remove from this agent type.
     pub removed_tools: Vec<&'static str>,
@@ -20,7 +20,7 @@ pub struct AgentRegistry {
 }
 
 impl AgentRegistry {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {}
     }
 
@@ -59,7 +59,7 @@ impl AgentRegistry {
 
     /// Get all available spawnable role names.
     #[allow(dead_code)]
-    pub fn available_roles(&self) -> &'static [&'static str] {
+    pub const fn available_roles(&self) -> &'static [&'static str] {
         SPAWNABLE_ROLES
     }
 }
@@ -125,4 +125,3 @@ mod tests {
         assert!(roles.contains(&"explorer"));
     }
 }
-

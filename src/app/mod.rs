@@ -1,20 +1,36 @@
 //! Main orchestrator application module.
 //!
-//! This module contains the core App struct and orchestration logic, split into
+//! This module contains the core [`App`] struct and orchestration logic, split into
 //! focused sub-modules for maintainability:
 //!
-//! - `types`: Constants, type aliases, and utility functions
-//! - `socket`: Unix socket setup and MCP connection handling
-//! - `planner`: Planner agent spawning
-//! - `agent_spawner`: Generic agent spawning with concurrent execution support
-//! - `decompose`: Decomposition logic for subtasks
-//! - `orchestrator`: Orchestrator agent spawning and execution
-//! - `orchestrator_acp`: ACP message handling for orchestrator
-//! - `session`: Session waiting and output collection
-//! - `session_drain`: Message draining after session completion
-//! - `router`: Session routing for ACP messages
+//! # Module Structure
+//!
+//! ## Core Types & Configuration
+//! - [`types`]: Constants, type aliases, and utility functions
+//! - [`router`]: Session routing for ACP messages to per-session channels
+//!
+//! ## Agent Lifecycle
+//! - [`agent_spawner`]: Generic agent spawning with concurrent execution support
+//! - [`agent_handler`]: Agent tool call handling and completion processing
+//! - [`context_generator`]: Task context generation for implementer agents
+//!
+//! ## Agent Types
+//! - [`planner`]: Planner agent spawning for task decomposition
+//! - [`orchestrator`]: Orchestrator agent spawning and execution
+//! - [`orchestrator_acp`]: ACP message handling for orchestrator
+//! - [`decompose`]: Decomposition logic for subtasks
+//!
+//! ## Communication
+//! - [`socket`]: Unix socket setup and MCP connection handling
+//! - [`session`]: Session waiting and output collection
+//! - [`session_drain`]: Message draining after session completion
+//!
+//! ## Entry Point
+//! - [`run`]: Main execution entry point for the orchestrator
 
+mod agent_handler;
 mod agent_spawner;
+mod context_generator;
 mod decompose;
 mod orchestrator;
 mod orchestrator_acp;
@@ -203,11 +219,9 @@ impl App {
         acp_orchestrator.initialize().await?;
 
         // Planner uses a custom cache directory with task management tools removed
-        let mut acp_planner = AcpClient::spawn_with_timeout(
-            Some(&planner_cache),
-            timeout_config.request_timeout,
-        )
-        .await?;
+        let mut acp_planner =
+            AcpClient::spawn_with_timeout(Some(&planner_cache), timeout_config.request_timeout)
+                .await?;
         acp_planner.initialize().await?;
 
         // Workers use the default cache directory with all tools available

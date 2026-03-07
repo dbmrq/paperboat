@@ -1,0 +1,269 @@
+//! Task list state management for the TUI.
+//!
+//! This module provides [`TaskListState`], which manages the task list display
+//! state extracted from `LogEvent`s. It tracks task creation, status changes,
+//! and provides navigation through the task list.
+
+use std::collections::HashMap;
+
+// ============================================================================
+// Task Display
+// ============================================================================
+
+/// Represents a task's display state.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Some fields stored for future task detail view
+pub struct TaskDisplay {
+    /// Task identifier
+    pub task_id: String,
+    /// Task name
+    pub name: String,
+    /// Task description
+    pub description: String,
+    /// Task status string
+    pub status: String,
+    /// Task dependencies
+    pub dependencies: Vec<String>,
+    /// Depth in hierarchy
+    pub depth: u32,
+}
+
+// ============================================================================
+// Task List State
+// ============================================================================
+
+/// Manages the task list from `LogEvent`s.
+#[derive(Debug, Default)]
+pub struct TaskListState {
+    /// All tasks indexed by `task_id`
+    tasks: HashMap<String, TaskDisplay>,
+    /// Ordered list of `task_id`s for display
+    task_order: Vec<String>,
+    /// Currently selected task index
+    pub selected_index: Option<usize>,
+    /// Scroll offset
+    pub scroll_offset: usize,
+}
+
+impl TaskListState {
+    /// Creates a new empty task list state.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Handles a `TaskCreated` event.
+    pub fn handle_task_created(
+        &mut self,
+        task_id: String,
+        name: String,
+        description: String,
+        dependencies: Vec<String>,
+        depth: u32,
+    ) {
+        let task = TaskDisplay {
+            task_id: task_id.clone(),
+            name,
+            description,
+            status: "pending".to_string(),
+            dependencies,
+            depth,
+        };
+
+        self.tasks.insert(task_id.clone(), task);
+        self.task_order.push(task_id);
+    }
+
+    /// Handles a `TaskStateChanged` event.
+    pub fn handle_task_state_changed(&mut self, task_id: &str, new_status: &str) {
+        if let Some(task) = self.tasks.get_mut(task_id) {
+            task.status = new_status.to_string();
+        }
+    }
+
+    /// Returns all tasks in display order.
+    #[must_use]
+    pub fn tasks(&self) -> Vec<&TaskDisplay> {
+        self.task_order
+            .iter()
+            .filter_map(|id| self.tasks.get(id))
+            .collect()
+    }
+
+    /// Returns the number of tasks.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Returns true if there are no tasks.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    /// Gets a task by ID.
+    #[cfg(test)]
+    #[must_use]
+    pub fn get_task(&self, task_id: &str) -> Option<&TaskDisplay> {
+        self.tasks.get(task_id)
+    }
+
+    /// Returns the currently selected task, if any.
+    #[must_use]
+    pub fn get_selected_task(&self) -> Option<&TaskDisplay> {
+        self.selected_index
+            .and_then(|idx| self.task_order.get(idx))
+            .and_then(|id| self.tasks.get(id))
+    }
+
+    /// Selects the next task.
+    pub fn select_next(&mut self) {
+        if self.task_order.is_empty() {
+            return;
+        }
+
+        self.selected_index = Some(match self.selected_index {
+            Some(i) => (i + 1).min(self.task_order.len() - 1),
+            None => 0,
+        });
+    }
+
+    /// Selects the previous task.
+    #[allow(clippy::missing_const_for_fn)] // Uses non-const Vec::is_empty
+    pub fn select_previous(&mut self) {
+        if self.task_order.is_empty() {
+            return;
+        }
+
+        self.selected_index = Some(match self.selected_index {
+            Some(i) => i.saturating_sub(1),
+            None => 0,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_task_list_state_handle_task_created() {
+        let mut list = TaskListState::new();
+
+        list.handle_task_created(
+            "task-1".to_string(),
+            "Task 1".to_string(),
+            "Description".to_string(),
+            vec![],
+            0,
+        );
+
+        assert_eq!(list.len(), 1);
+        assert!(!list.is_empty());
+
+        let task = list.get_task("task-1").unwrap();
+        assert_eq!(task.name, "Task 1");
+        assert_eq!(task.status, "pending");
+    }
+
+    #[test]
+    fn test_task_list_state_handle_state_changed() {
+        let mut list = TaskListState::new();
+
+        list.handle_task_created(
+            "task-1".to_string(),
+            "Task 1".to_string(),
+            "Desc".to_string(),
+            vec![],
+            0,
+        );
+
+        list.handle_task_state_changed("task-1", "in_progress");
+
+        let task = list.get_task("task-1").unwrap();
+        assert_eq!(task.status, "in_progress");
+    }
+
+    #[test]
+    fn test_task_list_state_navigation() {
+        let mut list = TaskListState::new();
+
+        list.handle_task_created(
+            "t1".to_string(),
+            "T1".to_string(),
+            "D".to_string(),
+            vec![],
+            0,
+        );
+        list.handle_task_created(
+            "t2".to_string(),
+            "T2".to_string(),
+            "D".to_string(),
+            vec![],
+            0,
+        );
+        list.handle_task_created(
+            "t3".to_string(),
+            "T3".to_string(),
+            "D".to_string(),
+            vec![],
+            0,
+        );
+
+        assert!(list.selected_index.is_none());
+
+        list.select_next();
+        assert_eq!(list.selected_index, Some(0));
+
+        list.select_next();
+        assert_eq!(list.selected_index, Some(1));
+
+        list.select_previous();
+        assert_eq!(list.selected_index, Some(0));
+    }
+
+    #[test]
+    fn test_task_status_transitions() {
+        let mut list = TaskListState::new();
+
+        // Create a task - starts as pending
+        list.handle_task_created(
+            "task-1".to_string(),
+            "Test Task".to_string(),
+            "Description".to_string(),
+            vec![],
+            0,
+        );
+        assert_eq!(list.get_task("task-1").unwrap().status, "pending");
+
+        // Transition to in_progress
+        list.handle_task_state_changed("task-1", "in_progress");
+        assert_eq!(list.get_task("task-1").unwrap().status, "in_progress");
+
+        // Transition to completed
+        list.handle_task_state_changed("task-1", "completed");
+        assert_eq!(list.get_task("task-1").unwrap().status, "completed");
+
+        // Create another task for failure scenario
+        list.handle_task_created(
+            "task-2".to_string(),
+            "Failing Task".to_string(),
+            "Will fail".to_string(),
+            vec![],
+            0,
+        );
+        list.handle_task_state_changed("task-2", "in_progress");
+        list.handle_task_state_changed("task-2", "failed");
+        assert_eq!(list.get_task("task-2").unwrap().status, "failed");
+    }
+
+    #[test]
+    fn test_task_state_change_for_unknown_task_is_ignored() {
+        let mut list = TaskListState::new();
+
+        // Try to change state of a task that doesn't exist - should not panic
+        list.handle_task_state_changed("nonexistent", "in_progress");
+        assert_eq!(list.len(), 0);
+    }
+}

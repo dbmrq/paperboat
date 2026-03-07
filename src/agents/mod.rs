@@ -6,10 +6,9 @@
 pub mod config;
 mod templates;
 
-pub use config::{format_removed_tools, get_config, get_tool_config, AgentToolConfig};
-pub use config::{
-    EXPLORER_CONFIG, IMPLEMENTER_CONFIG, ORCHESTRATOR_CONFIG, PLANNER_CONFIG, VERIFIER_CONFIG,
-};
+pub use config::{ORCHESTRATOR_CONFIG, PLANNER_CONFIG};
+#[cfg(test)]
+pub use config::IMPLEMENTER_CONFIG;
 pub use templates::AgentRegistry;
 
 // Include the auto-generated roles module
@@ -58,21 +57,13 @@ impl AgentRole {
     }
 
     /// Get the string representation of this role.
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::Implementer => "implementer",
             Self::Verifier => "verifier",
             Self::Explorer => "explorer",
             Self::Custom => "custom",
             Self::Dynamic(name) => name.as_str(),
-        }
-    }
-
-    /// Check if this is a spawnable role (has a prompt template).
-    pub fn is_spawnable(&self) -> bool {
-        match self {
-            Self::Custom => false, // Custom needs explicit prompt
-            _ => true,
         }
     }
 }
@@ -119,4 +110,3 @@ mod tests {
         assert!(get_prompt("nonexistent").is_none());
     }
 }
-

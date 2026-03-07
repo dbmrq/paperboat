@@ -7,6 +7,7 @@
 //! To add a new agent type, just create `prompts/newrole.txt` and rebuild.
 
 use std::env;
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
@@ -23,7 +24,7 @@ fn main() {
     if let Ok(entries) = fs::read_dir(prompts_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "txt") {
+            if path.extension().is_some_and(|ext| ext == "txt") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     let role_name = stem.to_lowercase();
 
@@ -51,7 +52,7 @@ fn main() {
     generated.push_str("/// Spawnable agent role names (auto-discovered from prompts/).\n");
     generated.push_str("pub const SPAWNABLE_ROLES: &[&str] = &[\n");
     for (role_name, _) in &roles {
-        generated.push_str(&format!("    \"{}\",\n", role_name));
+        let _ = writeln!(generated, "    \"{role_name}\",");
     }
     generated.push_str("];\n\n");
 
@@ -61,10 +62,10 @@ fn main() {
     generated.push_str("    match role {\n");
     for (role_name, prompt_path) in &roles {
         // Use include_str! with the relative path
-        generated.push_str(&format!(
-            "        \"{}\" => Some(include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{}\"))),\n",
-            role_name, prompt_path
-        ));
+        let _ = writeln!(
+            generated,
+            "        \"{role_name}\" => Some(include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{prompt_path}\"))),",
+        );
     }
     generated.push_str("        _ => None,\n");
     generated.push_str("    }\n");
@@ -74,4 +75,3 @@ fn main() {
     let dest_path = Path::new(&out_dir).join("generated_roles.rs");
     fs::write(&dest_path, generated).unwrap();
 }
-

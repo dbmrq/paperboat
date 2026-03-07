@@ -129,8 +129,8 @@ mod tests {
         });
 
         // Route the message
-        let routed = router.route(msg.clone());
-        assert!(routed, "Message should be routed successfully");
+        let was_routed = router.route(msg.clone());
+        assert!(was_routed, "Message should be routed successfully");
 
         // Verify the message was received
         let received = rx.try_recv();
@@ -153,8 +153,11 @@ mod tests {
         });
 
         // Try to route to unregistered session
-        let routed = router.route(msg);
-        assert!(!routed, "Message should not be routed to unregistered session");
+        let was_routed = router.route(msg);
+        assert!(
+            !was_routed,
+            "Message should not be routed to unregistered session"
+        );
     }
 
     #[tokio::test]
@@ -194,8 +197,7 @@ mod tests {
             "params": { "sessionId": session_id }
         });
 
-        let routed = router.route(msg);
-        assert!(!routed, "Message should not be routed after unregister");
+        let was_routed = router.route(msg);
+        assert!(!was_routed, "Message should not be routed after unregister");
     }
 }
-

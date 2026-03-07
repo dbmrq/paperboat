@@ -13,10 +13,17 @@ mod mock_acp;
 mod scenario;
 mod types;
 
-// Test modules
+// Test modules - allow some pedantic lints in test code for readability
 #[cfg(test)]
+#[allow(clippy::uninlined_format_args)]
+#[allow(clippy::doc_markdown)]
+#[allow(clippy::needless_collect)]
 mod e2e_tests;
 #[cfg(test)]
+#[allow(clippy::uninlined_format_args)]
+#[allow(clippy::doc_markdown)]
+#[allow(clippy::needless_collect)]
+#[allow(clippy::unnecessary_map_or)]
 mod integration_tests;
 #[cfg(test)]
 mod unit_tests;

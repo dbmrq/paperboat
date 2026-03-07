@@ -1,16 +1,17 @@
 //! Centralized agent tool configuration.
 //!
 //! This module defines which tools each agent type has access to, for both:
-//! - **MCP tools**: Our orchestration tools (spawn_agents, complete, create_task, etc.)
+//! - **MCP tools**: Our orchestration tools (`spawn_agents`, complete, `create_task`, etc.)
 //! - **Auggie tools**: The agent's built-in tools (str-replace-editor, save-file, etc.)
 //!
 //! Tool access is controlled via:
 //! - `VILLALOBOS_AGENT_TYPE` env var: Controls which MCP tools are exposed
 //! - `VILLALOBOS_REMOVED_TOOLS` env var: Controls which auggie tools are removed
 
-/// All auggie tools that can be filtered.
+/// All auggie tools that can be filtered (used in tests).
 /// These are the tools provided by the Augment platform.
-pub const ALL_AUGGIE_TOOLS: &[&str] = &[
+#[cfg(test)]
+const ALL_AUGGIE_TOOLS: &[&str] = &[
     // File editing
     "str-replace-editor",
     "save-file",
@@ -38,14 +39,6 @@ pub const ALL_AUGGIE_TOOLS: &[&str] = &[
     "sub-agent-plan",
 ];
 
-/// Our MCP tools for orchestration.
-pub const ALL_MCP_TOOLS: &[&str] = &[
-    "decompose",
-    "spawn_agents",
-    "complete",
-    "create_task",
-];
-
 /// Configuration for a specific agent type's tool access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentToolConfig {
@@ -56,8 +49,9 @@ pub struct AgentToolConfig {
 }
 
 impl AgentToolConfig {
-    /// Get the auggie tools this agent is allowed to use.
-    pub fn allowed_auggie_tools(&self) -> Vec<&'static str> {
+    /// Get the auggie tools this agent is allowed to use (test helper).
+    #[cfg(test)]
+    fn allowed_auggie_tools(&self) -> Vec<&'static str> {
         ALL_AUGGIE_TOOLS
             .iter()
             .filter(|t| !self.removed_auggie_tools.contains(t))
@@ -114,6 +108,12 @@ pub const ORCHESTRATOR_CONFIG: AgentToolConfig = AgentToolConfig {
         // No web tools - orchestrator delegates
         "web-search",
         "web-fetch",
+        // No built-in task management - we provide our own via MCP tools
+        // This prevents confusion from Augment's internal task IDs (which use a different format)
+        "view_tasklist",
+        "reorganize_tasklist",
+        "update_tasks",
+        "add_tasks",
         // No built-in sub-agents - we provide our own
         "sub-agent-explore",
         "sub-agent-plan",
@@ -170,38 +170,35 @@ pub const EXPLORER_CONFIG: AgentToolConfig = AgentToolConfig {
 // Helper Functions
 // ============================================================================
 
-/// Get the tool configuration for an agent type (for MCP tool filtering).
-///
-/// Used by the MCP server to determine which tools to expose.
-/// Unknown types default to orchestrator (most restrictive).
-pub fn get_config(agent_type: &str) -> &'static AgentToolConfig {
-    match agent_type {
-        "planner" => &PLANNER_CONFIG,
-        "orchestrator" => &ORCHESTRATOR_CONFIG,
-        "implementer" => &IMPLEMENTER_CONFIG,
-        "verifier" => &VERIFIER_CONFIG,
-        "explorer" => &EXPLORER_CONFIG,
-        // Unknown types default to orchestrator (most restrictive coordinator role)
-        _ => &ORCHESTRATOR_CONFIG,
-    }
-}
-
 /// Get the tool configuration for a spawnable agent role.
 ///
-/// Used by the agent registry to determine removed_auggie_tools.
+/// Used by the agent registry to determine `removed_auggie_tools`.
 /// Unknown roles default to implementer (full capabilities).
 pub fn get_tool_config(role: &str) -> &'static AgentToolConfig {
     match role {
-        "implementer" => &IMPLEMENTER_CONFIG,
         "verifier" => &VERIFIER_CONFIG,
         "explorer" => &EXPLORER_CONFIG,
-        // New roles auto-discovered from prompts/ default to implementer capabilities
+        // "implementer" and new roles auto-discovered from prompts/ default to implementer capabilities
         _ => &IMPLEMENTER_CONFIG,
     }
 }
 
-/// Format removed tools as a comma-separated string for the env var.
-pub fn format_removed_tools(config: &AgentToolConfig) -> String {
+/// Get the tool configuration for an agent type (test helper).
+#[cfg(test)]
+fn get_config(agent_type: &str) -> &'static AgentToolConfig {
+    match agent_type {
+        "planner" => &PLANNER_CONFIG,
+        "implementer" => &IMPLEMENTER_CONFIG,
+        "verifier" => &VERIFIER_CONFIG,
+        "explorer" => &EXPLORER_CONFIG,
+        // "orchestrator" and unknown types default to orchestrator (most restrictive coordinator role)
+        _ => &ORCHESTRATOR_CONFIG,
+    }
+}
+
+/// Format removed tools as a comma-separated string (test helper).
+#[cfg(test)]
+fn format_removed_tools(config: &AgentToolConfig) -> String {
     config.removed_auggie_tools.join(",")
 }
 
@@ -218,23 +215,47 @@ mod tests {
         let allowed = PLANNER_CONFIG.allowed_auggie_tools();
 
         // Planner should NOT have editing tools
-        assert!(!allowed.contains(&"str-replace-editor"), "Planner should not have str-replace-editor");
-        assert!(!allowed.contains(&"save-file"), "Planner should not have save-file");
-        assert!(!allowed.contains(&"remove-files"), "Planner should not have remove-files");
-        assert!(!allowed.contains(&"apply_patch"), "Planner should not have apply_patch");
+        assert!(
+            !allowed.contains(&"str-replace-editor"),
+            "Planner should not have str-replace-editor"
+        );
+        assert!(
+            !allowed.contains(&"save-file"),
+            "Planner should not have save-file"
+        );
+        assert!(
+            !allowed.contains(&"remove-files"),
+            "Planner should not have remove-files"
+        );
+        assert!(
+            !allowed.contains(&"apply_patch"),
+            "Planner should not have apply_patch"
+        );
 
         // Planner SHOULD have read-only tools
         assert!(allowed.contains(&"view"), "Planner should have view");
-        assert!(allowed.contains(&"codebase-retrieval"), "Planner should have codebase-retrieval");
-        assert!(allowed.contains(&"web-search"), "Planner should have web-search");
+        assert!(
+            allowed.contains(&"codebase-retrieval"),
+            "Planner should have codebase-retrieval"
+        );
+        assert!(
+            allowed.contains(&"web-search"),
+            "Planner should have web-search"
+        );
     }
 
     #[test]
     fn test_planner_cannot_execute_processes() {
         let allowed = PLANNER_CONFIG.allowed_auggie_tools();
 
-        assert!(!allowed.contains(&"launch-process"), "Planner should not have launch-process");
-        assert!(!allowed.contains(&"kill-process"), "Planner should not have kill-process");
+        assert!(
+            !allowed.contains(&"launch-process"),
+            "Planner should not have launch-process"
+        );
+        assert!(
+            !allowed.contains(&"kill-process"),
+            "Planner should not have kill-process"
+        );
     }
 
     #[test]
@@ -251,8 +272,14 @@ mod tests {
     fn test_orchestrator_cannot_edit_files() {
         let allowed = ORCHESTRATOR_CONFIG.allowed_auggie_tools();
 
-        assert!(!allowed.contains(&"str-replace-editor"), "Orchestrator should not have str-replace-editor");
-        assert!(!allowed.contains(&"save-file"), "Orchestrator should not have save-file");
+        assert!(
+            !allowed.contains(&"str-replace-editor"),
+            "Orchestrator should not have str-replace-editor"
+        );
+        assert!(
+            !allowed.contains(&"save-file"),
+            "Orchestrator should not have save-file"
+        );
     }
 
     #[test]
@@ -269,9 +296,18 @@ mod tests {
         let allowed = IMPLEMENTER_CONFIG.allowed_auggie_tools();
 
         // Implementer SHOULD have editing tools
-        assert!(allowed.contains(&"str-replace-editor"), "Implementer should have str-replace-editor");
-        assert!(allowed.contains(&"save-file"), "Implementer should have save-file");
-        assert!(allowed.contains(&"launch-process"), "Implementer should have launch-process");
+        assert!(
+            allowed.contains(&"str-replace-editor"),
+            "Implementer should have str-replace-editor"
+        );
+        assert!(
+            allowed.contains(&"save-file"),
+            "Implementer should have save-file"
+        );
+        assert!(
+            allowed.contains(&"launch-process"),
+            "Implementer should have launch-process"
+        );
     }
 
     #[test]
@@ -333,13 +369,21 @@ mod tests {
     fn test_no_agent_has_builtin_subagents() {
         // All agents should have built-in sub-agents removed
         // (we provide our own spawn_agents for orchestrators)
-        for config in [&PLANNER_CONFIG, &ORCHESTRATOR_CONFIG, &IMPLEMENTER_CONFIG,
-                       &VERIFIER_CONFIG, &EXPLORER_CONFIG] {
-            assert!(config.removed_auggie_tools.contains(&"sub-agent-explore"),
-                    "All agents should have sub-agent-explore removed");
-            assert!(config.removed_auggie_tools.contains(&"sub-agent-plan"),
-                    "All agents should have sub-agent-plan removed");
+        for config in [
+            &PLANNER_CONFIG,
+            &ORCHESTRATOR_CONFIG,
+            &IMPLEMENTER_CONFIG,
+            &VERIFIER_CONFIG,
+            &EXPLORER_CONFIG,
+        ] {
+            assert!(
+                config.removed_auggie_tools.contains(&"sub-agent-explore"),
+                "All agents should have sub-agent-explore removed"
+            );
+            assert!(
+                config.removed_auggie_tools.contains(&"sub-agent-plan"),
+                "All agents should have sub-agent-plan removed"
+            );
         }
     }
 }
-

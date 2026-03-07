@@ -23,14 +23,15 @@ impl App {
 
         // Configure MCP server with planner agent type (only gets create_task and complete tools)
         // Use unique name "villalobos-planner" to prevent MCP server caching/reuse between agent types
+        // Pass --socket directly to avoid env var caching issues across auggie sessions
         let mcp_servers = vec![json!({
             "name": "villalobos-planner",
             "command": binary_path.to_string_lossy(),
-            "args": ["--mcp-server"],
-            "env": [
-                {"name": "VILLALOBOS_SOCKET", "value": socket_path},
-                {"name": "VILLALOBOS_AGENT_TYPE", "value": "planner"}
-            ]
+            "args": ["--mcp-server", "--socket", &socket_path],
+            "env": [{
+                "name": "VILLALOBOS_AGENT_TYPE",
+                "value": "planner"
+            }]
         })];
 
         let response = self

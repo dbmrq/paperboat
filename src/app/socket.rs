@@ -29,7 +29,11 @@ impl AgentSocketHandle {
         // Remove the socket file
         if let Err(e) = std::fs::remove_file(&self.socket_path) {
             if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!("Failed to remove agent socket file {:?}: {}", self.socket_path, e);
+                tracing::warn!(
+                    "Failed to remove agent socket file {:?}: {}",
+                    self.socket_path,
+                    e
+                );
             }
         }
     }
@@ -63,14 +67,25 @@ pub async fn setup_agent_socket(agent_id: &str) -> Result<AgentSocketHandle> {
     // Remove socket file if it exists
     if let Err(e) = std::fs::remove_file(&socket_path) {
         if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!("Failed to remove existing socket file {:?}: {}", socket_path, e);
+            tracing::warn!(
+                "Failed to remove existing socket file {:?}: {}",
+                socket_path,
+                e
+            );
         }
     }
 
-    let listener = UnixListener::bind(&socket_path)
-        .with_context(|| format!("Failed to bind agent socket at {:?} (agent_id={})", socket_path, agent_id))?;
+    let listener = UnixListener::bind(&socket_path).with_context(|| {
+        format!(
+            "Failed to bind agent socket at {socket_path:?} (agent_id={agent_id})"
+        )
+    })?;
 
-    tracing::debug!("Agent socket listening at: {:?} (agent_id={})", socket_path, agent_id);
+    tracing::debug!(
+        "Agent socket listening at: {:?} (agent_id={})",
+        socket_path,
+        agent_id
+    );
 
     // Create channel for tool messages
     let (tool_tx, tool_rx) = mpsc::channel::<ToolMessage>(100);
@@ -151,9 +166,11 @@ pub fn cleanup_socket(socket_path: &PathBuf, listener_task: Option<JoinHandle<()
         task.abort();
     }
 
-    // Remove socket file
+    // Remove socket file (ignore NotFound - socket may already be cleaned up)
     if let Err(e) = std::fs::remove_file(socket_path) {
-        tracing::warn!("Failed to remove socket file: {}", e);
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!("Failed to remove socket file {:?}: {}", socket_path, e);
+        }
     }
 }
 

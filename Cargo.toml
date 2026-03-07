@@ -6,9 +6,11 @@ edition = "2021"
 [workspace]
 
 [features]
-default = []
+default = ["tui"]
 # Enable the testing module for integration tests
 testing = ["dep:tempfile"]
+# Enable the TUI interface (enabled by default)
+tui = ["dep:ratatui", "dep:crossterm", "dep:tui-tree-widget", "dep:tui-logger"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -25,6 +27,10 @@ chrono = "0.4.44"
 toml = "1.0.4"
 async-trait = "0.1.89"
 tempfile = { version = "3.26.0", optional = true }
+ratatui = { version = "0.30", optional = true }
+crossterm = { version = "0.28", optional = true }
+tui-tree-widget = { version = "0.24", optional = true }
+tui-logger = { version = "0.18", features = ["tracing-support"], optional = true }
 
 [dev-dependencies]
 serial_test = "3.4.0"

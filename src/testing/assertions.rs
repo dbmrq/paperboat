@@ -52,18 +52,16 @@ impl TestRunResult {
             .filter_map(|c| match &c.call {
                 ToolCall::SpawnAgents { agents, .. } => {
                     // Get task or task_id as fallback
-                    agents.first().and_then(|a| {
-                        a.task
-                            .clone()
-                            .or_else(|| a.task_id.clone())
-                    })
+                    agents
+                        .first()
+                        .and_then(|a| a.task.clone().or_else(|| a.task_id.clone()))
                 }
                 _ => None,
             })
             .collect()
     }
 
-    /// Alias for backward compatibility - returns tasks from spawn_agents calls.
+    /// Alias for backward compatibility - returns tasks from `spawn_agents` calls.
     pub fn implement_calls(&self) -> Vec<String> {
         self.spawn_agents_calls()
     }

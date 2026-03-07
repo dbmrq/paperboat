@@ -98,7 +98,9 @@ impl MockToolInterceptor {
                 return Ok(response);
             }
             ToolCall::SpawnAgents { .. } => MockToolType::SpawnAgents,
-            ToolCall::Complete { success, message, .. } => {
+            ToolCall::Complete {
+                success, message, ..
+            } => {
                 // Complete always succeeds (records the agent's completion status)
                 let response = ToolResponse::success(
                     request_id.to_string(),
@@ -120,7 +122,7 @@ impl MockToolInterceptor {
                 // CreateTask always succeeds
                 let response = ToolResponse::success(
                     request_id.to_string(),
-                    format!("Task '{}' created successfully", name),
+                    format!("Task '{name}' created successfully"),
                 );
                 self.captured_calls.push(CapturedToolCall {
                     call: call.clone(),
@@ -130,10 +132,8 @@ impl MockToolInterceptor {
             }
             ToolCall::SetGoal { summary, .. } => {
                 // SetGoal always succeeds
-                let response = ToolResponse::success(
-                    request_id.to_string(),
-                    format!("Goal set: {}", summary),
-                );
+                let response =
+                    ToolResponse::success(request_id.to_string(), format!("Goal set: {summary}"));
                 self.captured_calls.push(CapturedToolCall {
                     call: call.clone(),
                     response: response.clone(),
@@ -287,7 +287,9 @@ mod tests {
         let captured = interceptor.captured_calls();
         assert_eq!(captured.len(), 1);
         match &captured[0].call {
-            ToolCall::CreateTask { name, description, .. } => {
+            ToolCall::CreateTask {
+                name, description, ..
+            } => {
                 assert_eq!(name, "Test Task");
                 assert_eq!(description, "Test task content");
             }
