@@ -72,7 +72,7 @@ impl AgentToolConfig {
 
 /// Planner: Creates plans from goals. Read-only access, no editing or execution.
 pub const PLANNER_CONFIG: AgentToolConfig = AgentToolConfig {
-    mcp_tools: &["create_task", "complete"],
+    mcp_tools: &["set_goal", "create_task", "complete"],
     removed_auggie_tools: &[
         // No file editing - planner only plans
         "str-replace-editor",
@@ -98,7 +98,7 @@ pub const PLANNER_CONFIG: AgentToolConfig = AgentToolConfig {
 
 /// Orchestrator: Coordinates task execution. No direct editing or execution.
 pub const ORCHESTRATOR_CONFIG: AgentToolConfig = AgentToolConfig {
-    mcp_tools: &["decompose", "spawn_agents", "complete"],
+    mcp_tools: &["decompose", "spawn_agents", "complete", "create_task"],
     removed_auggie_tools: &[
         // No file editing - orchestrator delegates to implementers
         "str-replace-editor",
@@ -170,7 +170,10 @@ pub const EXPLORER_CONFIG: AgentToolConfig = AgentToolConfig {
 // Helper Functions
 // ============================================================================
 
-/// Get the tool configuration for an agent type.
+/// Get the tool configuration for an agent type (for MCP tool filtering).
+///
+/// Used by the MCP server to determine which tools to expose.
+/// Unknown types default to orchestrator (most restrictive).
 pub fn get_config(agent_type: &str) -> &'static AgentToolConfig {
     match agent_type {
         "planner" => &PLANNER_CONFIG,
@@ -180,6 +183,20 @@ pub fn get_config(agent_type: &str) -> &'static AgentToolConfig {
         "explorer" => &EXPLORER_CONFIG,
         // Unknown types default to orchestrator (most restrictive coordinator role)
         _ => &ORCHESTRATOR_CONFIG,
+    }
+}
+
+/// Get the tool configuration for a spawnable agent role.
+///
+/// Used by the agent registry to determine removed_auggie_tools.
+/// Unknown roles default to implementer (full capabilities).
+pub fn get_tool_config(role: &str) -> &'static AgentToolConfig {
+    match role {
+        "implementer" => &IMPLEMENTER_CONFIG,
+        "verifier" => &VERIFIER_CONFIG,
+        "explorer" => &EXPLORER_CONFIG,
+        // New roles auto-discovered from prompts/ default to implementer capabilities
+        _ => &IMPLEMENTER_CONFIG,
     }
 }
 
@@ -243,9 +260,8 @@ mod tests {
         assert!(ORCHESTRATOR_CONFIG.mcp_tools.contains(&"spawn_agents"));
         assert!(ORCHESTRATOR_CONFIG.mcp_tools.contains(&"decompose"));
         assert!(ORCHESTRATOR_CONFIG.mcp_tools.contains(&"complete"));
-
-        // Orchestrator should NOT have planner tools
-        assert!(!ORCHESTRATOR_CONFIG.mcp_tools.contains(&"create_task"));
+        // Orchestrator can now create tasks dynamically (e.g., from agent suggestions)
+        assert!(ORCHESTRATOR_CONFIG.mcp_tools.contains(&"create_task"));
     }
 
     #[test]

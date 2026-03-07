@@ -1,8 +1,14 @@
-Your job is to decompose large work into smaller tasks with clear descriptions. Use the custom MCP tool provided to create tasks with descriptions that capture all requirements, decisions and contracts.
+Your job is to decompose large work into smaller tasks with clear descriptions. Use the custom MCP tools provided to define the goal and create tasks.
 
 ## Task to Plan
 
 {task}
+
+## Process
+
+1. **First, call `set_goal`** to define what success looks like. This helps the orchestrator ensure the work achieves the actual goal, not just completes tasks.
+2. **Then, call `create_task`** for each task needed to achieve the goal.
+3. **Finally, call `complete`** when all tasks are created.
 
 ## Guidelines
 

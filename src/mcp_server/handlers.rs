@@ -47,12 +47,30 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
 
             let tools = match agent_type.as_str() {
                 "planner" => {
-                    // Planner gets create_task (to add tasks) and complete (to signal done)
+                    // Planner gets set_goal, create_task, and complete
                     json!({
                         "tools": [
                             {
+                                "name": "set_goal",
+                                "description": "<usecase>Define the goal and success criteria before creating tasks.</usecase>\n<instructions>Call this FIRST to establish what success looks like. This helps the orchestrator verify that the work achieves the user's actual goal, not just completes tasks.</instructions>",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "summary": {
+                                            "type": "string",
+                                            "description": "A concise summary of the user's goal (1-2 sentences)"
+                                        },
+                                        "acceptance_criteria": {
+                                            "type": "string",
+                                            "description": "What must be true for the goal to be considered achieved (success conditions)"
+                                        }
+                                    },
+                                    "required": ["summary"]
+                                }
+                            },
+                            {
                                 "name": "create_task",
-                                "description": "<usecase>Add a task to the plan.</usecase>\n<instructions>Call once per task. Each task will be executed by a separate implementer agent. Include specific details: file paths, function names, requirements. Tasks without dependencies can run in parallel.</instructions>",
+                                "description": "<usecase>Add a task to the plan.</usecase>\n<instructions>Call once per task. Each task will be executed by a separate agent.</instructions>",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -62,14 +80,14 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                                         },
                                         "description": {
                                             "type": "string",
-                                            "description": "What the implementer agent should do. Be specific about files, functions, and requirements."
+                                            "description": "What the implementer agent should do. Include requirements, decisions and contracts. Avoid implementation details."
                                         },
                                         "dependencies": {
                                             "type": "array",
                                             "items": {
                                                 "type": "string"
                                             },
-                                            "description": "Names of tasks that must complete before this one. Leave empty for independent tasks."
+                                            "description": "Tasks that must complete before this one (by ID like 'task001' or by name). Tasks without dependencies can run in parallel."
                                         }
                                     },
                                     "required": ["name", "description"]
@@ -77,7 +95,7 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                             },
                             {
                                 "name": "complete",
-                                "description": "<usecase>Signal that planning is finished.</usecase>\n<instructions>Call after creating all tasks. The orchestrator will then execute the plan.</instructions>",
+                                "description": "<usecase>Signal that planning is finished.</usecase>\n<instructions>Call after setting the goal and creating all tasks. The orchestrator will then execute the plan.</instructions>",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -102,7 +120,7 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                         "tools": [
                             {
                                 "name": "complete",
-                                "description": "<usecase>Signal that your task is finished.</usecase>\n<instructions>Call this after completing your assigned work. The orchestrator is waiting for this signal to proceed.</instructions>",
+                                "description": "<usecase>Signal that your task is finished.</usecase>\n<instructions>Call this after completing your assigned work. The orchestrator is waiting for this signal to proceed. Use 'notes' to leave context for other agents or the orchestrator. Use 'add_tasks' to create new tasks for work you discovered was needed but is outside your scope.</instructions>",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -113,6 +131,23 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                                         "message": {
                                             "type": "string",
                                             "description": "Brief summary of what you did"
+                                        },
+                                        "notes": {
+                                            "type": "string",
+                                            "description": "Optional context for future agents: insights, decisions made, warnings, or things to watch out for"
+                                        },
+                                        "add_tasks": {
+                                            "type": "array",
+                                            "description": "Optional tasks to add to the plan. Use for work you discovered was needed but didn't do (outside scope, or should be done later). These become available for the orchestrator to execute.",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "name": { "type": "string", "description": "Short name for the task" },
+                                                    "description": { "type": "string", "description": "What needs to be done" },
+                                                    "depends_on": { "type": "array", "items": { "type": "string" }, "description": "Task names or IDs this depends on" }
+                                                },
+                                                "required": ["name", "description"]
+                                            }
                                         }
                                     },
                                     "required": ["success"]
@@ -123,38 +158,54 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                 }
                 _ => {
                     // Orchestrator gets all tools
+                    // Build dynamic descriptions with auto-discovered roles
+                    let roles_list = crate::agents::SPAWNABLE_ROLES.join(", ");
+                    let agents_desc = format!(
+                        "List of agents to spawn. Use task_id to reference planned tasks, or provide role+task for ad-hoc agents. Available roles: {} + 'custom' (requires prompt+tools).",
+                        roles_list
+                    );
+                    let role_desc = format!(
+                        "Agent type. Built-in roles: {}. Use 'custom' for agents with custom prompt+tools.",
+                        roles_list
+                    );
+
                     json!({
                         "tools": [
                             {
                                 "name": "decompose",
-                                "description": "<usecase>Breaks down complex, multi-step tasks into smaller subtasks by spawning a specialized planner agent.</usecase>\n<instructions>Use when a task involves multiple distinct steps, requires different types of work (e.g., backend + frontend + tests), or would take more than one focused implementation session. The planner will create a detailed plan, then you can implement each subtask. Returns a list of subtasks to implement.</instructions>",
+                                "description": "<usecase>Delegates a complex sub-goal to a child orchestrator that plans and executes it autonomously.</usecase>\n<instructions>Use when a task is complex enough to warrant its own planning and orchestration cycle. This spawns a planner to create subtasks, then a child orchestrator to execute them. Returns only after the entire sub-goal is complete. Useful for modular work that should be handled independently (e.g., 'implement the authentication system'). Use task_id to reference a planned task, or task for an explicit description.</instructions>",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
+                                        "task_id": {
+                                            "type": "string",
+                                            "description": "Task ID (e.g., 'task001') from the plan. The task description is looked up automatically."
+                                        },
                                         "task": {
                                             "type": "string",
-                                            "description": "The complex task to break down into implementable subtasks"
+                                            "description": "Explicit task description. Use when not referencing a planned task."
                                         }
-                                    },
-                                    "required": ["task"]
+                                    }
                                 }
                             },
                             {
                                 "name": "spawn_agents",
-                                "description": "<usecase>Delegates tasks to implementer agents who will complete the actual work.</usecase>\n<instructions>Each agent receives a task description and has access to file editing, code search, and other development tools. Agents without dependencies can be spawned together for parallel execution. Use wait='all' to wait for all agents to complete before proceeding.</instructions>",
+                                "description": "<usecase>Delegates tasks to agents who will complete the actual work.</usecase>\n<instructions>Spawn agents by task_id (preferred) or by explicit task description. Each agent has access to file editing, code search, and other development tools. Agents without dependencies can be spawned together for parallel execution.</instructions>",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
                                         "agents": {
                                             "type": "array",
-                                            "description": "List of agents to spawn. Each needs a role ('implementer') and a task description.",
+                                            "description": agents_desc,
                                             "items": {
                                                 "type": "object",
                                                 "properties": {
-                                                    "role": { "type": "string", "enum": ["implementer"], "description": "Agent type. Use 'implementer' for coding tasks." },
-                                                    "task": { "type": "string", "description": "What the agent should accomplish. Be specific about files, functions, and requirements." }
-                                                },
-                                                "required": ["role", "task"]
+                                                    "task_id": { "type": "string", "description": "Task ID (e.g., 'task001') from the plan. Preferred way to spawn planned tasks - description and role are resolved automatically." },
+                                                    "role": { "type": "string", "default": "implementer", "description": role_desc },
+                                                    "task": { "type": "string", "description": "Task description. Required for ad-hoc agents (not using task_id)." },
+                                                    "prompt": { "type": "string", "description": "Custom prompt. Required when role='custom'." },
+                                                    "tools": { "type": "array", "items": { "type": "string" }, "description": "Optional tool whitelist for custom agents. If omitted, all default tools are enabled. Available: str-replace-editor, save-file, remove-files, launch-process, kill-process, read-process, write-process, list-processes, web-search, web-fetch, view, codebase-retrieval." }
+                                                }
                                             }
                                         },
                                         "wait": {
@@ -169,7 +220,7 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                             },
                             {
                                 "name": "complete",
-                                "description": "<usecase>Marks your orchestration work as finished and returns control to the user.</usecase>\n<instructions>Call this only after all tasks have been delegated (via decompose or implement). Set success=true if all work completed successfully, success=false if there were failures. Include a brief summary message describing what was accomplished.</instructions>",
+                                "description": "<usecase>Marks your orchestration work as finished and returns control to the user.</usecase>\n<instructions>Call this only after all tasks have been delegated (via decompose or implement) and the work as been verified. Set success=true if all work completed successfully, success=false if there were failures. Include a brief summary message describing what was accomplished.</instructions>",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -183,6 +234,29 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
                                         }
                                     },
                                     "required": ["success"]
+                                }
+                            },
+                            {
+                                "name": "create_task",
+                                "description": "<usecase>Add a new task to the plan dynamically.</usecase>\n<instructions>Use this when agents suggest new tasks via add_tasks, or when you identify additional work needed to achieve the goal. The new task becomes available for execution.</instructions>",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "string",
+                                            "description": "Short name for the task"
+                                        },
+                                        "description": {
+                                            "type": "string",
+                                            "description": "Detailed description of what needs to be done"
+                                        },
+                                        "dependencies": {
+                                            "type": "array",
+                                            "items": { "type": "string" },
+                                            "description": "Task names or IDs that must complete before this one"
+                                        }
+                                    },
+                                    "required": ["name", "description"]
                                 }
                             }
                         ]
@@ -261,18 +335,26 @@ async fn handle_tool_call(
     // Parse the tool call with specific error messages
     let tool_call = match name {
         "decompose" => {
-            if let Some(task) = arguments.get("task").and_then(|v| v.as_str()) {
-                ToolCall::Decompose {
-                    task: task.to_string(),
-                }
-            } else {
-                tracing::warn!("⚠️  decompose tool missing 'task' argument");
+            let task_id = arguments
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let task = arguments
+                .get("task")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            // Require at least one of task_id or task
+            if task_id.is_none() && task.is_none() {
+                tracing::warn!("⚠️  decompose tool missing 'task_id' or 'task' argument");
                 return Ok(Some(invalid_params_error(
                     id.as_ref(),
                     "decompose",
-                    "requires 'task' string argument",
+                    "requires either 'task_id' or 'task' argument",
                 )));
             }
+
+            ToolCall::Decompose { task_id, task }
         }
         "spawn_agents" => {
             if let Some(agents_val) = arguments.get("agents") {
@@ -312,7 +394,14 @@ async fn handle_tool_call(
                     .get("message")
                     .and_then(|v| v.as_str())
                     .map(std::string::ToString::to_string);
-                ToolCall::Complete { success, message }
+                let notes = arguments
+                    .get("notes")
+                    .and_then(|v| v.as_str())
+                    .map(std::string::ToString::to_string);
+                let add_tasks = arguments
+                    .get("add_tasks")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                ToolCall::Complete { success, message, notes, add_tasks }
             } else {
                 tracing::warn!("⚠️  complete tool missing 'success' argument");
                 return Ok(Some(invalid_params_error(
@@ -362,12 +451,40 @@ async fn handle_tool_call(
                 dependencies,
             }
         }
+        "set_goal" => {
+            let summary = if let Some(s) = arguments.get("summary").and_then(|v| v.as_str()) {
+                s.to_string()
+            } else {
+                tracing::warn!("⚠️  set_goal tool missing 'summary' argument");
+                return Ok(Some(invalid_params_error(
+                    id.as_ref(),
+                    "set_goal",
+                    "requires 'summary' string argument",
+                )));
+            };
+
+            let acceptance_criteria = arguments
+                .get("acceptance_criteria")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            ToolCall::SetGoal {
+                summary,
+                acceptance_criteria,
+            }
+        }
         _ => {
             tracing::warn!("⚠️  Unknown tool requested: {}", name);
             return Ok(Some(method_not_found_error(
                 id.as_ref(),
                 name,
-                &["decompose", "spawn_agents", "complete", "create_task"],
+                &[
+                    "decompose",
+                    "spawn_agents",
+                    "complete",
+                    "create_task",
+                    "set_goal",
+                ],
             )));
         }
     };
@@ -416,7 +533,11 @@ async fn handle_tool_call(
 /// Build a helpful response message based on the tool call and app response
 fn build_response_text(tool_call: &ToolCall, response: &super::types::ToolResponse) -> String {
     match tool_call {
-        ToolCall::Decompose { task } => {
+        ToolCall::Decompose { task_id, task } => {
+            let task_desc = task
+                .as_deref()
+                .or(task_id.as_deref())
+                .unwrap_or("(unknown task)");
             if response.success {
                 format!(
                     "✅ Decomposition complete for: \"{}\"\n\n\
@@ -425,7 +546,7 @@ fn build_response_text(tool_call: &ToolCall, response: &super::types::ToolRespon
                      ## Next Steps\n\
                      The subtasks have been planned and executed. \
                      Continue with any remaining tasks or call complete() when done.",
-                    task, response.summary
+                    task_desc, response.summary
                 )
             } else {
                 format!(
@@ -434,14 +555,17 @@ fn build_response_text(tool_call: &ToolCall, response: &super::types::ToolRespon
                      {}\n\n\
                      ## Next Steps\n\
                      Review the error and decide whether to retry or call complete(success=false).",
-                    task,
+                    task_desc,
                     response.error.as_deref().unwrap_or("Unknown error")
                 )
             }
         }
         ToolCall::SpawnAgents { agents, wait } => {
             let agent_count = agents.len();
-            let roles: Vec<&str> = agents.iter().map(|a| a.role.as_str()).collect();
+            let roles: Vec<String> = agents
+                .iter()
+                .map(|a| a.role.clone().unwrap_or_else(|| "implementer".to_string()))
+                .collect();
 
             if response.success {
                 let files_section = if let Some(files) = &response.files_modified {
@@ -484,7 +608,7 @@ fn build_response_text(tool_call: &ToolCall, response: &super::types::ToolRespon
                 )
             }
         }
-        ToolCall::Complete { success, message } => {
+        ToolCall::Complete { success, message, .. } => {
             if *success {
                 format!(
                     "✅ All tasks completed successfully!\n\n\
@@ -510,6 +634,19 @@ fn build_response_text(tool_call: &ToolCall, response: &super::types::ToolRespon
                 format!(
                     "❌ Failed to create task '{}': {}",
                     name,
+                    response.error.as_deref().unwrap_or("Unknown error")
+                )
+            }
+        }
+        ToolCall::SetGoal { summary, .. } => {
+            if response.success {
+                format!(
+                    "✅ Goal set: {}\n\nNow create tasks to achieve this goal.",
+                    summary
+                )
+            } else {
+                format!(
+                    "❌ Failed to set goal: {}",
                     response.error.as_deref().unwrap_or("Unknown error")
                 )
             }
@@ -564,11 +701,28 @@ mod tests {
         assert!(tool_names.contains("complete"), "Planner should have complete tool");
 
         // Planner should NOT have: spawn_agents, decompose
-        assert!(!tool_names.contains("spawn_agents"), "Planner should NOT have spawn_agents tool");
-        assert!(!tool_names.contains("decompose"), "Planner should NOT have decompose tool");
+        assert!(
+            !tool_names.contains("spawn_agents"),
+            "Planner should NOT have spawn_agents tool"
+        );
+        assert!(
+            !tool_names.contains("decompose"),
+            "Planner should NOT have decompose tool"
+        );
+
+        // Planner should have: set_goal, create_task, complete
+        assert!(
+            tool_names.contains("set_goal"),
+            "Planner should have set_goal tool"
+        );
 
         // Verify exact count
-        assert_eq!(tool_names.len(), 2, "Planner should have exactly 2 tools, got: {:?}", tool_names);
+        assert_eq!(
+            tool_names.len(),
+            3,
+            "Planner should have exactly 3 tools (set_goal, create_task, complete), got: {:?}",
+            tool_names
+        );
     }
 
     /// Test that orchestrator agents get all MCP tools including spawn_agents.
@@ -589,13 +743,14 @@ mod tests {
 
         let tool_names = extract_tool_names(&response);
 
-        // Orchestrator should have: decompose, spawn_agents, complete
+        // Orchestrator should have: decompose, spawn_agents, complete, create_task
         assert!(tool_names.contains("decompose"), "Orchestrator should have decompose tool");
         assert!(tool_names.contains("spawn_agents"), "Orchestrator should have spawn_agents tool");
         assert!(tool_names.contains("complete"), "Orchestrator should have complete tool");
+        assert!(tool_names.contains("create_task"), "Orchestrator should have create_task tool");
 
         // Verify exact count
-        assert_eq!(tool_names.len(), 3, "Orchestrator should have exactly 3 tools, got: {:?}", tool_names);
+        assert_eq!(tool_names.len(), 4, "Orchestrator should have exactly 4 tools, got: {:?}", tool_names);
     }
 
     /// Test that implementer agents only get the complete tool.

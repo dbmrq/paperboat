@@ -236,20 +236,26 @@ impl MockAcpClient {
             MockMcpToolCall::Complete { success, message } => ToolCall::Complete {
                 success: *success,
                 message: message.clone(),
+                notes: None,
+                add_tasks: None,
             },
             MockMcpToolCall::SpawnAgents { task } => {
                 // Create a single-agent spawn for backward compatibility
                 ToolCall::SpawnAgents {
                     agents: vec![crate::mcp_server::AgentSpec {
-                        role: "implementer".to_string(),
-                        task: task.clone(),
+                        role: Some("implementer".to_string()),
+                        task: Some(task.clone()),
+                        task_id: None,
                         prompt: None,
                         tools: None,
                     }],
                     wait: crate::mcp_server::WaitMode::All,
                 }
             }
-            MockMcpToolCall::Decompose { task } => ToolCall::Decompose { task: task.clone() },
+            MockMcpToolCall::Decompose { task } => ToolCall::Decompose {
+                task_id: None,
+                task: Some(task.clone()),
+            },
         };
 
         let request_id = uuid::Uuid::new_v4().to_string();

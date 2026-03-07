@@ -129,7 +129,8 @@ mod tests {
     #[test]
     fn test_tool_call_decompose_serialization() {
         let tool_call = ToolCall::Decompose {
-            task: "Build a feature".to_string(),
+            task_id: None,
+            task: Some("Build a feature".to_string()),
         };
         let json = serde_json::to_string(&tool_call).unwrap();
         assert!(json.contains("Decompose"));
@@ -140,8 +141,9 @@ mod tests {
     fn test_tool_call_spawn_agents_serialization() {
         let tool_call = ToolCall::SpawnAgents {
             agents: vec![super::super::types::AgentSpec {
-                role: "implementer".to_string(),
-                task: "Fix the bug".to_string(),
+                role: Some("implementer".to_string()),
+                task: Some("Fix the bug".to_string()),
+                task_id: None,
                 prompt: None,
                 tools: None,
             }],
@@ -157,6 +159,8 @@ mod tests {
         let tool_call = ToolCall::Complete {
             success: true,
             message: Some("All done".to_string()),
+            notes: None,
+            add_tasks: None,
         };
         let json = serde_json::to_string(&tool_call).unwrap();
         assert!(json.contains("Complete"));
@@ -169,6 +173,8 @@ mod tests {
         let tool_call = ToolCall::Complete {
             success: false,
             message: None,
+            notes: None,
+            add_tasks: None,
         };
         let json = serde_json::to_string(&tool_call).unwrap();
         assert!(json.contains("Complete"));
@@ -182,13 +188,16 @@ mod tests {
     #[test]
     fn test_tool_call_decompose_round_trip() {
         let original = ToolCall::Decompose {
-            task: "Build a REST API".to_string(),
+            task_id: None,
+            task: Some("Build a REST API".to_string()),
         };
         let json_str = serde_json::to_string(&original).unwrap();
         let deserialized: ToolCall = serde_json::from_str(&json_str).unwrap();
 
         match deserialized {
-            ToolCall::Decompose { task } => assert_eq!(task, "Build a REST API"),
+            ToolCall::Decompose { task_id: _, task } => {
+                assert_eq!(task, Some("Build a REST API".to_string()))
+            }
             _ => panic!("Expected Decompose variant"),
         }
     }
@@ -197,8 +206,9 @@ mod tests {
     fn test_tool_call_spawn_agents_round_trip() {
         let original = ToolCall::SpawnAgents {
             agents: vec![super::super::types::AgentSpec {
-                role: "implementer".to_string(),
-                task: "Add user model".to_string(),
+                role: Some("implementer".to_string()),
+                task: Some("Add user model".to_string()),
+                task_id: None,
                 prompt: None,
                 tools: None,
             }],
@@ -210,7 +220,7 @@ mod tests {
         match deserialized {
             ToolCall::SpawnAgents { agents, wait } => {
                 assert_eq!(agents.len(), 1);
-                assert_eq!(agents[0].task, "Add user model");
+                assert_eq!(agents[0].task, Some("Add user model".to_string()));
                 assert_eq!(wait, super::super::types::WaitMode::All);
             }
             _ => panic!("Expected SpawnAgents variant"),
@@ -222,12 +232,14 @@ mod tests {
         let original = ToolCall::Complete {
             success: true,
             message: Some("All done!".to_string()),
+            notes: None,
+            add_tasks: None,
         };
         let json_str = serde_json::to_string(&original).unwrap();
         let deserialized: ToolCall = serde_json::from_str(&json_str).unwrap();
 
         match deserialized {
-            ToolCall::Complete { success, message } => {
+            ToolCall::Complete { success, message, .. } => {
                 assert!(success);
                 assert_eq!(message, Some("All done!".to_string()));
             }
@@ -240,12 +252,14 @@ mod tests {
         let original = ToolCall::Complete {
             success: false,
             message: None,
+            notes: None,
+            add_tasks: None,
         };
         let json_str = serde_json::to_string(&original).unwrap();
         let deserialized: ToolCall = serde_json::from_str(&json_str).unwrap();
 
         match deserialized {
-            ToolCall::Complete { success, message } => {
+            ToolCall::Complete { success, message, .. } => {
                 assert!(!success);
                 assert!(message.is_none());
             }
@@ -257,14 +271,17 @@ mod tests {
     fn test_tool_call_json_format_matches_app_expectations() {
         // Verify the serialized format can be parsed by handle_mcp_connection
         let decompose = ToolCall::Decompose {
-            task: "Test task".to_string(),
+            task_id: None,
+            task: Some("Test task".to_string()),
         };
         let json_str = serde_json::to_string(&decompose).unwrap();
 
         // The app uses serde_json::from_str to parse, verify it works
         let parsed: ToolCall = serde_json::from_str(&json_str).unwrap();
         match parsed {
-            ToolCall::Decompose { task } => assert_eq!(task, "Test task"),
+            ToolCall::Decompose { task_id: _, task } => {
+                assert_eq!(task, Some("Test task".to_string()))
+            }
             _ => panic!("Unexpected variant"),
         }
     }
@@ -321,7 +338,10 @@ mod tests {
     // ========================================================================
 
     #[tokio::test]
-    async fn test_tools_list_returns_all_three_tools() {
+    async fn test_tools_list_returns_all_orchestrator_tools() {
+        // Explicitly set agent type to orchestrator for this test
+        std::env::set_var("VILLALOBOS_AGENT_TYPE", "orchestrator");
+
         let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
 
         let request = make_json_rpc_request(2, "tools/list", json!({}));
@@ -330,17 +350,23 @@ mod tests {
         let resp = response.unwrap();
         let tools = resp["result"]["tools"].as_array().unwrap();
 
-        assert_eq!(tools.len(), 3);
+        // Orchestrator has 4 tools: decompose, spawn_agents, complete, create_task
+        assert_eq!(tools.len(), 4, "Expected 4 orchestrator tools, got: {:?}",
+            tools.iter().map(|t| t["name"].as_str().unwrap_or("?")).collect::<Vec<_>>());
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
 
         assert!(tool_names.contains(&"decompose"));
         assert!(tool_names.contains(&"spawn_agents"));
         assert!(tool_names.contains(&"complete"));
+        assert!(tool_names.contains(&"create_task"));
     }
 
     #[tokio::test]
     async fn test_tools_list_has_correct_schemas() {
+        // Explicitly set agent type to orchestrator for this test
+        std::env::set_var("VILLALOBOS_AGENT_TYPE", "orchestrator");
+
         let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
 
         let request = make_json_rpc_request(3, "tools/list", json!({}));
@@ -352,11 +378,9 @@ mod tests {
         // Find decompose tool and verify schema
         let decompose = tools.iter().find(|t| t["name"] == "decompose").unwrap();
         assert_eq!(decompose["inputSchema"]["type"], "object");
+        // Either task_id or task can be provided (both optional, but at least one required at runtime)
         assert!(decompose["inputSchema"]["properties"]["task"].is_object());
-        assert!(decompose["inputSchema"]["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("task")));
+        assert!(decompose["inputSchema"]["properties"]["task_id"].is_object());
 
         // Find complete tool and verify schema
         let complete = tools.iter().find(|t| t["name"] == "complete").unwrap();

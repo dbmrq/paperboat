@@ -528,8 +528,16 @@ async fn test_e2e_tool_call_arguments_verification() {
         "Should have a spawn_agents tool call"
     );
 
-    if let crate::mcp_server::ToolCall::SpawnAgents { agents, .. } = &spawn_agents_call.unwrap().call {
-        let task = agents.first().map(|a| &a.task).expect("Should have at least one agent");
+    if let crate::mcp_server::ToolCall::SpawnAgents { agents, .. } =
+        &spawn_agents_call.unwrap().call
+    {
+        let agent = agents.first().expect("Should have at least one agent");
+        // Get task or task_id
+        let task = agent
+            .task
+            .as_ref()
+            .or(agent.task_id.as_ref())
+            .expect("Agent should have task or task_id");
         assert!(!task.is_empty(), "SpawnAgents task should not be empty");
         assert!(
             task.to_lowercase().contains("error") || task.to_lowercase().contains("handling"),

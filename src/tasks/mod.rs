@@ -5,7 +5,7 @@
 
 mod manager;
 
-pub use manager::TaskManager;
+pub use manager::{AgentNote, GoalSummary, TaskManager};
 
 use serde::{Deserialize, Serialize};
 use std::time::Instant;

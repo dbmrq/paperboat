@@ -166,7 +166,7 @@ impl App {
                     let ToolMessage::Request { request, response_tx } = tool_msg;
 
                     match &request.tool_call {
-                        ToolCall::Complete { success, message } => {
+                        ToolCall::Complete { success, message, .. } => {
                             tracing::info!(
                                 "✅ Session {} signaled complete: success={}, message={:?}",
                                 session_id,
@@ -211,6 +211,23 @@ impl App {
                             let response = ToolResponse::success(
                                 request.request_id,
                                 format!("Task '{}' created with id {}", name, task_id),
+                            );
+                            let _ = response_tx.send(response);
+                        }
+                        ToolCall::SetGoal { summary, acceptance_criteria } => {
+                            {
+                                let mut tm = self.task_manager.write().await;
+                                tm.set_goal(summary.clone(), acceptance_criteria.clone());
+                            }
+
+                            tracing::info!(
+                                "📎 Session {} set goal: {}",
+                                session_id, summary
+                            );
+
+                            let response = ToolResponse::success(
+                                request.request_id,
+                                format!("Goal set: {}", summary),
                             );
                             let _ = response_tx.send(response);
                         }
@@ -267,7 +284,7 @@ impl App {
                     let ToolMessage::Request { request, response_tx } = tool_msg;
 
                     match &request.tool_call {
-                        ToolCall::Complete { success, message } => {
+                        ToolCall::Complete { success, message, .. } => {
                             tracing::info!(
                                 "✅ Session {} signaled complete: success={}, message={:?}",
                                 session_id,
@@ -312,6 +329,23 @@ impl App {
                             let response = ToolResponse::success(
                                 request.request_id,
                                 format!("Task '{}' created with id {}", name, task_id),
+                            );
+                            let _ = response_tx.send(response);
+                        }
+                        ToolCall::SetGoal { summary, acceptance_criteria } => {
+                            {
+                                let mut tm = self.task_manager.write().await;
+                                tm.set_goal(summary.clone(), acceptance_criteria.clone());
+                            }
+
+                            tracing::info!(
+                                "📎 Session {} set goal: {}",
+                                session_id, summary
+                            );
+
+                            let response = ToolResponse::success(
+                                request.request_id,
+                                format!("Goal set: {}", summary),
                             );
                             let _ = response_tx.send(response);
                         }

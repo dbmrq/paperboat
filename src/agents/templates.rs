@@ -1,52 +1,66 @@
 //! Built-in agent templates.
+//!
+//! Templates are auto-discovered from the `prompts/` directory at compile time.
+//! Tool restrictions are configured in `config.rs` - new roles default to implementer permissions.
 
-use super::config::{EXPLORER_CONFIG, IMPLEMENTER_CONFIG, VERIFIER_CONFIG};
-use super::AgentRole;
-use std::collections::HashMap;
+use super::config::{get_tool_config, AgentToolConfig, IMPLEMENTER_CONFIG};
+use super::{get_prompt, AgentRole, SPAWNABLE_ROLES};
 
 /// Template defining an agent's prompt and tool restrictions.
 pub struct AgentTemplate {
-    /// The prompt template with {task} and {user_goal} placeholders.
+    /// The prompt template with {task} and {user_goal}/{context} placeholders.
     pub prompt_template: &'static str,
     /// Tools to remove from this agent type.
     pub removed_tools: Vec<&'static str>,
 }
 
-/// Registry of built-in agent templates.
+/// Registry of agent templates (auto-discovered from prompts/).
 pub struct AgentRegistry {
-    templates: HashMap<AgentRole, AgentTemplate>,
+    // No internal storage needed - we look up dynamically
 }
 
 impl AgentRegistry {
     pub fn new() -> Self {
-        let mut templates = HashMap::new();
-
-        // Use centralized config from agents::config for tool restrictions
-        templates.insert(AgentRole::Implementer, AgentTemplate {
-            prompt_template: include_str!("../../prompts/implementer.txt"),
-            removed_tools: IMPLEMENTER_CONFIG.removed_auggie_tools.to_vec(),
-        });
-
-        templates.insert(AgentRole::Verifier, AgentTemplate {
-            prompt_template: include_str!("../../prompts/verifier.txt"),
-            removed_tools: VERIFIER_CONFIG.removed_auggie_tools.to_vec(),
-        });
-
-        templates.insert(AgentRole::Explorer, AgentTemplate {
-            prompt_template: include_str!("../../prompts/explorer.txt"),
-            removed_tools: EXPLORER_CONFIG.removed_auggie_tools.to_vec(),
-        });
-
-        Self { templates }
+        Self {}
     }
 
-    pub fn get(&self, role: &AgentRole) -> Option<&AgentTemplate> {
-        self.templates.get(role)
+    /// Get the template for a role.
+    ///
+    /// Templates are auto-discovered from `prompts/` directory.
+    /// Tool restrictions come from `config.rs` (defaults to implementer if not configured).
+    pub fn get(&self, role: &AgentRole) -> Option<AgentTemplate> {
+        let role_str = role.as_str();
+
+        // Custom agents don't have templates - they provide their own
+        if matches!(role, AgentRole::Custom) {
+            return None;
+        }
+
+        // Get prompt from auto-discovered prompts
+        let prompt = get_prompt(role_str)?;
+
+        // Get tool config (falls back to implementer config for unknown roles)
+        let config = get_tool_config(role_str);
+
+        Some(AgentTemplate {
+            prompt_template: prompt,
+            removed_tools: config.removed_auggie_tools.to_vec(),
+        })
     }
 
+    /// Check if a role has a template.
     #[allow(dead_code)]
     pub fn has_role(&self, role: &AgentRole) -> bool {
-        self.templates.contains_key(role)
+        if matches!(role, AgentRole::Custom) {
+            return false;
+        }
+        SPAWNABLE_ROLES.contains(&role.as_str())
+    }
+
+    /// Get all available spawnable role names.
+    #[allow(dead_code)]
+    pub fn available_roles(&self) -> &'static [&'static str] {
+        SPAWNABLE_ROLES
     }
 }
 
@@ -100,6 +114,15 @@ mod tests {
         let registry = AgentRegistry::new();
         // Custom agents don't have a template - they provide their own config
         assert!(registry.get(&AgentRole::Custom).is_none());
+    }
+
+    #[test]
+    fn test_registry_lists_available_roles() {
+        let registry = AgentRegistry::new();
+        let roles = registry.available_roles();
+        assert!(roles.contains(&"implementer"));
+        assert!(roles.contains(&"verifier"));
+        assert!(roles.contains(&"explorer"));
     }
 }
 

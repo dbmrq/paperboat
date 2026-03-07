@@ -67,7 +67,7 @@ impl MockToolInterceptor {
     /// Get a response for a tool call, returning an error if exhausted.
     pub fn get_response(&mut self, call: &ToolCall, request_id: &str) -> Result<ToolResponse> {
         let expected_type = match call {
-            ToolCall::Decompose { task } => {
+            ToolCall::Decompose { task_id, task } => {
                 // First check if there's a specific mock response for decompose
                 if let Some(pos) = self
                     .response_queue
@@ -83,8 +83,14 @@ impl MockToolInterceptor {
                     return Ok(response);
                 }
                 // Otherwise, decompose always succeeds (the App handles the actual decomposition)
-                let response =
-                    ToolResponse::success(request_id.to_string(), format!("Decomposed: {task}"));
+                let task_desc = task
+                    .as_deref()
+                    .or(task_id.as_deref())
+                    .unwrap_or("(unknown)");
+                let response = ToolResponse::success(
+                    request_id.to_string(),
+                    format!("Decomposed: {task_desc}"),
+                );
                 self.captured_calls.push(CapturedToolCall {
                     call: call.clone(),
                     response: response.clone(),
@@ -92,7 +98,7 @@ impl MockToolInterceptor {
                 return Ok(response);
             }
             ToolCall::SpawnAgents { .. } => MockToolType::SpawnAgents,
-            ToolCall::Complete { success, message } => {
+            ToolCall::Complete { success, message, .. } => {
                 // Complete always succeeds (records the agent's completion status)
                 let response = ToolResponse::success(
                     request_id.to_string(),
@@ -115,6 +121,18 @@ impl MockToolInterceptor {
                 let response = ToolResponse::success(
                     request_id.to_string(),
                     format!("Task '{}' created successfully", name),
+                );
+                self.captured_calls.push(CapturedToolCall {
+                    call: call.clone(),
+                    response: response.clone(),
+                });
+                return Ok(response);
+            }
+            ToolCall::SetGoal { summary, .. } => {
+                // SetGoal always succeeds
+                let response = ToolResponse::success(
+                    request_id.to_string(),
+                    format!("Goal set: {}", summary),
                 );
                 self.captured_calls.push(CapturedToolCall {
                     call: call.clone(),
@@ -198,8 +216,9 @@ mod tests {
 
         let call = ToolCall::SpawnAgents {
             agents: vec![crate::mcp_server::AgentSpec {
-                role: "implementer".to_string(),
-                task: "test task".to_string(),
+                role: Some("implementer".to_string()),
+                task: Some("test task".to_string()),
+                task_id: None,
                 prompt: None,
                 tools: None,
             }],
@@ -219,8 +238,9 @@ mod tests {
 
         let call = ToolCall::SpawnAgents {
             agents: vec![crate::mcp_server::AgentSpec {
-                role: "implementer".to_string(),
-                task: "test task".to_string(),
+                role: Some("implementer".to_string()),
+                task: Some("test task".to_string()),
+                task_id: None,
                 prompt: None,
                 tools: None,
             }],

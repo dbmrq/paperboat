@@ -53,11 +53,15 @@ impl App {
             )
             .await?;
 
-        let full_prompt = format!(
-            "{}\n\n## Plan\n\n{}",
-            ORCHESTRATOR_PROMPT.trim(),
-            prompt
-        );
+        // Get the goal from task manager
+        let goal = {
+            let tm = self.task_manager.read().await;
+            tm.format_goal()
+        };
+
+        let full_prompt = ORCHESTRATOR_PROMPT
+            .replace("{goal}", &goal)
+            .replace("{plan}", prompt);
         tracing::debug!("🎭 Orchestrator prompt:\n{}", full_prompt);
 
         self.acp_orchestrator
@@ -99,14 +103,39 @@ impl App {
                     tracing::debug!("📨 Orchestrator MCP tool call received: {:?}", request.tool_call.tool_type());
 
                     match &request.tool_call {
-                        ToolCall::Decompose { task } => {
+                        ToolCall::Decompose { task_id, task } => {
+                            // Resolve task description from task_id if needed
+                            let resolved_task = if let Some(ref tid) = task_id {
+                                let tm = self.task_manager.read().await;
+                                tm.get(tid)
+                                    .map(|t| t.description.clone())
+                                    .unwrap_or_else(|| {
+                                        format!("(task {} not found)", tid)
+                                    })
+                            } else {
+                                task.clone().unwrap_or_else(|| "(no task)".to_string())
+                            };
+
                             // Log the MCP tool call to orchestrator log
-                            let _ = writer.write_mcp_tool_call("decompose", &truncate_for_log(task, 100)).await;
-                            tracing::info!("🔄 MCP tool call: decompose({})", truncate_for_log(task, 80));
+                            let _ = writer
+                                .write_mcp_tool_call(
+                                    "decompose",
+                                    &truncate_for_log(&resolved_task, 100),
+                                )
+                                .await;
+                            tracing::info!(
+                                "🔄 MCP tool call: decompose({})",
+                                truncate_for_log(&resolved_task, 80)
+                            );
 
                             self.tool_rx = Some(tool_rx);
-                            let response = self.handle_decompose_with_response(task, &request.request_id).await;
-                            tool_rx = self.tool_rx.take().context("Tool receiver lost during decompose")?;
+                            let response = self
+                                .handle_decompose_with_response(&resolved_task, &request.request_id)
+                                .await;
+                            tool_rx = self
+                                .tool_rx
+                                .take()
+                                .context("Tool receiver lost during decompose")?;
 
                             // Log the result to orchestrator log
                             let _ = writer.write_mcp_tool_result(
@@ -126,27 +155,39 @@ impl App {
 
                             // Log each agent being spawned
                             for (i, agent) in agents.iter().enumerate() {
+                                let role = agent.role.as_deref().unwrap_or("implementer");
+                                let task_desc = agent
+                                    .task
+                                    .as_deref()
+                                    .or(agent.task_id.as_deref())
+                                    .unwrap_or("(no task)");
                                 tracing::info!(
                                     "  📋 Agent {}/{}: [{}] {}",
                                     i + 1,
                                     agent_count,
-                                    agent.role,
-                                    truncate_for_log(&agent.task, 60)
+                                    role,
+                                    truncate_for_log(task_desc, 60)
                                 );
                             }
 
                             // Validate custom agents have required fields
                             let mut validation_error: Option<String> = None;
                             for agent in agents {
-                                if agent.role.to_lowercase() == "custom" {
+                                let role = agent.role.as_deref().unwrap_or("implementer");
+                                if role.to_lowercase() == "custom" {
                                     if agent.prompt.is_none() {
-                                        validation_error = Some("Custom agent requires 'prompt' field".to_string());
+                                        validation_error =
+                                            Some("Custom agent requires 'prompt' field".to_string());
                                         break;
                                     }
-                                    if agent.tools.is_none() {
-                                        validation_error = Some("Custom agent requires 'tools' whitelist".to_string());
-                                        break;
-                                    }
+                                    // tools is optional - if not provided, all default tools are enabled
+                                }
+                                // Validate that either task or task_id is provided
+                                if agent.task.is_none() && agent.task_id.is_none() {
+                                    validation_error = Some(
+                                        "Agent requires either 'task' or 'task_id' field".to_string(),
+                                    );
+                                    break;
                                 }
                             }
 
@@ -199,23 +240,65 @@ impl App {
                                     );
                                 }
 
-                                (all_success, summaries.join("\n"))
+                                // Include notes from agents in the response
+                                let mut combined = summaries.join("\n");
+                                {
+                                    let tm = self.task_manager.read().await;
+                                    if let Some(notes_section) = tm.format_notes() {
+                                        combined.push_str("\n\n");
+                                        combined.push_str(&notes_section);
+                                    }
+                                }
+
+                                (all_success, combined)
                             } else {
                                 // Sequential mode: spawn agents one at a time
                                 // This uses handle_implement_with_response which works with mock clients
-                                tracing::debug!("Running {} agents in SEQUENTIAL mode (mock/test)", agents.len());
+                                tracing::debug!(
+                                    "Running {} agents in SEQUENTIAL mode (mock/test)",
+                                    agents.len()
+                                );
 
                                 let mut all_success = true;
                                 let mut summaries = Vec::new();
+                                let agent_len = agents.len();
 
                                 for agent in agents {
+                                    // Resolve task from task_id if needed
+                                    let role =
+                                        agent.role.as_deref().unwrap_or("implementer").to_string();
+                                    let task = if let Some(ref tid) = agent.task_id {
+                                        // Look up task description from task manager
+                                        let tm = self.task_manager.read().await;
+                                        tm.get(tid)
+                                            .map(|t| t.description.clone())
+                                            .unwrap_or_else(|| {
+                                                format!("(task {} not found)", tid)
+                                            })
+                                    } else {
+                                        agent
+                                            .task
+                                            .clone()
+                                            .unwrap_or_else(|| "(no task)".to_string())
+                                    };
+
                                     // Restore tool_rx before spawning (it needs to receive complete signal)
                                     self.tool_rx = Some(tool_rx);
-                                    let impl_response = self.handle_implement_with_response(&agent.task, &request.request_id).await;
-                                    tool_rx = self.tool_rx.take().context("Tool receiver lost during spawn_agents")?;
+                                    let impl_response = self
+                                        .handle_implement_with_response(&task, &request.request_id)
+                                        .await;
+                                    tool_rx = self
+                                        .tool_rx
+                                        .take()
+                                        .context("Tool receiver lost during spawn_agents")?;
 
                                     let status = if impl_response.success { "✓" } else { "✗" };
-                                    summaries.push(format!("[{}] {} {}", agent.role, status, truncate_for_log(&impl_response.summary, 80)));
+                                    summaries.push(format!(
+                                        "[{}] {} {}",
+                                        role,
+                                        status,
+                                        truncate_for_log(&impl_response.summary, 80)
+                                    ));
 
                                     if !impl_response.success {
                                         all_success = false;
@@ -223,23 +306,34 @@ impl App {
                                 }
 
                                 // Log overall completion
-                                let success_count = summaries.iter().filter(|s| s.contains("✓")).count();
+                                let success_count =
+                                    summaries.iter().filter(|s| s.contains("✓")).count();
                                 if all_success {
                                     tracing::info!(
                                         "✅ spawn_agents complete: {}/{} agents succeeded (sequential mode)",
                                         success_count,
-                                        agents.len()
+                                        agent_len
                                     );
                                 } else {
                                     tracing::warn!(
                                         "⚠️ spawn_agents complete: {}/{} agents succeeded, {} failed (sequential mode)",
                                         success_count,
-                                        agents.len(),
-                                        agents.len() - success_count
+                                        agent_len,
+                                        agent_len - success_count
                                     );
                                 }
 
-                                (all_success, summaries.join("\n"))
+                                // Include notes from agents in the response
+                                let mut combined = summaries.join("\n");
+                                {
+                                    let tm = self.task_manager.read().await;
+                                    if let Some(notes_section) = tm.format_notes() {
+                                        combined.push_str("\n\n");
+                                        combined.push_str(&notes_section);
+                                    }
+                                }
+
+                                (all_success, combined)
                             };
 
                             let response = if all_success {
@@ -257,7 +351,7 @@ impl App {
 
                             let _ = response_tx.send(response);
                         }
-                        ToolCall::Complete { success, message } => {
+                        ToolCall::Complete { success, message, .. } => {
                             // Log the completion message
                             if let Some(msg) = &message {
                                 let _ = writer.write_result(msg).await;
@@ -281,12 +375,30 @@ impl App {
 
                             break TaskResult { success: *success, message: message.clone() };
                         }
-                        ToolCall::CreateTask { .. } => {
-                            // CreateTask is only for planner agents, not orchestrator
-                            tracing::warn!("Orchestrator received unexpected CreateTask call");
+                        ToolCall::CreateTask { name, description, dependencies } => {
+                            // Orchestrator can create tasks dynamically
+                            let task_id = {
+                                let mut tm = self.task_manager.write().await;
+                                tm.create(name, description, dependencies.clone())
+                            };
+
+                            tracing::info!(
+                                "📋 Orchestrator created task [{}]: {}",
+                                task_id, name
+                            );
+
+                            let response = ToolResponse::success(
+                                request.request_id.clone(),
+                                format!("Task '{}' created with ID: {}", name, task_id),
+                            );
+                            let _ = response_tx.send(response);
+                        }
+                        ToolCall::SetGoal { .. } => {
+                            // SetGoal is only for planner agents, not orchestrator
+                            tracing::warn!("Orchestrator received unexpected SetGoal call");
                             let response = ToolResponse::failure(
                                 request.request_id.clone(),
-                                "create_task is not available to orchestrator agents".to_string(),
+                                "set_goal is not available to orchestrator agents".to_string(),
                             );
                             let _ = response_tx.send(response);
                         }

@@ -7,18 +7,88 @@
 ///
 /// Used by the orchestrator to describe worker agents when making
 /// `spawn_agents` tool calls.
+///
+/// There are two ways to specify an agent:
+/// 1. **By task_id**: Just provide `task_id` (e.g., "task001"). The task description
+///    is looked up from TaskManager, and role defaults to "implementer".
+/// 2. **Explicitly**: Provide `role` and `task` directly. Use this for custom agents
+///    or when not using the task tracking system.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AgentSpec {
-    /// The role of the agent (e.g., "implementer", "verifier", "explorer", "custom")
-    pub role: String,
-    /// The task to be performed by this agent
-    pub task: String,
+    /// The role of the agent (e.g., "implementer", "verifier", "explorer", "custom").
+    /// Defaults to "implementer" when task_id is provided.
+    #[serde(default)]
+    pub role: Option<String>,
+    /// The task to be performed by this agent.
+    /// Optional when task_id is provided (looked up from TaskManager).
+    #[serde(default)]
+    pub task: Option<String>,
+    /// Task ID linking this agent to a tracked task (e.g., "task001").
+    /// When provided:
+    /// - Task description is looked up automatically
+    /// - Role defaults to "implementer"
+    /// - Status is auto-updated: InProgress → Complete/Failed
+    #[serde(default)]
+    pub task_id: Option<String>,
     /// Custom prompt (required for role="custom", optional for others)
     #[serde(default)]
     pub prompt: Option<String>,
     /// Explicit tool whitelist (required for role="custom")
     #[serde(default)]
     pub tools: Option<Vec<String>>,
+}
+
+/// A fully resolved agent specification with all required fields populated.
+///
+/// Created from an `AgentSpec` by resolving task_id lookups and applying defaults.
+#[derive(Debug, Clone)]
+pub struct ResolvedAgentSpec {
+    /// The role of the agent (resolved from spec or defaulted to "implementer")
+    pub role: String,
+    /// The task description (resolved from TaskManager if task_id was provided)
+    pub task: String,
+    /// The task ID if this agent is linked to a tracked task
+    pub task_id: Option<String>,
+    /// Custom prompt (for role="custom")
+    pub prompt: Option<String>,
+    /// Explicit tool whitelist (for role="custom")
+    pub tools: Option<Vec<String>>,
+}
+
+impl AgentSpec {
+    /// Resolve this spec into a fully-populated ResolvedAgentSpec.
+    ///
+    /// If task_id is provided, looks up the task description from the provided lookup function.
+    /// Returns an error if:
+    /// - task_id is provided but the task is not found
+    /// - Neither task_id nor task is provided
+    pub fn resolve<F>(&self, task_lookup: F) -> Result<ResolvedAgentSpec, String>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        // Resolve task: either from task_id lookup or explicit task field
+        let task = if let Some(ref tid) = self.task_id {
+            task_lookup(tid).ok_or_else(|| format!("Task '{}' not found", tid))?
+        } else if let Some(ref t) = self.task {
+            t.clone()
+        } else {
+            return Err("Either 'task_id' or 'task' must be provided".to_string());
+        };
+
+        // Resolve role: explicit or default to "implementer"
+        let role = self
+            .role
+            .clone()
+            .unwrap_or_else(|| "implementer".to_string());
+
+        Ok(ResolvedAgentSpec {
+            role,
+            task,
+            task_id: self.task_id.clone(),
+            prompt: self.prompt.clone(),
+            tools: self.tools.clone(),
+        })
+    }
 }
 
 /// Wait mode for spawned agents.
@@ -103,6 +173,21 @@ impl ToolResponse {
     }
 }
 
+/// A task suggested by an agent during completion.
+///
+/// Agents can suggest tasks they discovered were needed but are outside their scope.
+/// These are added to the TaskManager and the orchestrator can act on them.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SuggestedTask {
+    /// The name of the suggested task.
+    pub name: String,
+    /// What needs to be done.
+    pub description: String,
+    /// Optional dependencies (by task name or ID).
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
+}
+
 /// Tool call from an agent.
 ///
 /// Represents the different operations that can be requested by agents
@@ -118,9 +203,14 @@ impl ToolResponse {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ToolCall {
     /// Request to decompose a task into subtasks.
+    /// Either `task_id` or `task` must be provided.
     Decompose {
-        /// The task description to decompose.
-        task: String,
+        /// Task ID to decompose (e.g., "task001"). Looked up from TaskManager.
+        #[serde(default)]
+        task_id: Option<String>,
+        /// Explicit task description to decompose.
+        #[serde(default)]
+        task: Option<String>,
     },
     /// Request to spawn one or more worker agents.
     SpawnAgents {
@@ -136,6 +226,14 @@ pub enum ToolCall {
         success: bool,
         /// Optional message providing details about the completion.
         message: Option<String>,
+        /// Optional notes for future agents/orchestrator (insights, decisions, warnings).
+        /// Use this to leave context that will help other agents or inform the orchestrator.
+        #[serde(default)]
+        notes: Option<String>,
+        /// Optional tasks to add to the plan.
+        /// Use this for work you discovered was needed but is outside your current scope.
+        #[serde(default)]
+        add_tasks: Option<Vec<SuggestedTask>>,
     },
     /// Create a task (used by planner agents).
     /// This creates a task for the orchestrator to track and execute.
@@ -147,6 +245,15 @@ pub enum ToolCall {
         /// Names of tasks that this task depends on.
         dependencies: Vec<String>,
     },
+    /// Set the goal summary (used by planner agents).
+    /// Called first to define what success looks like before creating tasks.
+    SetGoal {
+        /// A concise summary of the user's goal.
+        summary: String,
+        /// Success criteria / acceptance conditions.
+        #[serde(default)]
+        acceptance_criteria: Option<String>,
+    },
 }
 
 impl ToolCall {
@@ -157,6 +264,7 @@ impl ToolCall {
             Self::SpawnAgents { .. } => "spawn_agents",
             Self::Complete { .. } => "complete",
             Self::CreateTask { .. } => "create_task",
+            Self::SetGoal { .. } => "set_goal",
         }
     }
 }

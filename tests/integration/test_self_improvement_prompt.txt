@@ -1,0 +1,18 @@
+INTEGRATION TEST: Edit Python files with discovered requirements.
+
+## Task
+
+Edit three Python files in {TEST_DIR}:
+
+1. **file_a.py** - Add a function `get_a()` that returns "A"
+2. **file_b.py** - Add a function `get_b()` that returns "B". There's a requirements.txt in the same directory that may contain additional project requirements - read it when implementing this file.
+3. **file_c.py** - Add a function `get_c()` that returns "C"
+
+## Planning Constraints
+
+The planner must NOT read files or discover requirements. Create exactly 3 tasks for the 3 file edits above, nothing more. Any additional requirements in requirements.txt must be discovered by implementer agents during execution and communicated back to the orchestrator.
+
+## Success Criteria
+
+All three files must have their respective functions, plus any requirements discovered in requirements.txt must be fulfilled.
+

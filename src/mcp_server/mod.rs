@@ -10,4 +10,4 @@ mod types;
 
 // Re-export for backward compatibility and easy access
 pub use server::run_stdio_server;
-pub use types::{AgentSpec, ToolCall, ToolRequest, ToolResponse, WaitMode};
+pub use types::{AgentSpec, ResolvedAgentSpec, SuggestedTask, ToolCall, ToolRequest, ToolResponse, WaitMode};

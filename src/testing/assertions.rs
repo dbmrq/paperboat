@@ -51,7 +51,12 @@ impl TestRunResult {
             .iter()
             .filter_map(|c| match &c.call {
                 ToolCall::SpawnAgents { agents, .. } => {
-                    agents.first().map(|a| a.task.clone())
+                    // Get task or task_id as fallback
+                    agents.first().and_then(|a| {
+                        a.task
+                            .clone()
+                            .or_else(|| a.task_id.clone())
+                    })
                 }
                 _ => None,
             })
@@ -68,7 +73,10 @@ impl TestRunResult {
         self.tool_calls
             .iter()
             .filter_map(|c| match &c.call {
-                ToolCall::Decompose { task } => Some(task.clone()),
+                ToolCall::Decompose { task_id, task } => {
+                    // Return task if present, otherwise task_id
+                    task.clone().or_else(|| task_id.clone())
+                }
                 _ => None,
             })
             .collect()
@@ -185,8 +193,9 @@ mod tests {
                 CapturedToolCall {
                     call: ToolCall::SpawnAgents {
                         agents: vec![crate::mcp_server::AgentSpec {
-                            role: "implementer".to_string(),
-                            task: "task1".to_string(),
+                            role: Some("implementer".to_string()),
+                            task: Some("task1".to_string()),
+                            task_id: None,
                             prompt: None,
                             tools: None,
                         }],
@@ -196,7 +205,8 @@ mod tests {
                 },
                 CapturedToolCall {
                     call: ToolCall::Decompose {
-                        task: "complex task".to_string(),
+                        task_id: None,
+                        task: Some("complex task".to_string()),
                     },
                     response: ToolResponse::success("req-2".to_string(), "decomposed".to_string()),
                 },
