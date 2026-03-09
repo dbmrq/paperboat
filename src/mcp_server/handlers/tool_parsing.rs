@@ -24,7 +24,9 @@ pub fn parse_decompose(arguments: &serde_json::Map<String, Value>) -> ParseResul
     // Require task_id (preferred) or fall back to task (deprecated)
     if task_id.is_none() && task.is_none() {
         tracing::warn!("⚠️  decompose tool missing 'task_id' argument");
-        return Err("requires 'task_id' argument. Create the task first with create_task if needed.");
+        return Err(
+            "requires 'task_id' argument. Create the task first with create_task if needed.",
+        );
     }
 
     if task_id.is_none() && task.is_some() {
@@ -177,6 +179,7 @@ pub fn parse_skip_tasks(arguments: &serde_json::Map<String, Value>) -> ParseResu
 }
 
 /// Parse the `list_tasks` tool call arguments.
+#[allow(clippy::unnecessary_wraps)]
 pub fn parse_list_tasks(arguments: &serde_json::Map<String, Value>) -> ParseResult {
     let status_filter = arguments
         .get("status_filter")

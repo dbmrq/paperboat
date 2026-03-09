@@ -1,9 +1,0 @@
-# Session New Success Response Fixture
-#
-# Successful response to an ACP session/new request.
-
-method = "session/new"
-
-[result]
-sessionId = "mock-session-12345"
-

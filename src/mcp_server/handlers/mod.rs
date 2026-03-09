@@ -11,9 +11,6 @@ mod response;
 mod tool_parsing;
 mod tool_schemas;
 
-// Re-export response builder function for use by other modules
-pub use response::build_response_text_with_state;
-
 use super::error::{
     internal_error, invalid_params_error, invalid_request_error, method_not_found_error,
 };
@@ -242,8 +239,11 @@ async fn handle_tool_call(
 
     // Build response text based on actual result from the app
     // Pass task state from response for context-aware "What's Next" guidance
-    let response_text =
-        response::build_response_text_with_state(&tool_call, &tool_response, tool_response.task_state.as_ref());
+    let response_text = response::build_response_text_with_state(
+        &tool_call,
+        &tool_response,
+        tool_response.task_state.as_ref(),
+    );
 
     let result = json!({
         "content": [

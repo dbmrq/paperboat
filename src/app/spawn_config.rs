@@ -21,7 +21,7 @@ pub struct AgentResult {
     #[allow(dead_code)]
     pub message: Option<String>,
     /// Task IDs that were suggested by this agent via `add_tasks`.
-    /// These tasks have been created in the TaskManager with `NotStarted` status
+    /// These tasks have been created in the `TaskManager` with `NotStarted` status
     /// and must be addressed (executed or skipped) before completion.
     pub suggested_task_ids: Vec<String>,
 }

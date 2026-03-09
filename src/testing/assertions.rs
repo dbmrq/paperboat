@@ -21,8 +21,8 @@ pub struct TestRunResult {
     pub prompts_sent: Vec<(String, String)>,
     /// Session IDs of all sessions created during the run.
     pub sessions_created: Vec<String>,
-    /// Final task states loaded from tasks.json (task_id, task_name, status).
-    /// Status is one of: "pending", "in_progress", "completed", "failed", "skipped".
+    /// Final task states loaded from tasks.json (`task_id`, `task_name`, `status`).
+    /// Status is one of: `pending`, `in_progress`, `completed`, `failed`, or `skipped`.
     pub final_tasks: Vec<FinalTaskState>,
 }
 
@@ -33,7 +33,7 @@ pub struct FinalTaskState {
     pub task_id: String,
     /// Task name.
     pub name: String,
-    /// Final status (e.g., "completed", "failed", "skipped", "pending", "in_progress").
+    /// Final status (e.g., `completed`, `failed`, `skipped`, `pending`, or `in_progress`).
     pub status: String,
 }
 
@@ -59,7 +59,7 @@ impl TestRunResult {
             .any(|id| id.contains("impl") || id.contains("implementer"))
     }
 
-    /// Get all `spawn_agents()` tool calls as task strings (first agent's task from each call).
+    /// Get all `spawn_agents` tool calls as task strings (first agent's task from each call).
     pub fn spawn_agents_calls(&self) -> Vec<String> {
         self.tool_calls
             .iter()
@@ -94,7 +94,7 @@ impl TestRunResult {
             .collect()
     }
 
-    /// Get all `skip_tasks()` tool calls as (`task_ids`, reason) tuples.
+    /// Get all `skip_tasks` tool calls as (`task_ids`, reason) tuples.
     pub fn skip_tasks_calls(&self) -> Vec<(Vec<String>, Option<String>)> {
         self.tool_calls
             .iter()

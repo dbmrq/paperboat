@@ -14,7 +14,8 @@ Paperboat uses these three concepts to execute any task.
 
 ## Features
 
-- **Multi-Agent Architecture**: Orchestrator, Planner, Implementer, Verifier, and Explorer agents
+- **Multi-Agent Architecture**: Orchestrator, Planner, Implementer, Verifier, Explorer, and Self-Improver agents
+- **Self-Improvement**: Automatically analyzes run logs and improves itself after successful tasks
 - **Task Management**: Hierarchical task decomposition and dependency tracking
 - **Real-time TUI**: Interactive terminal interface for monitoring agent activity (enabled by default)
 - **Comprehensive Logging**: Detailed logs with optional JSON format for debugging and analysis
@@ -22,6 +23,63 @@ Paperboat uses these three concepts to execute any task.
 - **Per-Agent Configuration**: Configure models and settings per agent type
 - **Configuration Validation**: Validate config files with helpful error messages and typo suggestions
 - **Observability**: Optional Prometheus metrics export for monitoring (via `metrics` feature)
+
+## Self-Improvement
+
+Paperboat includes a self-improvement feature that runs automatically after successful tasks. After completing a task, paperboat analyzes its own run logs and makes incremental improvements to itself.
+
+### How It Works
+
+1. **After a successful task completes**, paperboat spawns a "self-improver" agent
+2. **The agent analyzes the run logs** looking for: errors, inefficiencies, unclear prompts, and missing edge case handling
+3. **Improvements are made based on repository mode:**
+   - **Own repository mode**: Makes direct changes to prompts, error messages, and documentation
+   - **Different repository mode**: Creates a GitHub issue with improvement suggestions
+
+### Repository Modes
+
+| Mode | When | What Happens |
+|------|------|--------------|
+| **Own Repository** | Running inside the paperboat repo | Full edit access - agent can modify prompts, improve error messages, update docs |
+| **Different Repository** | Running in any other project | Read-only analysis - findings are filed as a GitHub issue (requires `gh` CLI) |
+
+Repository detection uses git remote URL and `Cargo.toml` package name to determine mode.
+
+### Enabling/Disabling
+
+Self-improvement is **enabled by default** (opt-out). To disable:
+
+```bash
+# Disable via environment variable
+PAPERBOAT_SELF_IMPROVE=0 cargo run -- "your task"
+
+# Or create a config file
+echo 'enabled = false' > .paperboat/self-improve.toml
+```
+
+**Configuration priority** (highest to lowest):
+1. `PAPERBOAT_SELF_IMPROVE` environment variable (`1`/`true`/`on` to enable, `0`/`false`/`off` to disable)
+2. Project-level config: `.paperboat/self-improve.toml`
+3. User-level config: `~/.paperboat/self-improve.toml`
+4. Default: enabled
+
+### Privacy/Security
+
+- **Log analysis only**: The self-improver reads completed run logs, not your source code
+- **Local changes**: In own-repo mode, changes are made locally and left uncommitted for human review
+- **No automatic commits**: You always review and commit improvements manually
+- **GitHub issues**: In different-repo mode, issues are filed via your authenticated `gh` CLI session
+
+### What Gets Improved
+
+The self-improver focuses on low-risk, high-impact changes:
+
+- **Prompt clarity** (`prompts/*.txt`) - Making agent instructions clearer
+- **Error messages** - Improving guidance when tools fail
+- **Documentation** - Filling gaps in docs based on observed issues
+- **Tool descriptions** - Better MCP tool documentation
+
+It explicitly avoids: changing APIs, modifying core logic, adding new features, or making speculative changes not evidenced by logs.
 
 ## Quick Start
 
@@ -315,6 +373,7 @@ The TUI runs on a dedicated OS thread separate from the async Tokio runtime:
 | `PAPERBOAT_MODEL` | Override model for all agents in debug builds |
 | `PAPERBOAT_JSON_LOGS` | Set to `1` or `true` to enable JSON log format (alternative to `--json-logs`) |
 | `PAPERBOAT_METRICS` | Set to `1` or `true` to enable metrics collection (alternative to `--metrics`) |
+| `PAPERBOAT_SELF_IMPROVE` | Set to `0` or `false` to disable self-improvement (enabled by default) |
 
 ## Logs
 
@@ -383,6 +442,16 @@ cargo install cargo-deny
 cargo deny check all
 ```
 
+#### Unused Dependencies
+
+```bash
+# Install cargo-machete (fast, static analysis)
+cargo install cargo-machete
+
+# Check for unused dependencies
+cargo machete
+```
+
 #### Outdated Dependencies
 
 ```bash
@@ -408,7 +477,11 @@ cargo test --doc --all-features
 
 #### Pre-commit Hooks
 
-The project includes pre-commit hooks that run `cargo fmt` and `cargo clippy` before each commit:
+The project includes pre-commit hooks that run formatting, linting, and unused dependency checks before each commit:
+
+- `cargo fmt` - Code formatting check
+- `cargo clippy` - Lint check
+- `cargo machete` - Unused dependency check (if installed)
 
 ```bash
 # Install hooks (one-time setup)
@@ -427,13 +500,14 @@ The project uses GitHub Actions for continuous integration:
   - Clippy lints (default, all-features, no-features)
   - Build (debug and release)
   - Tests (all features and no features)
-  - Unused dependency check (`cargo-udeps`)
+  - Fast unused dependency check (`cargo-machete`)
   - Documentation build
 
 - **Security Workflow** (`security.yml`): Runs on dependency changes and weekly
   - Security audit (`cargo-audit`)
   - License and dependency check (`cargo-deny`)
   - Outdated dependency check (weekly/manual)
+  - Thorough unused dependency check (`cargo-udeps`, weekly/manual)
 
 - **Coverage Workflow** (`coverage.yml`): Runs on every push/PR
   - Code coverage with `cargo-llvm-cov`

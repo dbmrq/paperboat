@@ -7,6 +7,7 @@ mod logging;
 mod mcp_server;
 mod metrics;
 mod models;
+mod self_improve;
 mod tasks;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -381,6 +382,36 @@ async fn main() -> Result<()> {
 
     // Normal completion - gracefully shutdown all processes
     app.shutdown().await?;
+
+    // Self-improvement phase (only in paperboat's own repository)
+    // This runs after shutdown so it doesn't interfere with the main task.
+    // Errors are non-fatal - they're logged but don't affect the main task's result.
+    {
+        let task_manager = app.task_manager().read().await;
+        match self_improve::maybe_run_self_improvement(&run_dir, &result, &task_manager).await {
+            Ok(Some(outcome)) => {
+                if outcome.success {
+                    tracing::info!("🔄 Self-improvement completed successfully");
+                    if let Some(msg) = outcome.message {
+                        tracing::debug!("Self-improvement message: {}", msg);
+                    }
+                } else {
+                    tracing::warn!("🔄 Self-improvement completed with issues");
+                    if let Some(msg) = outcome.message {
+                        tracing::warn!("Self-improvement message: {}", msg);
+                    }
+                }
+            }
+            Ok(None) => {
+                // Self-improvement was skipped (disabled, not in paperboat repo, etc.)
+                tracing::debug!("Self-improvement skipped");
+            }
+            Err(e) => {
+                // Self-improvement failed, but this is non-fatal
+                tracing::warn!("Self-improvement failed (non-fatal): {}", e);
+            }
+        }
+    }
 
     // Wait for TUI thread to finish if it was started
     #[cfg(feature = "tui")]

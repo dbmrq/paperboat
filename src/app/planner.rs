@@ -107,20 +107,16 @@ impl App {
                                 .min(retry_config.max_delay.as_secs_f64()),
                         );
                     } else {
-                        let reason = if !is_transient {
-                            "non-transient error"
-                        } else {
+                        let reason = if is_transient {
                             "exhausted retries"
+                        } else {
+                            "non-transient error"
                         };
                         tracing::error!(
-                            "❌ Planner session_new failed after {} attempt(s) ({}): {:#}",
-                            attempt,
-                            reason,
-                            e
+                            "❌ Planner session_new failed after {attempt} attempt(s) ({reason}): {e:#}",
                         );
                         return Err(e).context(format!(
-                            "Planner session_new failed after {} attempt(s)",
-                            attempt
+                            "Planner session_new failed after {attempt} attempt(s)"
                         ));
                     }
                 }

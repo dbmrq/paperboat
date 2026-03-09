@@ -37,11 +37,6 @@ pub const ORCHESTRATOR_PROMPT: &str = include_str!("../../prompts/orchestrator.t
 /// System prompt for the planner agent (loaded from prompts/planner.txt)
 pub const PLANNER_PROMPT: &str = include_str!("../../prompts/planner.txt");
 
-/// System prompt for the implementer agent (loaded from prompts/implementer.txt)
-/// Note: Kept for reference; actual prompt now comes from `AgentRegistry`.
-#[allow(dead_code)]
-pub const IMPLEMENTER_PROMPT: &str = include_str!("../../prompts/implementer.txt");
-
 /// Truncate a string for logging, adding "..." if truncated.
 pub fn truncate_for_log(s: &str, max_len: usize) -> String {
     // Replace newlines with spaces for cleaner log output

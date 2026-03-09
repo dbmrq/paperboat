@@ -131,7 +131,7 @@ pub enum TaskStatus {
 impl TaskStatus {
     /// Returns a simple string representation suitable for display in TUI.
     ///
-    /// Returns one of: `pending`, `in_progress`, `completed`, `failed`, `skipped`
+    /// Returns one of: `pending`, `in_progress`, `completed`, `failed`, or `skipped`.
     pub const fn as_display_str(&self) -> &'static str {
         match self {
             Self::NotStarted => "pending",

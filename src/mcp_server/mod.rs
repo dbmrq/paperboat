@@ -14,6 +14,3 @@ pub use types::{
     AgentSpec, ModelComplexity, ResolvedAgentSpec, SuggestedTask, TaskStateInfo, ToolCall,
     ToolRequest, ToolResponse, WaitMode,
 };
-
-// Re-export response builder types for context-aware responses
-pub use handlers::build_response_text_with_state;

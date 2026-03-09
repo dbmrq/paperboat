@@ -8,7 +8,7 @@ mod templates;
 
 #[cfg(test)]
 pub use config::IMPLEMENTER_CONFIG;
-pub use config::{ORCHESTRATOR_CONFIG, PLANNER_CONFIG};
+pub use config::{get_tool_config, ORCHESTRATOR_CONFIG, PLANNER_CONFIG};
 pub use templates::AgentRegistry;
 
 // Include the auto-generated roles module
@@ -91,10 +91,11 @@ mod tests {
 
     #[test]
     fn test_spawnable_roles_discovered() {
-        // Should discover at least implementer, verifier, explorer from prompts/
+        // Should discover at least implementer, verifier, explorer, selfimprover from prompts/
         assert!(SPAWNABLE_ROLES.contains(&"implementer"));
         assert!(SPAWNABLE_ROLES.contains(&"verifier"));
         assert!(SPAWNABLE_ROLES.contains(&"explorer"));
+        assert!(SPAWNABLE_ROLES.contains(&"selfimprover"));
         // orchestrator and planner should NOT be in spawnable roles
         assert!(!SPAWNABLE_ROLES.contains(&"orchestrator"));
         assert!(!SPAWNABLE_ROLES.contains(&"planner"));
@@ -106,7 +107,15 @@ mod tests {
         assert!(get_prompt("implementer").is_some());
         assert!(get_prompt("verifier").is_some());
         assert!(get_prompt("explorer").is_some());
+        assert!(get_prompt("selfimprover").is_some());
         // Unknown role returns None
         assert!(get_prompt("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_selfimprover_role_uses_dynamic() {
+        // selfimprover should be parsed as a Dynamic role
+        let role = AgentRole::from_str("selfimprover");
+        assert_eq!(role, Some(AgentRole::Dynamic("selfimprover".to_string())));
     }
 }

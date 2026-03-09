@@ -173,7 +173,7 @@ impl MockToolInterceptor {
                 let filter = status_filter.as_deref().unwrap_or("all");
                 let response = ToolResponse::success(
                     request_id.to_string(),
-                    format!("## Tasks (mock, filter={})\n- No tasks in mock mode", filter),
+                    format!("## Tasks (mock, filter={filter})\n- No tasks in mock mode"),
                 );
                 self.captured_calls.push(CapturedToolCall {
                     call: call.clone(),

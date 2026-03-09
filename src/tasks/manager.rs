@@ -401,7 +401,7 @@ impl TaskManager {
     ///
     /// # Returns
     ///
-    /// A vector of tuples `(task_id, blocking_task_ids)` where `blocking_task_ids`
+    /// A vector of tuples (`task_id`, `blocking_task_ids`) where `blocking_task_ids`
     /// are the dependencies that are preventing the task from being ready.
     /// Results are sorted by task ID for consistent ordering.
     ///
@@ -480,6 +480,7 @@ impl TaskManager {
     /// // ⏳ Blocked tasks:
     /// //   - task005 (waiting on: task003, task004)"
     /// ```
+    #[allow(dead_code)]
     pub fn get_task_summary(&self) -> String {
         if self.tasks.is_empty() {
             return "📊 No tasks defined.".to_string();

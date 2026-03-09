@@ -12,7 +12,11 @@ use tokio::sync::broadcast;
 pub enum AgentType {
     Orchestrator,
     Planner,
-    Implementer { index: u32 },
+    Implementer {
+        index: u32,
+    },
+    /// Self-improvement agent that analyzes run logs
+    SelfImprover,
 }
 
 impl AgentType {
@@ -21,6 +25,7 @@ impl AgentType {
             Self::Orchestrator => "orchestrator".to_string(),
             Self::Planner => "planner".to_string(),
             Self::Implementer { index } => format!("implementer-{index:03}"),
+            Self::SelfImprover => "self-improver".to_string(),
         }
     }
 }
@@ -177,7 +182,7 @@ impl AgentWriter {
         Ok(())
     }
 
-    /// Write an MCP tool call event (our orchestration tools like `spawn_agents`, complete, etc).
+    /// Write an MCP tool call event (our orchestration tools like `spawn_agents`, `complete`, etc).
     ///
     /// The `tool_name` is the actual MCP tool name.
     /// The `description` provides context about what the tool is doing.
@@ -377,6 +382,7 @@ mod tests {
             AgentType::Implementer { index: 42 }.name(),
             "implementer-042"
         );
+        assert_eq!(AgentType::SelfImprover.name(), "self-improver");
     }
 
     #[tokio::test]

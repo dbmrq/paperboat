@@ -48,6 +48,22 @@ else
     echo -e "${GREEN}✓ Clippy check passed${NC}"
 fi
 
+# Run cargo-machete (fast unused dependency check)
+# Check if cargo-machete is available (installed via cargo install)
+if cargo machete --version &> /dev/null; then
+    echo -e "${YELLOW}Checking for unused dependencies...${NC}"
+    if ! cargo machete 2>/dev/null; then
+        echo -e "${RED}❌ Unused dependencies found!${NC}"
+        echo -e "   Remove unused dependencies from Cargo.toml."
+        FAILED=1
+    else
+        echo -e "${GREEN}✓ No unused dependencies${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠ cargo-machete not installed, skipping unused dependency check${NC}"
+    echo -e "   Install with: cargo install cargo-machete"
+fi
+
 # Summary
 if [ $FAILED -ne 0 ]; then
     echo ""

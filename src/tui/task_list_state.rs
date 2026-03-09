@@ -35,9 +35,9 @@ pub struct TaskDisplay {
 /// Manages the task list from `LogEvent`s.
 #[derive(Debug, Default)]
 pub struct TaskListState {
-    /// All tasks indexed by `task_id`
+    /// All tasks indexed by task ID.
     tasks: HashMap<String, TaskDisplay>,
-    /// Ordered list of `task_id`s for display
+    /// Ordered list of task IDs for display.
     task_order: Vec<String>,
     /// Currently selected task index
     pub selected_index: Option<usize>,
@@ -146,7 +146,7 @@ impl TaskListState {
     ///
     /// Only sets the selected index if it is within bounds.
     /// Used by mouse click handler to select tasks.
-    pub fn select_index(&mut self, index: usize) {
+    pub const fn select_index(&mut self, index: usize) {
         if index < self.task_order.len() {
             self.selected_index = Some(index);
         }

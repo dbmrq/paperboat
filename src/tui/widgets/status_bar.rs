@@ -11,7 +11,7 @@ use super::super::state::TuiState;
 
 /// Renders the status bar at the bottom of the terminal.
 ///
-/// Display format: ` Status: Running │ Agents: ✓{succeeded} ✗{failed} ~{in_progress} ({total} total, {active} active) │ Tasks: 2/4 │ ?=help `
+/// Display format: `` Status: Running │ Agents: ✓{succeeded} ✗{failed} ~{in_progress} ({total} total, {active} active) │ Tasks: 2/4 │ ?=help ``
 ///
 /// # Arguments
 ///

@@ -45,7 +45,7 @@ async fn spawn_acp_with_retry(
     agent_id: &str,
 ) -> Result<(crate::acp::AcpClient, crate::acp::SessionNewResponse)> {
     let retry_config = RetryConfig::from_env();
-    let operation_name = format!("spawn ACP session for {}", agent_id);
+    let operation_name = format!("spawn ACP session for {agent_id}");
 
     retry_async(&retry_config, &operation_name, || {
         let mcp_servers = mcp_servers.clone();
@@ -60,20 +60,19 @@ async fn spawn_acp_with_retry(
                 request_timeout,
             )
             .await
-            .with_context(|| format!("Failed to spawn auggie for agent_id={}", agent_id))?;
+            .with_context(|| format!("Failed to spawn auggie for agent_id={agent_id}"))?;
 
             // Initialize the ACP connection
-            agent_acp.initialize().await.with_context(|| {
-                format!("Failed to initialize auggie for agent_id={}", agent_id)
-            })?;
+            agent_acp
+                .initialize()
+                .await
+                .with_context(|| format!("Failed to initialize auggie for agent_id={agent_id}"))?;
 
             // Create the session with MCP servers
             let response = agent_acp
                 .session_new(&model, mcp_servers, &cwd)
                 .await
-                .with_context(|| {
-                    format!("Failed to create ACP session for agent_id={}", agent_id)
-                })?;
+                .with_context(|| format!("Failed to create ACP session for agent_id={agent_id}"))?;
 
             Ok((agent_acp, response))
         }
@@ -184,7 +183,11 @@ impl App {
         loop {
             attempt += 1;
 
-            match self.acp_worker.session_new(model, mcp_servers.clone(), cwd).await {
+            match self
+                .acp_worker
+                .session_new(model, mcp_servers.clone(), cwd)
+                .await
+            {
                 Ok(response) => {
                     if attempt > 1 {
                         tracing::info!(
@@ -215,20 +218,16 @@ impl App {
                                 .min(retry_config.max_delay.as_secs_f64()),
                         );
                     } else {
-                        let reason = if !is_transient {
-                            "non-transient error"
-                        } else {
+                        let reason = if is_transient {
                             "exhausted retries"
+                        } else {
+                            "non-transient error"
                         };
                         tracing::error!(
-                            "❌ Worker session_new failed after {} attempt(s) ({}): {:#}",
-                            attempt,
-                            reason,
-                            e
+                            "❌ Worker session_new failed after {attempt} attempt(s) ({reason}): {e:#}",
                         );
                         return Err(e).context(format!(
-                            "Worker session_new failed after {} attempt(s)",
-                            attempt
+                            "Worker session_new failed after {attempt} attempt(s)"
                         ));
                     }
                 }
@@ -438,7 +437,7 @@ impl App {
         }
     }
 
-    /// Resolve an `AgentSpec` using the `TaskManager` for `task_id` lookups.
+    /// Resolve an [`AgentSpec`] using the `TaskManager` for `task_id` lookups.
     ///
     /// The lookup supports both exact task IDs (e.g., "task001") and task names
     /// (e.g., "Setup database") as a fallback.

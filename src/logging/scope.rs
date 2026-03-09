@@ -76,6 +76,18 @@ impl LogScope {
         .await
     }
 
+    /// Create a writer for the self-improver agent.
+    /// Creates a self-improver.log file in the scope directory.
+    pub async fn self_improver_writer(&self) -> std::io::Result<AgentWriter> {
+        AgentWriter::new(
+            self.dir.join("self-improver.log"),
+            AgentType::SelfImprover,
+            self.event_tx.clone(),
+            self.depth,
+        )
+        .await
+    }
+
     /// Create a child scope for a decompose operation (subtask).
     /// Creates a new subdirectory and returns a `LogScope` for it.
     pub async fn child_scope(&self, task_description: &str) -> std::io::Result<Self> {
@@ -166,6 +178,18 @@ mod tests {
 
         assert!(dir.path().join("planner.log").exists());
         assert!(dir.path().join("orchestrator.log").exists());
+    }
+
+    #[tokio::test]
+    async fn test_self_improver_writer() {
+        let dir = tempdir().unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel(10);
+        let scope = LogScope::new(dir.path().to_path_buf(), tx, 0);
+
+        let writer = scope.self_improver_writer().await.unwrap();
+
+        assert!(dir.path().join("self-improver.log").exists());
+        assert_eq!(writer.agent_name(), "self-improver");
     }
 
     #[tokio::test]

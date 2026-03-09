@@ -442,8 +442,7 @@ impl TuiState {
         match new_focus {
             FocusedPanel::TaskList => {
                 // Auto-select first task when focusing TaskList if tasks exist and none selected
-                if !self.task_list_state.is_empty()
-                    && self.task_list_state.selected_index.is_none()
+                if !self.task_list_state.is_empty() && self.task_list_state.selected_index.is_none()
                 {
                     self.task_list_state.selected_index = Some(0);
                 }

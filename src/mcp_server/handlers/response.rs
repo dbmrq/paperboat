@@ -18,7 +18,8 @@ use crate::mcp_server::types::{TaskStateInfo, ToolCall, ToolResponse, WaitMode};
 
 impl TaskStateInfo {
     /// Check if there are any remaining tasks to work on.
-    pub fn has_remaining_work(&self) -> bool {
+    #[allow(dead_code)]
+    pub const fn has_remaining_work(&self) -> bool {
         self.pending_count > 0 || !self.blocked_tasks.is_empty()
     }
 
@@ -67,11 +68,7 @@ impl TaskStateInfo {
                 "- {} depends on {}; wait for {} first",
                 task_id,
                 blocker_list,
-                if blockers.len() == 1 {
-                    "it"
-                } else {
-                    "them"
-                }
+                if blockers.len() == 1 { "it" } else { "them" }
             ));
         }
 
@@ -92,6 +89,7 @@ impl TaskStateInfo {
 ///
 /// This is the backward-compatible version without task state. Use
 /// `build_response_text_with_state` for context-aware responses.
+#[allow(dead_code)]
 pub fn build_response_text(tool_call: &ToolCall, response: &ToolResponse) -> String {
     build_response_text_with_state(tool_call, response, None)
 }
@@ -177,14 +175,16 @@ fn build_decompose_response(
     if response.success {
         // Build dynamic "What's Next" section if task state is available
         let next_steps = task_state
-            .and_then(|state| state.format_whats_next())
-            .map(|guidance| format!("## What's Next\n{}", guidance))
-            .unwrap_or_else(|| {
-                "## Next Steps\n\
+            .and_then(TaskStateInfo::format_whats_next)
+            .map_or_else(
+                || {
+                    "## Next Steps\n\
                  The subtasks have been planned and executed. \
                  Continue with any remaining tasks or call complete() when done."
-                    .to_string()
-            });
+                        .to_string()
+                },
+                |guidance| format!("## What's Next\n{guidance}"),
+            );
 
         format!(
             "✅ Decomposition complete for: \"{}\"\n\n\
@@ -243,14 +243,16 @@ fn build_spawn_agents_response(
 
         // Build dynamic "What's Next" section if task state is available
         let next_steps = task_state
-            .and_then(|state| state.format_whats_next())
-            .map(|guidance| format!("## What's Next\n{}", guidance))
-            .unwrap_or_else(|| {
-                "## Next Steps\n\
+            .and_then(TaskStateInfo::format_whats_next)
+            .map_or_else(
+                || {
+                    "## Next Steps\n\
                  If you have more independent tasks, call spawn_agents() for each batch. \
                  When all work is done, call complete(success=true)."
-                    .to_string()
-            });
+                        .to_string()
+                },
+                |guidance| format!("## What's Next\n{guidance}"),
+            );
 
         format!(
             "✅ Spawned {} agent(s) [{:?}] (wait={:?}) completed successfully.\n\n\
@@ -349,20 +351,21 @@ fn build_skip_tasks_response(
     if response.success {
         // Build dynamic "What's Next" section if task state is available
         let next_steps = task_state
-            .and_then(|state| state.format_whats_next())
-            .map(|guidance| format!("## What's Next\n{}", guidance))
-            .unwrap_or_else(|| {
-                "## Next Steps\n\
-                 Continue with remaining tasks or call complete() when done."
-                    .to_string()
-            });
+            .and_then(TaskStateInfo::format_whats_next)
+            .map_or_else(
+                || {
+                    "## Next Steps\n\
+                     Continue with remaining tasks or call complete() when done."
+                        .to_string()
+                },
+                |guidance| format!("## What's Next\n{guidance}"),
+            );
 
         format!(
             "✅ Skipped {task_count} task(s): {task_ids:?}\n\n\
              ## Reason\n\
              {reason_str}\n\n\
-             {}",
-            next_steps
+             {next_steps}"
         )
     } else {
         let error = response.error.as_deref().unwrap_or("Unknown error");

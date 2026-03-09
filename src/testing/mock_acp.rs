@@ -390,7 +390,8 @@ impl AcpClientTrait for MockAcpClient {
         } else {
             // Fall back to generating a unique session ID
             self.session_counter += 1;
-            let session_id = format!("mock-session-{}", self.session_counter);
+            let session_counter = self.session_counter;
+            let session_id = format!("mock-session-{session_counter}");
             self.sessions_created.push(session_id.clone());
             Ok(SessionNewResponse { session_id })
         }

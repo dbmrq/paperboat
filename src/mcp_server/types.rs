@@ -82,7 +82,7 @@ pub struct AgentSpec {
 
 /// A fully resolved agent specification with all required fields populated.
 ///
-/// Created from an `AgentSpec` by resolving `task_id` lookups and applying defaults.
+/// Created from an [`AgentSpec`] by resolving `task_id` lookups and applying defaults.
 #[derive(Debug, Clone)]
 pub struct ResolvedAgentSpec {
     /// The role of the agent (resolved from spec or defaulted to "implementer")
@@ -183,7 +183,7 @@ pub struct TaskStateInfo {
     pub pending_count: usize,
     /// Task IDs that can be executed now (no unmet dependencies).
     pub parallel_tasks: Vec<String>,
-    /// Blocked tasks as `(task_id, blocking_task_ids)` pairs.
+    /// Blocked tasks as (`task_id`, `blocking_task_ids`) pairs.
     pub blocked_tasks: Vec<(String, Vec<String>)>,
 }
 
@@ -357,7 +357,7 @@ pub enum ToolCall {
     /// List tasks with their current status (used by orchestrator agents).
     /// Useful for checking progress and finding tasks that need attention.
     ListTasks {
-        /// Optional status filter (e.g., "pending", "in_progress", "all").
+        /// Optional status filter (e.g., `pending`, `in_progress`, `all`).
         #[serde(default)]
         status_filter: Option<String>,
     },

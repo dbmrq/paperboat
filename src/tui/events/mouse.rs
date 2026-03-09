@@ -83,6 +83,7 @@ pub fn handle_mouse_click(
 /// * `state` - Mutable reference to the TUI state
 /// * `row` - The row position of the mouse click
 /// * `layout` - The current panel layout with rectangle areas
+#[allow(clippy::missing_const_for_fn)]
 fn handle_task_list_click(state: &mut TuiState, row: u16, layout: &PanelLayout) {
     // Account for top border (inner area starts 1 row below panel top)
     let inner_y = layout.task_list.y + 1;
@@ -133,8 +134,8 @@ pub(super) const fn rect_contains(rect: ratatui::layout::Rect, column: u16, row:
 ///
 /// Maps the click row position to a visible tree item and selects it.
 /// This accounts for:
-/// - Border offset (inner area starts at y + 1)
-/// - Scroll offset from tree_state
+/// - Border offset (inner area starts at `y + 1`)
+/// - Scroll offset from the tree state
 /// - Collapsed/expanded node visibility
 ///
 /// # Arguments
@@ -270,9 +271,9 @@ fn scroll_agent_output(state: &mut TuiState, direction: ScrollDirection, area: &
     // Calculate total lines from selected agent messages, accounting for text wrapping.
     // Subtract 2 from width to account for left/right borders.
     let inner_width = area.width.saturating_sub(2);
-    let total_lines = state
-        .selected_agent_messages()
-        .map_or(0, |messages| calculate_wrapped_line_count(messages, inner_width));
+    let total_lines = state.selected_agent_messages().map_or(0, |messages| {
+        calculate_wrapped_line_count(messages, inner_width)
+    });
 
     let page_size = area.height.saturating_sub(2) as usize; // Account for borders
 

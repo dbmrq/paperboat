@@ -151,20 +151,16 @@ where
                     );
                 } else {
                     // Either exhausted retries or error is not transient
-                    let reason = if !is_transient {
-                        "non-transient error"
-                    } else {
+                    let reason = if is_transient {
                         "exhausted retries"
+                    } else {
+                        "non-transient error"
                     };
                     tracing::error!(
-                        "❌ {} failed after {} attempt(s) ({}): {:#}",
-                        operation_name,
-                        attempt,
-                        reason,
-                        e
+                        "❌ {operation_name} failed after {attempt} attempt(s) ({reason}): {e:#}",
                     );
                     return Err(e).with_context(|| {
-                        format!("{} failed after {} attempt(s)", operation_name, attempt)
+                        format!("{operation_name} failed after {attempt} attempt(s)")
                     });
                 }
             }
@@ -288,4 +284,3 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 }
-

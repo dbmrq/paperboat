@@ -67,6 +67,7 @@ pub fn init_metrics(enable_prometheus: bool, prometheus_port: u16) -> anyhow::Re
 
 /// No-op metrics initialization when the feature is disabled.
 #[cfg(not(feature = "metrics"))]
+#[allow(clippy::unnecessary_wraps)]
 pub fn init_metrics(_enable_prometheus: bool, _prometheus_port: u16) -> anyhow::Result<()> {
     tracing::debug!("Metrics feature not enabled, skipping initialization");
     Ok(())
@@ -116,6 +117,7 @@ pub fn record_agent_spawned(agent_type: &str) {
 }
 
 #[cfg(not(feature = "metrics"))]
+#[allow(clippy::missing_const_for_fn)]
 pub fn record_agent_spawned(_agent_type: &str) {}
 
 /// Record agent completion with duration.
@@ -139,6 +141,7 @@ pub fn record_agent_completed(agent_type: &str, success: bool, duration: std::ti
 }
 
 #[cfg(not(feature = "metrics"))]
+#[allow(clippy::missing_const_for_fn)]
 pub fn record_agent_completed(_agent_type: &str, _success: bool, _duration: std::time::Duration) {}
 
 /// Record a task status transition.
@@ -154,6 +157,7 @@ pub fn record_task_status(status: &str) {
 }
 
 #[cfg(not(feature = "metrics"))]
+#[allow(clippy::missing_const_for_fn)]
 pub fn record_task_status(_status: &str) {}
 
 /// Record a tool call.
@@ -170,6 +174,7 @@ pub fn record_tool_call(tool_name: &str) {
 }
 
 #[cfg(not(feature = "metrics"))]
+#[allow(clippy::missing_const_for_fn)]
 pub fn record_tool_call(_tool_name: &str) {}
 
 #[cfg(test)]

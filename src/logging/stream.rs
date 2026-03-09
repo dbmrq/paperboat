@@ -76,7 +76,7 @@ pub enum LogEvent {
         depth: u32,
     },
 
-    /// A task's state changed (e.g., pending -> `in_progress` -> completed).
+    /// A task's state changed (e.g., `pending` -> `in_progress` -> `completed`).
     TaskStateChanged {
         task_id: String,
         name: String,

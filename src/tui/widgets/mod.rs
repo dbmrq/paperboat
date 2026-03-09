@@ -20,7 +20,9 @@ mod status_bar;
 mod task_detail;
 mod task_list;
 
-pub use agent_output::{calculate_wrapped_line_count, handle_agent_output_key, render_agent_output};
+pub use agent_output::{
+    calculate_wrapped_line_count, handle_agent_output_key, render_agent_output,
+};
 pub use agent_tree::{handle_agent_tree_key, render_agent_tree};
 pub use app_logs::{create_app_logs_state, render_app_logs};
 pub use help::render_help_overlay;

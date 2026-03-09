@@ -57,7 +57,7 @@ impl Drop for AgentSocketHandle {
 ///
 /// # Arguments
 ///
-/// * `agent_id` - A unique identifier for the agent (used in socket path)
+/// * `agent_id` - A unique identifier for the agent (used in socket path).
 pub async fn setup_agent_socket(agent_id: &str) -> Result<AgentSocketHandle> {
     // Use only first 8 chars of agent_id to keep socket path short
     // macOS has a ~104 byte limit on Unix socket paths (SUN_LEN)

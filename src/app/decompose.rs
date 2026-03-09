@@ -71,8 +71,9 @@ impl App {
         let task_state = self.get_decompose_task_state().await;
 
         match result {
-            Ok(summary) => ToolResponse::success(request_id.to_string(), summary)
-                .with_task_state(task_state),
+            Ok(summary) => {
+                ToolResponse::success(request_id.to_string(), summary).with_task_state(task_state)
+            }
             Err(e) => ToolResponse::failure(request_id.to_string(), e.to_string())
                 .with_task_state(task_state),
         }

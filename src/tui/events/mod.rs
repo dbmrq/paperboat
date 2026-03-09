@@ -820,7 +820,11 @@ mod tests {
         let task_list_inner_y = layout.task_list.y + 1;
         let click_col = layout.task_list.x + 5;
 
-        handle_mouse_click(&mut state, mouse_click(click_col, task_list_inner_y), &layout);
+        handle_mouse_click(
+            &mut state,
+            mouse_click(click_col, task_list_inner_y),
+            &layout,
+        );
 
         assert_eq!(state.task_list_state.selected_index, Some(0));
     }
@@ -876,7 +880,11 @@ mod tests {
         let click_col = layout.task_list.x + 5;
 
         // This should not crash
-        handle_mouse_click(&mut state, mouse_click(click_col, task_list_inner_y), &layout);
+        handle_mouse_click(
+            &mut state,
+            mouse_click(click_col, task_list_inner_y),
+            &layout,
+        );
 
         // Selection should remain None
         assert!(state.task_list_state.selected_index.is_none());

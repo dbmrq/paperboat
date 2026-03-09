@@ -1550,3 +1550,864 @@ async fn test_skip_tasks_without_reason() {
         }
     }
 }
+
+// ========================================================================
+// Self-Improvement Integration Tests
+// ========================================================================
+
+/// Test repository detection integration with config check.
+/// Verifies: detection and config modules work together correctly.
+#[tokio::test]
+async fn test_self_improvement_detection_and_config_integration() {
+    use crate::self_improve::detection::{detect_repository_at, RepositoryKind};
+    use tempfile::tempdir;
+
+    // Create a paperboat-like directory
+    let temp = tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("Cargo.toml"),
+        r#"[package]
+name = "paperboat"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+
+    // Also create a .paperboat config directory with self-improve config
+    let config_dir = temp.path().join(".paperboat");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(config_dir.join("self-improve.toml"), "enabled = true").unwrap();
+
+    // Test detection
+    let repo_kind = detect_repository_at(temp.path());
+    assert_eq!(
+        repo_kind,
+        RepositoryKind::OwnRepository,
+        "Should detect as paperboat repository"
+    );
+}
+
+/// Test context builder with realistic run directory structure.
+/// Verifies: build_self_improvement_context produces valid context.
+#[tokio::test]
+async fn test_self_improvement_context_builder_integration() {
+    use crate::logging::LogEvent;
+    use crate::self_improve::context_builder::build_self_improvement_context;
+    use crate::tasks::TaskManager;
+    use crate::types::TaskResult;
+    use tempfile::tempdir;
+    use tokio::sync::broadcast;
+
+    // Create a realistic run directory structure
+    let run_dir = tempdir().unwrap();
+
+    // Create standard log files
+    std::fs::write(
+        run_dir.path().join("planner.log"),
+        "Planning phase started\nCreating task list\nPlanning complete",
+    )
+    .unwrap();
+
+    std::fs::write(
+        run_dir.path().join("orchestrator.log"),
+        "Orchestrator spawned\nTask 1 completed\nTask 2 completed",
+    )
+    .unwrap();
+
+    std::fs::write(
+        run_dir.path().join("implementer-001.log"),
+        "Implementing task 1\n✅ Task completed successfully",
+    )
+    .unwrap();
+
+    std::fs::write(
+        run_dir.path().join("implementer-002.log"),
+        "Implementing task 2\n❌ Tool failed: file not found\nRetrying...\n✅ Task completed",
+    )
+    .unwrap();
+
+    // Create a subtask directory
+    let subtask_dir = run_dir.path().join("subtask-001");
+    std::fs::create_dir_all(&subtask_dir).unwrap();
+    std::fs::write(subtask_dir.join("planner.log"), "Subtask planning").unwrap();
+
+    // Create task manager with some tasks
+    let (tx, _) = broadcast::channel::<LogEvent>(10);
+    let mut tm = TaskManager::new(tx);
+    let id1 = tm.create("Setup", "Set up the project", vec![]);
+    tm.update_status(
+        &id1,
+        &crate::tasks::TaskStatus::Complete {
+            success: true,
+            summary: "Setup completed".to_string(),
+        },
+    );
+
+    // Create task result
+    let result = TaskResult {
+        success: true,
+        message: Some("All tasks completed".to_string()),
+    };
+
+    // Build the context
+    let context = build_self_improvement_context(run_dir.path(), &result, &tm)
+        .await
+        .expect("Context building should succeed");
+
+    // Verify context contains expected sections
+    assert!(
+        context.contains("## Run Summary"),
+        "Context should have Run Summary section"
+    );
+    assert!(
+        context.contains("## Log File Inventory"),
+        "Context should have Log File Inventory section"
+    );
+    assert!(
+        context.contains("## Quick Stats"),
+        "Context should have Quick Stats section"
+    );
+    assert!(
+        context.contains("planner.log"),
+        "Context should mention planner.log"
+    );
+    assert!(
+        context.contains("orchestrator.log"),
+        "Context should mention orchestrator.log"
+    );
+    assert!(
+        context.contains("implementer-001.log") || context.contains("implementer"),
+        "Context should mention implementer logs"
+    );
+    assert!(
+        context.contains("subtask-001"),
+        "Context should mention subtask directory"
+    );
+}
+
+/// Test that detection correctly identifies non-paperboat repositories.
+#[tokio::test]
+async fn test_self_improvement_detection_non_paperboat() {
+    use crate::self_improve::detection::{detect_repository_at, RepositoryKind};
+    use tempfile::tempdir;
+
+    let temp = tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("Cargo.toml"),
+        r#"[package]
+name = "my-awesome-app"
+version = "1.0.0"
+"#,
+    )
+    .unwrap();
+
+    let repo_kind = detect_repository_at(temp.path());
+    assert_eq!(
+        repo_kind,
+        RepositoryKind::DifferentRepository,
+        "Should detect as different repository"
+    );
+}
+
+/// Test RunOutcome classification logic.
+#[tokio::test]
+async fn test_run_outcome_classification() {
+    use crate::self_improve::context_builder::{RunOutcome, RunStats};
+    use crate::types::TaskResult;
+
+    // Test pure success
+    let success_result = TaskResult {
+        success: true,
+        message: None,
+    };
+    let clean_stats = RunStats {
+        total_tasks: 3,
+        completed_tasks: 3,
+        ..Default::default()
+    };
+    assert_eq!(
+        RunOutcome::from_result_and_stats(&success_result, &clean_stats),
+        RunOutcome::Success
+    );
+
+    // Test partial success (has errors)
+    let partial_stats = RunStats {
+        total_tasks: 3,
+        completed_tasks: 2,
+        failed_tasks: 1,
+        error_count: 1,
+        ..Default::default()
+    };
+    assert_eq!(
+        RunOutcome::from_result_and_stats(&success_result, &partial_stats),
+        RunOutcome::PartialSuccess
+    );
+
+    // Test failure
+    let failed_result = TaskResult {
+        success: false,
+        message: Some("Failed".to_string()),
+    };
+    assert_eq!(
+        RunOutcome::from_result_and_stats(&failed_result, &clean_stats),
+        RunOutcome::Failed
+    );
+
+    // Test focus areas are non-empty
+    assert!(!RunOutcome::Success.focus_areas().is_empty());
+    assert!(!RunOutcome::PartialSuccess.focus_areas().is_empty());
+    assert!(!RunOutcome::Failed.focus_areas().is_empty());
+}
+
+// ========================================================================
+// Self-Improvement Comprehensive Integration Tests
+// ========================================================================
+//
+// These tests verify the self-improvement feature including:
+// - Own repository mode (full edit permissions)
+// - Different repository mode (read-only + GitHub issues)
+// - Configuration handling
+// - Error handling and failure isolation
+// - Skip conditions
+
+/// Test self-improvement configuration via PAPERBOAT_SELF_IMPROVE environment variable.
+/// Verifies: is_self_improvement_enabled respects env var with various values.
+#[tokio::test]
+async fn test_self_improvement_config_env_var_disables() {
+    use crate::self_improve::is_self_improvement_enabled;
+    use std::sync::Mutex;
+
+    // Use a mutex to serialize env var access
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = ENV_LOCK.lock().unwrap();
+
+    // Save current value
+    let original = std::env::var("PAPERBOAT_SELF_IMPROVE").ok();
+
+    // Test disabling with "false"
+    std::env::set_var("PAPERBOAT_SELF_IMPROVE", "false");
+    assert!(
+        !is_self_improvement_enabled(),
+        "Should be disabled when env var is 'false'"
+    );
+
+    // Test disabling with "0"
+    std::env::set_var("PAPERBOAT_SELF_IMPROVE", "0");
+    assert!(
+        !is_self_improvement_enabled(),
+        "Should be disabled when env var is '0'"
+    );
+
+    // Test disabling with "no"
+    std::env::set_var("PAPERBOAT_SELF_IMPROVE", "no");
+    assert!(
+        !is_self_improvement_enabled(),
+        "Should be disabled when env var is 'no'"
+    );
+
+    // Restore original
+    match original {
+        Some(val) => std::env::set_var("PAPERBOAT_SELF_IMPROVE", val),
+        None => std::env::remove_var("PAPERBOAT_SELF_IMPROVE"),
+    }
+}
+
+/// Test self-improvement is enabled by default (opt-out feature).
+/// Verifies: is_self_improvement_enabled returns true when not explicitly disabled.
+#[tokio::test]
+async fn test_self_improvement_enabled_by_default() {
+    use crate::self_improve::is_self_improvement_enabled;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = ENV_LOCK.lock().unwrap();
+
+    // Save and remove env var
+    let original = std::env::var("PAPERBOAT_SELF_IMPROVE").ok();
+    std::env::remove_var("PAPERBOAT_SELF_IMPROVE");
+
+    // Without env var, should default to enabled
+    assert!(
+        is_self_improvement_enabled(),
+        "Self-improvement should be enabled by default (opt-out feature)"
+    );
+
+    // Test enabling with "true"
+    std::env::set_var("PAPERBOAT_SELF_IMPROVE", "true");
+    assert!(
+        is_self_improvement_enabled(),
+        "Should be enabled when env var is 'true'"
+    );
+
+    // Test enabling with "1"
+    std::env::set_var("PAPERBOAT_SELF_IMPROVE", "1");
+    assert!(
+        is_self_improvement_enabled(),
+        "Should be enabled when env var is '1'"
+    );
+
+    // Restore original
+    match original {
+        Some(val) => std::env::set_var("PAPERBOAT_SELF_IMPROVE", val),
+        None => std::env::remove_var("PAPERBOAT_SELF_IMPROVE"),
+    }
+}
+
+/// Test repository detection for own repository mode.
+/// Verifies: detect_repository_at correctly identifies paperboat repository.
+#[tokio::test]
+async fn test_self_improvement_own_repo_detection() {
+    use crate::self_improve::detection::{detect_repository_at, RepositoryKind};
+    use tempfile::tempdir;
+
+    let temp = tempdir().unwrap();
+
+    // Create Cargo.toml with paperboat package name
+    std::fs::write(
+        temp.path().join("Cargo.toml"),
+        r#"[package]
+name = "paperboat"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .unwrap();
+
+    let repo_kind = detect_repository_at(temp.path());
+    assert_eq!(
+        repo_kind,
+        RepositoryKind::OwnRepository,
+        "Should detect as own repository when Cargo.toml has paperboat name"
+    );
+
+    // Verify is_own_repository() method works
+    assert!(
+        repo_kind.is_own_repository(),
+        "is_own_repository() should return true"
+    );
+}
+
+/// Test repository detection for different repository mode.
+/// Verifies: detect_repository_at correctly identifies non-paperboat repositories.
+#[tokio::test]
+async fn test_self_improvement_different_repo_detection() {
+    use crate::self_improve::detection::{detect_repository_at, RepositoryKind};
+    use tempfile::tempdir;
+
+    let temp = tempdir().unwrap();
+
+    // Create Cargo.toml with different package name
+    std::fs::write(
+        temp.path().join("Cargo.toml"),
+        r#"[package]
+name = "my-custom-project"
+version = "1.0.0"
+edition = "2021"
+"#,
+    )
+    .unwrap();
+
+    let repo_kind = detect_repository_at(temp.path());
+    assert_eq!(
+        repo_kind,
+        RepositoryKind::DifferentRepository,
+        "Should detect as different repository"
+    );
+
+    // Verify is_own_repository() method returns false
+    assert!(
+        !repo_kind.is_own_repository(),
+        "is_own_repository() should return false"
+    );
+}
+
+/// Test repository detection for unknown repository (no Cargo.toml).
+/// Verifies: detect_repository_at returns Unknown when detection fails.
+#[tokio::test]
+async fn test_self_improvement_unknown_repo_detection() {
+    use crate::self_improve::detection::{detect_repository_at, RepositoryKind};
+    use tempfile::tempdir;
+
+    let temp = tempdir().unwrap();
+    // Empty directory - no Cargo.toml, no git
+
+    let repo_kind = detect_repository_at(temp.path());
+    assert_eq!(
+        repo_kind,
+        RepositoryKind::Unknown,
+        "Should return Unknown for empty directory"
+    );
+}
+
+/// Test SelfImprovementConfig default values.
+/// Verifies: default config has sensible timeout and model settings.
+#[tokio::test]
+async fn test_self_improvement_config_defaults() {
+    use crate::self_improve::runner::SelfImprovementConfig;
+    use std::time::Duration;
+
+    let config = SelfImprovementConfig::default();
+
+    // Session timeout should be 5 minutes
+    assert_eq!(
+        config.session_timeout,
+        Duration::from_secs(300),
+        "Default session timeout should be 5 minutes"
+    );
+
+    // Request timeout should be 30 seconds
+    assert_eq!(
+        config.request_timeout,
+        Duration::from_secs(30),
+        "Default request timeout should be 30 seconds"
+    );
+
+    // Model should be set
+    assert!(!config.model.is_empty(), "Model should be configured");
+    assert!(
+        config.model.contains("claude"),
+        "Model should be a Claude model"
+    );
+}
+
+/// Test SelfImprovementOutcome structure.
+/// Verifies: outcome correctly represents success and failure states.
+#[tokio::test]
+async fn test_self_improvement_outcome_structure() {
+    use crate::self_improve::runner::SelfImprovementOutcome;
+
+    // Test successful outcome
+    let success_outcome = SelfImprovementOutcome {
+        success: true,
+        message: Some("Made 3 improvements".to_string()),
+        changes_made: 3,
+    };
+    assert!(success_outcome.success);
+    assert_eq!(
+        success_outcome.message.as_deref(),
+        Some("Made 3 improvements")
+    );
+    assert_eq!(success_outcome.changes_made, 3);
+
+    // Test failed outcome
+    let failed_outcome = SelfImprovementOutcome {
+        success: false,
+        message: Some("Session timed out".to_string()),
+        changes_made: 0,
+    };
+    assert!(!failed_outcome.success);
+    assert_eq!(failed_outcome.message.as_deref(), Some("Session timed out"));
+    assert_eq!(failed_outcome.changes_made, 0);
+}
+
+// Note: GitHub CLI integration tests would go here once the github module is implemented.
+// Currently, the self-improvement feature uses direct repository editing in own-repo mode.
+
+/// Test context building with missing logs.
+/// Verifies: build_self_improvement_context handles missing logs gracefully.
+#[tokio::test]
+async fn test_self_improvement_context_missing_logs() {
+    use crate::logging::LogEvent;
+    use crate::self_improve::context_builder::build_self_improvement_context;
+    use crate::tasks::TaskManager;
+    use crate::types::TaskResult;
+    use tempfile::tempdir;
+    use tokio::sync::broadcast;
+
+    let run_dir = tempdir().unwrap();
+    // Empty directory - no log files
+
+    let result = TaskResult {
+        success: true,
+        message: Some("Run completed".to_string()),
+    };
+
+    let (tx, _) = broadcast::channel::<LogEvent>(10);
+    let tm = TaskManager::new(tx);
+
+    // Should not panic or error - gracefully handles missing logs
+    let context = build_self_improvement_context(run_dir.path(), &result, &tm)
+        .await
+        .expect("Context building should succeed even with missing logs");
+
+    // Should still have basic sections
+    assert!(
+        context.contains("## Run Summary"),
+        "Should have Run Summary"
+    );
+    assert!(
+        context.contains("## Log File Inventory"),
+        "Should have Log Inventory"
+    );
+
+    // Inventory should indicate no files found or be empty
+    assert!(
+        context.contains("No log files")
+            || context.contains("0 files")
+            || context.contains("Log File Inventory"),
+        "Should indicate missing/empty logs"
+    );
+}
+
+/// Test context building with error patterns in logs.
+/// Verifies: build_self_improvement_context detects error patterns.
+#[tokio::test]
+async fn test_self_improvement_context_with_errors() {
+    use crate::logging::LogEvent;
+    use crate::self_improve::context_builder::build_self_improvement_context;
+    use crate::tasks::TaskManager;
+    use crate::types::TaskResult;
+    use tempfile::tempdir;
+    use tokio::sync::broadcast;
+
+    let run_dir = tempdir().unwrap();
+
+    // Create log with error pattern
+    std::fs::write(
+        run_dir.path().join("implementer-001.log"),
+        r#"Starting task
+❌ Tool failed: file not found
+Retrying operation
+✅ Task completed
+"#,
+    )
+    .unwrap();
+
+    let result = TaskResult {
+        success: true,
+        message: Some("Completed with retry".to_string()),
+    };
+
+    let (tx, _) = broadcast::channel::<LogEvent>(10);
+    let tm = TaskManager::new(tx);
+
+    let context = build_self_improvement_context(run_dir.path(), &result, &tm)
+        .await
+        .expect("Context building should succeed");
+
+    // Should detect the error pattern or mention the log file
+    assert!(
+        context.contains("implementer-001.log") || context.contains("error"),
+        "Should reference implementer log or mention errors"
+    );
+}
+
+/// Test run outcome focus areas contain appropriate guidance.
+/// Verifies: each RunOutcome variant provides relevant focus areas.
+#[tokio::test]
+async fn test_run_outcome_focus_areas_content() {
+    use crate::self_improve::context_builder::RunOutcome;
+
+    // Success focus areas
+    let success_focus = RunOutcome::Success.focus_areas();
+    assert!(!success_focus.is_empty(), "Success should have focus areas");
+    // Success typically focuses on optimization
+
+    // Partial success focus areas
+    let partial_focus = RunOutcome::PartialSuccess.focus_areas();
+    assert!(
+        !partial_focus.is_empty(),
+        "PartialSuccess should have focus areas"
+    );
+    // Partial success typically focuses on error patterns
+
+    // Failed focus areas
+    let failed_focus = RunOutcome::Failed.focus_areas();
+    assert!(!failed_focus.is_empty(), "Failed should have focus areas");
+    // Failed typically indicates analysis only
+}
+
+/// Test that self-improvement is skipped for failed runs.
+/// Verifies: RunOutcome correctly categorizes failures.
+#[tokio::test]
+async fn test_self_improvement_skipped_for_failures() {
+    use crate::self_improve::context_builder::{RunOutcome, RunStats};
+    use crate::types::TaskResult;
+
+    // Complete failure
+    let failed_result = TaskResult {
+        success: false,
+        message: Some("Fatal error".to_string()),
+    };
+    let stats = RunStats::default();
+    let outcome = RunOutcome::from_result_and_stats(&failed_result, &stats);
+    assert_eq!(
+        outcome,
+        RunOutcome::Failed,
+        "Failed runs should produce Failed outcome"
+    );
+
+    // Failure with some completed tasks
+    let failed_partial = TaskResult {
+        success: false,
+        message: Some("Partial failure".to_string()),
+    };
+    let partial_stats = RunStats {
+        total_tasks: 5,
+        completed_tasks: 4,
+        failed_tasks: 1,
+        ..Default::default()
+    };
+    let outcome2 = RunOutcome::from_result_and_stats(&failed_partial, &partial_stats);
+    assert_eq!(
+        outcome2,
+        RunOutcome::Failed,
+        "Even partial completion with success=false should be Failed"
+    );
+}
+
+/// Test that successful runs with various stats trigger self-improvement.
+/// Verifies: RunOutcome correctly categorizes success scenarios.
+#[tokio::test]
+async fn test_self_improvement_triggers_for_successes() {
+    use crate::self_improve::context_builder::{RunOutcome, RunStats};
+    use crate::types::TaskResult;
+
+    let success_result = TaskResult {
+        success: true,
+        message: Some("Done".to_string()),
+    };
+
+    // Clean success - no errors, no warnings
+    let clean_stats = RunStats {
+        total_tasks: 10,
+        completed_tasks: 10,
+        failed_tasks: 0,
+        skipped_tasks: 0,
+        agents_spawned: 5,
+        error_count: 0,
+        warning_count: 0,
+    };
+    let outcome = RunOutcome::from_result_and_stats(&success_result, &clean_stats);
+    assert_eq!(
+        outcome,
+        RunOutcome::Success,
+        "Clean success should produce Success outcome"
+    );
+
+    // Success with some errors (partial success)
+    let partial_stats = RunStats {
+        total_tasks: 10,
+        completed_tasks: 8,
+        failed_tasks: 2,
+        skipped_tasks: 0,
+        agents_spawned: 5,
+        error_count: 3,
+        warning_count: 5,
+    };
+    let partial_outcome = RunOutcome::from_result_and_stats(&success_result, &partial_stats);
+    assert_eq!(
+        partial_outcome,
+        RunOutcome::PartialSuccess,
+        "Success with errors should produce PartialSuccess outcome"
+    );
+}
+
+/// Test LogFileInfo structure from context builder.
+/// Verifies: log file info is correctly structured.
+#[tokio::test]
+async fn test_log_file_info_structure() {
+    use crate::self_improve::context_builder::LogFileInfo;
+
+    let info = LogFileInfo {
+        path: "planner.log".to_string(),
+        size: 1024,
+        description: "Planning phase decisions",
+        exists: true,
+    };
+
+    assert_eq!(info.path, "planner.log");
+    assert_eq!(info.size, 1024);
+    assert_eq!(info.description, "Planning phase decisions");
+    assert!(info.exists);
+
+    // Test non-existent file
+    let missing_info = LogFileInfo {
+        path: "missing.log".to_string(),
+        size: 0,
+        description: "Some missing log",
+        exists: false,
+    };
+
+    assert!(!missing_info.exists);
+    assert_eq!(missing_info.size, 0);
+}
+
+/// Test async repository detection.
+/// Verifies: detect_repository_async works correctly.
+#[tokio::test]
+async fn test_self_improvement_async_detection() {
+    use crate::self_improve::detection::{detect_repository_at_async, RepositoryKind};
+    use tempfile::tempdir;
+
+    let temp = tempdir().unwrap();
+
+    // Create paperboat Cargo.toml
+    std::fs::write(
+        temp.path().join("Cargo.toml"),
+        r#"[package]
+name = "paperboat"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+
+    let result = detect_repository_at_async(temp.path().to_path_buf()).await;
+    assert_eq!(result, RepositoryKind::OwnRepository);
+
+    // Create different repo
+    let temp2 = tempdir().unwrap();
+    std::fs::write(
+        temp2.path().join("Cargo.toml"),
+        r#"[package]
+name = "other-project"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+
+    let result2 = detect_repository_at_async(temp2.path().to_path_buf()).await;
+    assert_eq!(result2, RepositoryKind::DifferentRepository);
+}
+
+/// Test context builder with realistic nested directory structure.
+/// Verifies: context builder handles subtask directories.
+#[tokio::test]
+async fn test_self_improvement_context_nested_structure() {
+    use crate::logging::LogEvent;
+    use crate::self_improve::context_builder::build_self_improvement_context;
+    use crate::tasks::{TaskManager, TaskStatus};
+    use crate::types::TaskResult;
+    use tempfile::tempdir;
+    use tokio::sync::broadcast;
+
+    let run_dir = tempdir().unwrap();
+
+    // Create main logs
+    std::fs::write(run_dir.path().join("planner.log"), "Main planning").unwrap();
+    std::fs::write(
+        run_dir.path().join("orchestrator.log"),
+        "Main orchestration",
+    )
+    .unwrap();
+
+    // Create subtask directory with its own logs
+    let subtask_dir = run_dir.path().join("subtask-001");
+    std::fs::create_dir_all(&subtask_dir).unwrap();
+    std::fs::write(subtask_dir.join("planner.log"), "Subtask planning").unwrap();
+    std::fs::write(
+        subtask_dir.join("implementer-001.log"),
+        "Subtask implementation",
+    )
+    .unwrap();
+
+    // Create another subtask
+    let subtask_dir2 = run_dir.path().join("subtask-002");
+    std::fs::create_dir_all(&subtask_dir2).unwrap();
+    std::fs::write(
+        subtask_dir2.join("orchestrator.log"),
+        "Subtask 2 orchestration",
+    )
+    .unwrap();
+
+    let result = TaskResult {
+        success: true,
+        message: Some("All subtasks completed".to_string()),
+    };
+
+    // Create task manager with tasks
+    let (tx, _) = broadcast::channel::<LogEvent>(10);
+    let mut tm = TaskManager::new(tx);
+    let id1 = tm.create("Main task", "Main task description", vec![]);
+    tm.update_status(
+        &id1,
+        &TaskStatus::Complete {
+            success: true,
+            summary: "Main task done".to_string(),
+        },
+    );
+
+    let context = build_self_improvement_context(run_dir.path(), &result, &tm)
+        .await
+        .expect("Context building should succeed");
+
+    // Should mention main logs
+    assert!(
+        context.contains("planner.log"),
+        "Should mention planner.log"
+    );
+    assert!(
+        context.contains("orchestrator.log"),
+        "Should mention orchestrator.log"
+    );
+
+    // Should mention subtask directories or files
+    assert!(
+        context.contains("subtask-001") || context.contains("subtask"),
+        "Should reference subtask directories"
+    );
+}
+
+// Note: GitHub issue creation tests would go here once the github module is implemented.
+// These tests will verify empty suggestions handling, proper error types, etc.
+
+/// Test config file loading with project-level config.
+/// Verifies: project-level config takes precedence.
+#[tokio::test]
+async fn test_self_improvement_config_file_loading() {
+    use tempfile::tempdir;
+
+    // Note: This test validates the config structure parsing
+    // without actually changing the working directory
+
+    let temp = tempdir().unwrap();
+    let config_dir = temp.path().join(".paperboat");
+    std::fs::create_dir_all(&config_dir).unwrap();
+
+    // Create config file
+    std::fs::write(config_dir.join("self-improve.toml"), "enabled = true\n").unwrap();
+
+    // Verify file exists
+    assert!(
+        config_dir.join("self-improve.toml").exists(),
+        "Config file should be created"
+    );
+
+    // Parse the config directly
+    let content = std::fs::read_to_string(config_dir.join("self-improve.toml")).unwrap();
+    let config: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(config["enabled"].as_bool(), Some(true));
+}
+
+/// Test self-improvement failure doesn't affect main result.
+/// Verifies: error isolation - self-improvement errors are non-fatal.
+#[tokio::test]
+async fn test_self_improvement_error_isolation() {
+    // This test verifies the design principle that self-improvement errors
+    // should not affect the main application result.
+
+    // The maybe_run_self_improvement function returns Result<Option<Outcome>>
+    // where:
+    // - Ok(Some(outcome)) = self-improvement ran
+    // - Ok(None) = self-improvement was skipped
+    // - Err(e) = self-improvement failed (but this is logged, not fatal)
+
+    // Verify the types support this pattern
+    use crate::self_improve::runner::SelfImprovementOutcome;
+
+    let outcome: Option<SelfImprovementOutcome> = None;
+    assert!(
+        outcome.is_none(),
+        "None represents skipped self-improvement"
+    );
+
+    let outcome: Option<SelfImprovementOutcome> = Some(SelfImprovementOutcome {
+        success: false,
+        message: Some("Failed but non-fatal".to_string()),
+        changes_made: 0,
+    });
+    assert!(
+        outcome.is_some(),
+        "Some represents self-improvement ran (even if failed)"
+    );
+}

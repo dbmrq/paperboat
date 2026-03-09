@@ -49,7 +49,7 @@ pub fn create_spawn_error(spec: &AgentSpec, error: &anyhow::Error) -> AgentResul
         recovery_hint,
         task_id
             .as_ref()
-            .map(|id| format!("\n\nTask ID for retry: {}", id))
+            .map(|id| format!("\n\nTask ID for retry: {id}"))
             .unwrap_or_default()
     );
 

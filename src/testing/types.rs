@@ -37,7 +37,7 @@ pub struct MockSessionUpdate {
     pub tool_result: Option<MockToolResult>,
 
     /// Optional MCP tool call to inject (triggers tool call through the mock channel).
-    /// This simulates the agent calling one of our MCP tools (`create_task`, `complete`, `spawn_agents`, `decompose`).
+    /// This simulates the agent calling one of our MCP tools (`create_task`, `complete`, `spawn_agents`, or `decompose`).
     #[serde(default)]
     pub inject_mcp_tool_call: Option<MockMcpToolCall>,
 }
@@ -188,7 +188,7 @@ pub struct MockAcpError {
     pub message: String,
 }
 
-/// A suggested task in the complete tool's add_tasks field.
+/// A suggested task in the `complete` tool's `add_tasks` field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MockSuggestedTask {
     /// Name of the suggested task.

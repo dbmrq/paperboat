@@ -73,7 +73,6 @@ Errors must be educational:
 | Agent prompts | `prompts/*.txt` |
 | Tool schemas | `src/mcp_server/handlers/tool_schemas.rs` |
 | Response builders | `src/mcp_server/handlers/response.rs` |
-| Design documentation | `docs/INTENT_BASED_MCP_DESIGN.md` |
 
 ## Common Mistakes to Avoid
 
@@ -82,8 +81,43 @@ Errors must be educational:
 3. **Static "Next Steps"** - Make responses context-aware when possible
 4. **Duplicating tool info** - Single source of truth in tool descriptions
 
+## Self-Improver Agent
+
+The self-improver is a special agent that runs after successful task completion to analyze logs and improve paperboat itself.
+
+### Role and Permissions
+
+| Mode | Tool Access | What It Can Do |
+|------|-------------|----------------|
+| **Own Repository** | Implementer-level (full edit) | Modify prompts, error messages, documentation |
+| **Different Repository** | Explorer-level (read-only) | Analyze logs, create GitHub issue with findings |
+
+### Constraints
+
+The self-improver follows strict safety guidelines:
+
+**Safe to modify:**
+- `prompts/*.txt` - Agent prompt wording
+- `docs/` - Documentation files
+- Error message text in tool responses
+- Tool schema descriptions
+
+**Hands off:**
+- `src/agents/` - Agent spawning logic
+- `src/tasks/` - Task state machine
+- `src/mcp_server/handlers/mod.rs` - MCP routing
+- `src/main.rs` - Main execution flow
+
+### Implementation
+
+- **Prompt**: `prompts/selfimprover.txt`
+- **Runner**: `src/self_improve/runner.rs`
+- **Config**: `src/self_improve/config.rs`
+- **Detection**: `src/self_improve/detection.rs`
+
+The self-improver analyzes completed run logs to identify patterns: repeated errors, prompt confusion, missing edge cases. It prioritizes changes by risk (prompt changes are safest) and impact (what hurt the run most).
+
 ## See Also
 
-- `docs/INTENT_BASED_MCP_DESIGN.md` - Full design plan and implementation details
 - `prompts/README.md` - Prompt file conventions
 

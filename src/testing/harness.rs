@@ -3,12 +3,13 @@
 //! This module provides a `TestHarness` that wraps the `App` with mock clients,
 //! intercepts tool calls, and returns scripted responses from scenarios.
 
-use super::assertions::TestRunResult;
+use super::assertions::{FinalTaskState, TestRunResult};
 use super::interceptor::MockToolInterceptor;
 use super::{MockAcpClient, MockScenario};
 use crate::app::{App, ToolMessage};
 use crate::logging::RunLogManager;
 use crate::models::ModelConfig;
+use crate::tasks::Task;
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::Arc;
@@ -115,6 +116,9 @@ impl TestHarness {
                 .context("Failed to create log manager")?,
         );
 
+        // Capture the run directory path before moving log_manager
+        let run_dir = log_manager.run_dir().clone();
+
         // Store temp_dir for cleanup on drop
         self.temp_dir = Some(temp_dir);
 
@@ -181,12 +185,15 @@ impl TestHarness {
             sessions_created.push(session.session_id.clone());
         }
 
+        // Read final task states from tasks.json
+        let final_tasks = read_final_tasks(&run_dir);
+
         Ok(TestRunResult {
             task_result,
             tool_calls,
             prompts_sent: Vec::new(), // Would need to capture from mock clients
             sessions_created,
-            final_tasks: Vec::new(), // TODO: Read from tasks.json if needed
+            final_tasks,
         })
     }
 
@@ -209,6 +216,40 @@ impl TestHarness {
     pub async fn remaining_tool_responses(&self) -> usize {
         self.tool_interceptor.lock().await.response_queue.len()
     }
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Read final task states from tasks.json in the run directory.
+///
+/// Returns an empty vector if the file doesn't exist or cannot be parsed.
+/// This is expected in some test scenarios where no tasks are created.
+fn read_final_tasks(run_dir: &Path) -> Vec<FinalTaskState> {
+    let tasks_path = run_dir.join("tasks.json");
+
+    // Try to read and parse the file
+    let contents = match std::fs::read_to_string(&tasks_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(), // File doesn't exist or can't be read
+    };
+
+    // Parse as array of Task objects
+    let tasks: Vec<Task> = match serde_json::from_str(&contents) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(), // Invalid JSON or schema mismatch
+    };
+
+    // Convert to FinalTaskState
+    tasks
+        .into_iter()
+        .map(|task| FinalTaskState {
+            task_id: task.id,
+            name: task.name,
+            status: task.status.as_display_str().to_string(),
+        })
+        .collect()
 }
 
 // ============================================================================

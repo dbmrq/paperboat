@@ -360,7 +360,7 @@ impl AgentTreeState {
             .any(|agent| agent.status == AgentStatus::Running)
     }
 
-    /// Returns agent counts by status: (succeeded, failed, `in_progress`).
+    /// Returns agent counts by status: `(succeeded, failed, in_progress)`.
     #[must_use]
     pub fn count_agents_by_status(&self) -> (usize, usize, usize) {
         let mut succeeded = 0;
@@ -386,7 +386,7 @@ impl AgentTreeState {
     pub fn visible_items(&self) -> Vec<String> {
         let mut result = Vec::new();
         for root_id in &self.roots {
-            self.collect_visible_recursive(root_id, vec![root_id.clone()], &mut result);
+            self.collect_visible_recursive(root_id, std::slice::from_ref(root_id), &mut result);
         }
         result
     }
@@ -401,20 +401,20 @@ impl AgentTreeState {
     fn collect_visible_recursive(
         &self,
         session_id: &str,
-        current_path: Vec<String>,
+        current_path: &[String],
         result: &mut Vec<String>,
     ) {
         result.push(session_id.to_string());
 
         // Check if this node is expanded in tree_state
         // A node's children are visible if the node's path is in the opened set
-        if self.tree_state.opened().contains(&current_path) {
+        if self.tree_state.opened().contains(&current_path.to_vec()) {
             if let Some(agent) = self.agents.get(session_id) {
                 for child_id in &agent.children {
                     // Build the path to this child
-                    let mut child_path = current_path.clone();
+                    let mut child_path = current_path.to_owned();
                     child_path.push(child_id.clone());
-                    self.collect_visible_recursive(child_id, child_path, result);
+                    self.collect_visible_recursive(child_id, &child_path, result);
                 }
             }
         }
@@ -1466,7 +1466,10 @@ mod tests {
     fn test_visible_items_empty_tree() {
         let tree = AgentTreeState::new();
         let visible = tree.visible_items();
-        assert!(visible.is_empty(), "Empty tree should have no visible items");
+        assert!(
+            visible.is_empty(),
+            "Empty tree should have no visible items"
+        );
     }
 
     #[test]

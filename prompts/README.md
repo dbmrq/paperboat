@@ -11,6 +11,7 @@ This directory contains system prompts for Paperboat's AI agents. Prompts are em
 | `implementer.txt` | Executes individual tasks (file editing, process execution) |
 | `verifier.txt` | Validates implementation (read-only, can run tests) |
 | `explorer.txt` | Gathers information (read-only, no execution) |
+| `selfimprover.txt` | Analyzes run logs and makes incremental improvements |
 
 ## Adding New Agent Types
 

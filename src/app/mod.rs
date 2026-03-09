@@ -37,7 +37,7 @@ mod decompose;
 mod orchestrator;
 mod orchestrator_acp;
 mod planner;
-mod retry;
+pub mod retry;
 pub mod router;
 mod run;
 mod sequential_impl;
@@ -516,6 +516,14 @@ impl App {
         }
     }
 
+    /// Get a reference to the task manager.
+    ///
+    /// This is primarily used by the self-improvement phase to access the final
+    /// task state after a run completes.
+    pub const fn task_manager(&self) -> &Arc<RwLock<TaskManager>> {
+        &self.task_manager
+    }
+
     /// Gracefully shutdown the application and all child processes.
     ///
     /// This should be called before the App is dropped to ensure clean termination
@@ -591,13 +599,16 @@ impl App {
             combined.push_str("You MUST address them (execute with spawn_agents or skip with skip_tasks) before calling complete():\n\n");
 
             for task_id in &suggested_task_ids {
-                if let Some(task) = tm.get(&task_id) {
-                    combined.push_str(&format!(
-                        "- **[{}] {}**: {}\n",
-                        task_id, task.name, task.description
-                    ));
+                if let Some(task) = tm.get(task_id) {
+                    use std::fmt::Write;
+                    let _ = writeln!(
+                        combined,
+                        "- **[{task_id}] {}**: {}",
+                        task.name, task.description
+                    );
                 } else {
-                    combined.push_str(&format!("- **[{}]** (task details not found)\n", task_id));
+                    use std::fmt::Write;
+                    let _ = writeln!(combined, "- **[{task_id}]** (task details not found)");
                 }
             }
         }
