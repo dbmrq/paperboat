@@ -15,7 +15,7 @@
 use tui_logger::TuiWidgetState;
 
 use crate::logging::LogEvent;
-use crate::models::{AvailableModel, ModelConfig};
+use crate::models::{ModelConfig, ModelTier};
 
 use super::agent_tree_state::{AgentNode, AgentTreeState};
 // Re-export for backward compatibility (used by app.rs)
@@ -113,8 +113,8 @@ pub struct TuiState {
     pub animation_frame: u32,
     /// Current model configuration (clone for display purposes)
     pub model_config: ModelConfig,
-    /// List of available models for selection
-    pub available_models: Vec<AvailableModel>,
+    /// List of available model tiers for selection
+    pub available_tiers: Vec<ModelTier>,
     /// Pending config update to send to the App (polled by event loop)
     pub pending_config_update: Option<ModelConfigUpdate>,
     /// Logger widget state for tui-logger (target selector, level filtering)
@@ -141,7 +141,7 @@ impl std::fmt::Debug for TuiState {
             .field("last_selected_task_id", &self.last_selected_task_id)
             .field("animation_frame", &self.animation_frame)
             .field("model_config", &self.model_config)
-            .field("available_models", &self.available_models)
+            .field("available_tiers", &self.available_tiers)
             .field("pending_config_update", &self.pending_config_update)
             .field("logger_state", &"<TuiWidgetState>")
             .finish()
@@ -175,7 +175,7 @@ impl TuiState {
             last_selected_task_id: None,
             animation_frame: 0,
             model_config: ModelConfig::default(),
-            available_models: Vec::new(),
+            available_tiers: Vec::new(),
             pending_config_update: None,
             logger_state: create_app_logs_state(),
         }
@@ -187,7 +187,8 @@ impl TuiState {
     /// model configuration from the main application.
     #[must_use]
     pub fn with_model_config(model_config: ModelConfig) -> Self {
-        let available_models = model_config.available_models.clone();
+        let available_tiers: Vec<ModelTier> =
+            model_config.available_tiers.iter().copied().collect();
         Self {
             current_focus: FocusedPanel::default(),
             agent_tree_state: AgentTreeState::new(),
@@ -205,7 +206,7 @@ impl TuiState {
             last_selected_task_id: None,
             animation_frame: 0,
             model_config,
-            available_models,
+            available_tiers,
             pending_config_update: None,
             logger_state: create_app_logs_state(),
         }
@@ -239,14 +240,16 @@ impl TuiState {
         };
 
         // Apply changes to local config for immediate UI feedback
-        if let Some(model) = update.orchestrator_model {
-            self.model_config.orchestrator_model = model;
+        // Convert single tier selections to single-element fallback chains
+        use crate::models::ModelFallbackChain;
+        if let Some(tier) = update.orchestrator_model {
+            self.model_config.orchestrator_model = ModelFallbackChain::single(tier);
         }
-        if let Some(model) = update.planner_model {
-            self.model_config.planner_model = model;
+        if let Some(tier) = update.planner_model {
+            self.model_config.planner_model = ModelFallbackChain::single(tier);
         }
-        if let Some(model) = update.implementer_model {
-            self.model_config.implementer_model = model;
+        if let Some(tier) = update.implementer_model {
+            self.model_config.implementer_model = ModelFallbackChain::single(tier);
         }
 
         // Store update for the event loop to send to the App
@@ -275,7 +278,7 @@ impl TuiState {
     /// typically after the user makes changes in a settings panel.
     #[allow(dead_code)] // Public API for external TUI configuration
     pub fn update_model_config(&mut self, config: ModelConfig) {
-        self.available_models.clone_from(&config.available_models);
+        self.available_tiers = config.available_tiers.iter().copied().collect();
         self.model_config = config;
     }
 
@@ -286,11 +289,11 @@ impl TuiState {
         &self.model_config
     }
 
-    /// Returns a reference to the available models list.
+    /// Returns a reference to the available tiers list.
     #[must_use]
     #[allow(dead_code)] // Public API for external TUI state access
-    pub fn available_models(&self) -> &[AvailableModel] {
-        &self.available_models
+    pub fn available_tiers(&self) -> &[ModelTier] {
+        &self.available_tiers
     }
 
     /// Processes an incoming [`LogEvent`] and updates state accordingly.
@@ -778,81 +781,70 @@ mod tests {
 
     #[test]
     fn test_tui_state_with_model_config() {
-        use crate::models::{AvailableModel, ModelConfig, ModelId};
+        use crate::models::{ModelConfig, ModelFallbackChain, ModelTier};
+        use std::collections::HashSet;
 
         let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelId::Opus4_5;
-        config.planner_model = ModelId::Sonnet4_5;
-        config.implementer_model = ModelId::Haiku4_5;
-        config.available_models = vec![
-            AvailableModel {
-                id: ModelId::Opus4_5,
-                name: "Opus 4.5".to_string(),
-                description: "Most capable".to_string(),
-            },
-            AvailableModel {
-                id: ModelId::Sonnet4_5,
-                name: "Sonnet 4.5".to_string(),
-                description: "Balanced".to_string(),
-            },
-        ];
+        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Opus);
+        config.planner_model = ModelFallbackChain::single(ModelTier::Sonnet);
+        config.implementer_model = ModelFallbackChain::single(ModelTier::Haiku);
+        config.available_tiers = [ModelTier::Opus, ModelTier::Sonnet].into_iter().collect();
 
         let state = TuiState::with_model_config(config.clone());
 
-        assert_eq!(state.model_config.orchestrator_model, ModelId::Opus4_5);
-        assert_eq!(state.model_config.planner_model, ModelId::Sonnet4_5);
-        assert_eq!(state.model_config.implementer_model, ModelId::Haiku4_5);
-        assert_eq!(state.available_models.len(), 2);
+        assert_eq!(
+            state.model_config.orchestrator_model.primary(),
+            Some(ModelTier::Opus)
+        );
+        assert_eq!(state.available_tiers.len(), 2);
     }
 
     #[test]
     fn test_tui_state_update_model_config() {
-        use crate::models::{AvailableModel, ModelConfig, ModelId};
+        use crate::models::{ModelConfig, ModelFallbackChain, ModelTier};
+        use std::collections::HashSet;
 
         let mut state = TuiState::new();
 
         let mut new_config = ModelConfig::default();
-        new_config.orchestrator_model = ModelId::Opus4_5;
-        new_config.available_models = vec![AvailableModel {
-            id: ModelId::Opus4_5,
-            name: "Opus 4.5".to_string(),
-            description: "Powerful".to_string(),
-        }];
+        new_config.orchestrator_model = ModelFallbackChain::single(ModelTier::Opus);
+        new_config.available_tiers = [ModelTier::Opus].into_iter().collect();
 
         state.update_model_config(new_config);
 
-        assert_eq!(state.model_config.orchestrator_model, ModelId::Opus4_5);
-        assert_eq!(state.available_models.len(), 1);
-        assert_eq!(state.available_models[0].id, ModelId::Opus4_5);
+        assert_eq!(
+            state.model_config.orchestrator_model.primary(),
+            Some(ModelTier::Opus)
+        );
+        assert_eq!(state.available_tiers.len(), 1);
     }
 
     #[test]
     fn test_tui_state_model_config_getter() {
-        use crate::models::{ModelConfig, ModelId};
+        use crate::models::{ModelConfig, ModelFallbackChain, ModelTier};
 
         let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelId::Sonnet4_5;
+        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Sonnet);
         let state = TuiState::with_model_config(config);
 
         let config_ref = state.model_config();
-        assert_eq!(config_ref.orchestrator_model, ModelId::Sonnet4_5);
+        assert_eq!(
+            config_ref.orchestrator_model.primary(),
+            Some(ModelTier::Sonnet)
+        );
     }
 
     #[test]
-    fn test_tui_state_available_models_getter() {
-        use crate::models::{AvailableModel, ModelConfig, ModelId};
+    fn test_tui_state_available_tiers_getter() {
+        use crate::models::{ModelConfig, ModelTier};
 
         let mut config = ModelConfig::default();
-        config.available_models = vec![AvailableModel {
-            id: ModelId::Haiku4_5,
-            name: "Haiku".to_string(),
-            description: "Fast".to_string(),
-        }];
+        config.available_tiers = [ModelTier::Haiku].into_iter().collect();
         let state = TuiState::with_model_config(config);
 
-        let models = state.available_models();
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, ModelId::Haiku4_5);
+        let tiers = state.available_tiers();
+        assert_eq!(tiers.len(), 1);
+        assert!(tiers.contains(&ModelTier::Haiku));
     }
 
     #[test]
@@ -915,37 +907,42 @@ mod tests {
 
     #[test]
     fn test_apply_settings_changes_with_pending() {
-        use crate::models::{AvailableModel, ModelConfig, ModelId};
+        use crate::models::{ModelConfig, ModelFallbackChain, ModelTier};
 
         let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelId::Haiku4_5;
-        config.planner_model = ModelId::Haiku4_5;
-        config.implementer_model = ModelId::Haiku4_5;
-        config.available_models = vec![AvailableModel {
-            id: ModelId::Opus4_5,
-            name: "Opus".to_string(),
-            description: "".to_string(),
-        }];
+        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Haiku);
+        config.planner_model = ModelFallbackChain::single(ModelTier::Haiku);
+        config.implementer_model = ModelFallbackChain::single(ModelTier::Haiku);
+        config.available_tiers = [ModelTier::Opus].into_iter().collect();
 
         let mut state = TuiState::with_model_config(config);
 
         // Set pending changes
-        state.settings_state.pending_orchestrator = Some(ModelId::Opus4_5);
-        state.settings_state.pending_planner = Some(ModelId::Sonnet4_5);
+        state.settings_state.pending_orchestrator = Some(ModelTier::Opus);
+        state.settings_state.pending_planner = Some(ModelTier::Sonnet);
 
         // Apply changes
         let applied = state.apply_settings_changes();
         assert!(applied);
 
         // Check local config was updated
-        assert_eq!(state.model_config.orchestrator_model, ModelId::Opus4_5);
-        assert_eq!(state.model_config.planner_model, ModelId::Sonnet4_5);
-        assert_eq!(state.model_config.implementer_model, ModelId::Haiku4_5); // Unchanged
+        assert_eq!(
+            state.model_config.orchestrator_model.primary(),
+            Some(ModelTier::Opus)
+        );
+        assert_eq!(
+            state.model_config.planner_model.primary(),
+            Some(ModelTier::Sonnet)
+        );
+        assert_eq!(
+            state.model_config.implementer_model.primary(),
+            Some(ModelTier::Haiku)
+        ); // Unchanged
 
         // Check pending update was created
         let update = state.pending_config_update.unwrap();
-        assert_eq!(update.orchestrator_model, Some(ModelId::Opus4_5));
-        assert_eq!(update.planner_model, Some(ModelId::Sonnet4_5));
+        assert_eq!(update.orchestrator_model, Some(ModelTier::Opus));
+        assert_eq!(update.planner_model, Some(ModelTier::Sonnet));
         assert!(update.implementer_model.is_none());
 
         // Check settings state was cleared
@@ -957,10 +954,10 @@ mod tests {
 
     #[test]
     fn test_take_pending_config_update() {
-        use crate::models::ModelId;
+        use crate::models::ModelTier;
 
         let mut state = TuiState::new();
-        state.settings_state.pending_orchestrator = Some(ModelId::Opus4_5);
+        state.settings_state.pending_orchestrator = Some(ModelTier::Opus);
 
         // Apply to create the update
         state.apply_settings_changes();
@@ -969,7 +966,7 @@ mod tests {
         // Take the update
         let update = state.take_pending_config_update();
         assert!(update.is_some());
-        assert_eq!(update.unwrap().orchestrator_model, Some(ModelId::Opus4_5));
+        assert_eq!(update.unwrap().orchestrator_model, Some(ModelTier::Opus));
 
         // Second take should return None
         let update2 = state.take_pending_config_update();

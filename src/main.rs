@@ -1,6 +1,7 @@
 mod acp;
 mod agents;
 mod app;
+mod backend;
 mod config;
 mod error;
 mod logging;
@@ -16,9 +17,9 @@ mod tui;
 mod types;
 
 use anyhow::Result;
-use config::{build_model_config, load_agent_configs};
+use backend::{discover_available_backends, prompt_backend_selection, BackendConfig};
+use config::{build_model_config, get_explicit_backend_config, load_agent_configs};
 use logging::RunLogManager;
-use models::discover_models;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer};
@@ -36,11 +37,25 @@ struct CliArgs {
     json_logs: bool,
     /// Enable metrics collection (can also be set via `PAPERBOAT_METRICS` env var)
     metrics_enabled: bool,
+    /// Backend configuration (backend and optional transport).
+    ///
+    /// Parsed from `--backend` flag in format "backend:transport".
+    /// Examples: "cursor", "cursor:cli", "cursor:acp", "auggie:acp"
+    backend_config: Option<BackendConfig>,
     /// The goal/task to accomplish
     goal: Option<String>,
 }
 
 /// Parse command-line arguments and extract flags and the goal.
+///
+/// # Backend Selection
+///
+/// The `--backend` flag supports an optional transport suffix:
+/// - `--backend cursor` - Cursor with default transport (CLI)
+/// - `--backend cursor:cli` - Cursor with CLI transport (explicit)
+/// - `--backend cursor:acp` - Cursor with ACP transport
+/// - `--backend auggie` - Auggie with default transport (ACP)
+/// - `--backend auggie:acp` - Auggie with ACP transport (explicit)
 fn parse_args(args: &[String]) -> CliArgs {
     // --headless disables TUI mode (TUI is enabled by default)
     let headless_mode = args.contains(&"--headless".to_string());
@@ -53,12 +68,62 @@ fn parse_args(args: &[String]) -> CliArgs {
     let metrics_enabled = args.contains(&"--metrics".to_string())
         || std::env::var("PAPERBOAT_METRICS").is_ok_and(|v| v == "1" || v == "true");
 
+    // --backend <name[:transport]> selects the backend and optional transport
+    // Examples: cursor, cursor:cli, cursor:acp, auggie, auggie:acp
+    let backend_config = args
+        .iter()
+        .position(|a| a == "--backend")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|backend_str| {
+            match BackendConfig::parse(backend_str) {
+                Ok(config) => Some(config),
+                Err(e) => {
+                    // Print error and exit immediately for invalid backend config
+                    eprintln!(
+                        "❌ Invalid --backend value '{}': {}\n\n\
+                        Valid backends:\n  \
+                          auggie        Augment's Auggie CLI (default transport: acp)\n  \
+                          cursor        Cursor's agent CLI (default transport: cli)\n\n\
+                        Transport options (optional suffix):\n  \
+                          cursor:cli    CLI transport (better MCP support, default for Cursor)\n  \
+                          cursor:acp    ACP transport (JSON-RPC protocol)\n  \
+                          auggie:acp    ACP transport (only option for Auggie)\n\n\
+                        Examples:\n  \
+                          --backend cursor\n  \
+                          --backend cursor:cli\n  \
+                          --backend cursor:acp\n  \
+                          --backend auggie",
+                        backend_str, e
+                    );
+                    std::process::exit(1);
+                }
+            }
+        });
+
     // Goal is the first non-flag argument after the program name
+    // Skip arguments that are values for flags (like --backend value)
+    let flags_with_values = ["--backend", "--socket"];
     let goal = args
         .iter()
+        .enumerate()
         .skip(1)
-        .find(|arg| !arg.starts_with("--") && !arg.starts_with('-'))
-        .cloned();
+        .filter(|(i, arg)| {
+            // Skip flag arguments
+            if arg.starts_with("--") || arg.starts_with('-') {
+                return false;
+            }
+            // Skip values of flags that take arguments
+            if *i > 0 {
+                if let Some(prev) = args.get(i - 1) {
+                    if flags_with_values.contains(&prev.as_str()) {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .map(|(_, arg)| arg.clone())
+        .next();
 
     CliArgs {
         headless_mode,
@@ -66,6 +131,7 @@ fn parse_args(args: &[String]) -> CliArgs {
         validate_config_mode,
         json_logs,
         metrics_enabled,
+        backend_config,
         goal,
     }
 }
@@ -108,6 +174,7 @@ async fn main() -> Result<()> {
     let json_logs = cli_args.json_logs;
     let metrics_enabled = cli_args.metrics_enabled;
     let goal_arg = cli_args.goal;
+    let cli_backend_config = cli_args.backend_config;
 
     // Create run directory first (so we can put logs there)
     let log_base =
@@ -289,19 +356,127 @@ async fn main() -> Result<()> {
     let loaded_configs = load_agent_configs()?;
     tracing::debug!("Loaded configs: {:?}", loaded_configs);
 
-    // Discover available models from auggie
-    tracing::info!("🔍 Discovering available models...");
-    let available_models = discover_models().await?;
+    // Determine which backend and transport to use
+    // Priority: CLI --backend flag > PAPERBOAT_BACKEND env var > config file > auto-detect > default
+    let (backend_kind, transport_kind) = if let Some(ref config) = cli_backend_config {
+        // CLI flag takes precedence
+        let transport = config.effective_transport();
+        if config.transport.is_some() {
+            tracing::info!(
+                "🔌 Backend '{}' with '{}' transport selected from --backend CLI flag",
+                config.kind,
+                transport
+            );
+        } else {
+            tracing::info!(
+                "🔌 Backend '{}' selected from --backend CLI flag (using default transport '{}')",
+                config.kind,
+                transport
+            );
+        }
+        (config.kind, transport)
+    } else if let Some(config) = get_explicit_backend_config() {
+        // Explicit config from env var or config file
+        let transport = config.effective_transport();
+        tracing::info!(
+            "🔌 Using configured backend '{}' with transport '{}'",
+            config.kind,
+            transport
+        );
+        (config.kind, transport)
+    } else {
+        // No explicit config - auto-detect available backends
+        tracing::info!("🔍 No backend configured, detecting available backends...");
+        let available = discover_available_backends().await;
+
+        match available.len() {
+            0 => {
+                eprintln!(
+                    "❌ No AI backends available.\n\n\
+                    Please install and authenticate at least one backend:\n  \
+                    • Augment CLI: Install auggie and run 'auggie login'\n  \
+                    • Cursor: Install cursor-agent and run 'agent login'\n\n\
+                    You can also specify a backend explicitly with --backend <name>"
+                );
+                std::process::exit(1);
+            }
+            1 => {
+                // Only one backend available - use it automatically
+                let kind = available[0];
+                let transport = kind.default_transport();
+                tracing::info!(
+                    "🔌 Auto-selected backend '{}' (only available backend)",
+                    kind
+                );
+                (kind, transport)
+            }
+            _ => {
+                // Multiple backends available - prompt user to select
+                tracing::info!(
+                    "📋 Found {} available backends: {:?}",
+                    available.len(),
+                    available.iter().map(|k| k.as_str()).collect::<Vec<_>>()
+                );
+
+                if let Some(kind) = prompt_backend_selection(&available) {
+                    let transport = kind.default_transport();
+                    (kind, transport)
+                } else {
+                    // Could not prompt (not a terminal) - use first available
+                    let kind = available[0];
+                    let transport = kind.default_transport();
+                    tracing::info!(
+                        "🔌 Using first available backend '{}' (non-interactive mode)",
+                        kind
+                    );
+                    (kind, transport)
+                }
+            }
+        }
+    };
+
+    // Create the backend for agent communication
+    let backend = backend_kind.create();
+
+    tracing::debug!("📡 Transport kind: {}", transport_kind);
+
+    // Check authentication before proceeding
+    if let Err(auth_err) = backend.check_auth() {
+        eprintln!(
+            "❌ Authentication error:\n\n{}",
+            backend.auth_error_message()
+        );
+        tracing::error!("Backend authentication failed: {}", auth_err);
+        std::process::exit(1);
+    }
+
+    // Discover available model tiers from the backend
+    tracing::info!("🔍 Discovering available model tiers...");
+    let available_tiers = match backend.available_tiers().await {
+        Ok(tiers) => tiers,
+        Err(e) => {
+            eprintln!(
+                "❌ Failed to discover model tiers from {} backend: {}\n\n\
+                This may indicate a network issue or backend service problem.\n\
+                Try running '{}' to verify your authentication.",
+                backend.name(),
+                e,
+                backend.login_hint()
+            );
+            tracing::error!("Model tier discovery failed: {}", e);
+            std::process::exit(1);
+        }
+    };
     tracing::info!(
-        "📋 Available models: {:?}",
-        available_models
+        "📋 Available tiers: {:?}",
+        available_tiers
             .iter()
-            .map(|m| m.id.as_str())
+            .map(|t| t.as_str())
             .collect::<Vec<_>>()
     );
 
-    // Build model configuration from loaded configs and available models
-    let mut model_config = build_model_config(&loaded_configs, &available_models)?;
+    // Build model configuration from loaded configs and available tiers
+    let mut model_config = build_model_config(&loaded_configs, available_tiers)?;
 
     // Apply debug build override (uses Haiku for fast, cheap testing)
     // In release builds, this is a no-op
@@ -326,7 +501,8 @@ async fn main() -> Result<()> {
     }
 
     // Run the orchestrator with signal handling for graceful shutdown
-    let mut app = app::App::with_log_manager(model_config, log_manager).await?;
+    let mut app =
+        app::App::with_log_manager(model_config, log_manager, backend, transport_kind).await?;
 
     // Connect App to TUI config update channel if TUI is running
     #[cfg(feature = "tui")]

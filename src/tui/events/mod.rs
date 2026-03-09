@@ -546,28 +546,14 @@ mod tests {
 
     #[test]
     fn test_settings_up_down_navigates_models() {
+        use crate::models::ModelTier;
+
         let mut state = TuiState::new();
         let layout = test_layout();
         state.settings_visible = true;
 
-        // Add some available models
-        state.available_models = vec![
-            crate::models::AvailableModel {
-                id: crate::models::ModelId::Haiku4_5,
-                name: "Haiku 4.5".to_string(),
-                description: "Fast".to_string(),
-            },
-            crate::models::AvailableModel {
-                id: crate::models::ModelId::Sonnet4_5,
-                name: "Sonnet 4.5".to_string(),
-                description: "Balanced".to_string(),
-            },
-            crate::models::AvailableModel {
-                id: crate::models::ModelId::Opus4_5,
-                name: "Opus 4.5".to_string(),
-                description: "Powerful".to_string(),
-            },
-        ];
+        // Add some available tiers
+        state.available_tiers = vec![ModelTier::Haiku, ModelTier::Sonnet, ModelTier::Opus];
 
         assert_eq!(state.settings_state.selected_model_index, 0);
 
@@ -583,31 +569,22 @@ mod tests {
 
     #[test]
     fn test_settings_enter_selects_model() {
+        use crate::models::ModelTier;
+
         let mut state = TuiState::new();
         let layout = test_layout();
         state.settings_visible = true;
 
-        // Add available models
-        state.available_models = vec![
-            crate::models::AvailableModel {
-                id: crate::models::ModelId::Haiku4_5,
-                name: "Haiku 4.5".to_string(),
-                description: "Fast".to_string(),
-            },
-            crate::models::AvailableModel {
-                id: crate::models::ModelId::Sonnet4_5,
-                name: "Sonnet 4.5".to_string(),
-                description: "Balanced".to_string(),
-            },
-        ];
+        // Add available tiers
+        state.available_tiers = vec![ModelTier::Haiku, ModelTier::Sonnet];
 
-        // Navigate to second model and select
+        // Navigate to second tier and select
         handle_key_event(&mut state, key(CrosstermKeyCode::Down), &layout);
         handle_key_event(&mut state, key(CrosstermKeyCode::Enter), &layout);
 
         assert_eq!(
             state.settings_state.pending_orchestrator,
-            Some(crate::models::ModelId::Sonnet4_5)
+            Some(ModelTier::Sonnet)
         );
     }
 

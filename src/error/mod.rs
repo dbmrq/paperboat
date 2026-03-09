@@ -18,12 +18,12 @@
 //! # Example
 //!
 //! ```ignore
-//! use paperboat::error::{AcpError, PaperboatError};
+//! use paperboat::error::{AcpError, AcpSuggestion, PaperboatError};
 //!
-//! fn connect_to_agent() -> Result<(), PaperboatError> {
+//! fn connect_to_agent(backend_name: &str) -> Result<(), PaperboatError> {
 //!     Err(AcpError::ConnectionFailed {
-//!         message: "Failed to spawn auggie process".to_string(),
-//!         suggestion: Some("Is auggie installed and in your PATH?".to_string()),
+//!         message: format!("Failed to spawn {} process", backend_name),
+//!         suggestion: Some(AcpSuggestion::InstallCli(backend_name.to_string())),
 //!     }.into())
 //! }
 //! ```

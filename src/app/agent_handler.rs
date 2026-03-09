@@ -237,9 +237,14 @@ pub async fn run_agent_handler(
             timeout
         );
         // Socket cleanup happens when socket_handle is dropped
+        let timeout_secs = timeout.as_secs();
         AgentCompletionData {
             success: false,
-            message: Some(format!("Agent timed out for task: {task}")),
+            message: Some(format!(
+                "Agent timed out for task: {task} (after {timeout_secs}s). \
+                 The task may be too large or include long-running operations. \
+                 Consider breaking it into smaller pieces or using focused verification."
+            )),
             notes: None,
             add_tasks: None,
         }

@@ -4,7 +4,7 @@
 //! responses from a `MockScenario`, enabling deterministic testing without
 //! requiring a live agent process.
 
-use crate::acp::{AcpClientTrait, SessionNewResponse};
+use crate::acp::{AcpClientTrait, SessionMode, SessionNewResponse};
 use crate::app::ToolMessage;
 use crate::mcp_server::{ToolCall, ToolRequest};
 use crate::testing::{
@@ -374,6 +374,7 @@ impl AcpClientTrait for MockAcpClient {
         model: &str,
         mcp_servers: Vec<Value>,
         _cwd: &str,
+        _mode: SessionMode,
     ) -> Result<SessionNewResponse> {
         // Determine agent type from model name and MCP server config
         let agent_type = self.agent_type_from_config(model, &mcp_servers);
@@ -531,7 +532,7 @@ mod tests {
 
         // Create a planner session
         let response = client
-            .session_new("planner-model", vec![], "/tmp")
+            .session_new("planner-model", vec![], "/tmp", SessionMode::Plan)
             .await
             .unwrap();
         assert_eq!(response.session_id, "planner-001");
@@ -567,7 +568,7 @@ mod tests {
         client.initialize().await.unwrap();
 
         let response = client
-            .session_new("implementer", vec![], "/tmp")
+            .session_new("implementer", vec![], "/tmp", SessionMode::Agent)
             .await
             .unwrap();
         client

@@ -13,6 +13,41 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
+/// ACP session mode controlling agent capabilities.
+///
+/// These modes map to Cursor ACP session modes and control what tools
+/// the agent can use during the session.
+///
+/// **Important:** In Cursor ACP, `Plan` and `Ask` modes are **read-only** and
+/// cannot call any tools (including MCP tools). Use `Agent` mode for any
+/// agent that needs to call tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SessionMode {
+    /// Full tool access - can read/write files, run commands, call MCP tools.
+    /// Use for all agents that need to call tools (implementers, planners, orchestrators).
+    #[default]
+    Agent,
+    /// Planning mode - read-only behavior, **cannot call tools**.
+    /// Only use for pure analysis/planning without tool calls.
+    #[allow(dead_code)]
+    Plan,
+    /// Q&A mode - read-only, for explanations and questions.
+    /// **Cannot call tools.** Only use for pure Q&A without tool calls.
+    #[allow(dead_code)]
+    Ask,
+}
+
+impl SessionMode {
+    /// Convert to the string value expected by ACP.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SessionMode::Agent => "agent",
+            SessionMode::Plan => "plan",
+            SessionMode::Ask => "ask",
+        }
+    }
+}
+
 /// Trait defining the interface for an ACP client.
 ///
 /// This trait abstracts the ACP client operations to enable testing with mock implementations.
@@ -22,12 +57,23 @@ pub trait AcpClientTrait: Send + Sync {
     /// Initialize the ACP connection
     async fn initialize(&mut self) -> Result<()>;
 
-    /// Create a new session
+    /// Create a new session with the specified mode.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - The model to use for this session
+    /// * `mcp_servers` - MCP server configurations
+    /// * `cwd` - Working directory for the session
+    /// * `mode` - Session mode controlling agent capabilities:
+    ///   - `Agent`: Full tool access (for implementers)
+    ///   - `Plan`: Read-only planning mode (for planners)
+    ///   - `Ask`: Q&A read-only mode (for explorers)
     async fn session_new(
         &mut self,
         model: &str,
         mcp_servers: Vec<Value>,
         cwd: &str,
+        mode: SessionMode,
     ) -> Result<SessionNewResponse>;
 
     /// Send a prompt to a session
@@ -307,13 +353,25 @@ impl AcpClientTrait for AcpClient {
         Ok(())
     }
 
-    /// Create a new session
+    /// Create a new session with the specified mode.
+    ///
+    /// Note: Auggie (the Augment CLI) currently ignores the mode parameter.
+    /// Mode-based restrictions are only enforced by Cursor ACP.
     async fn session_new(
         &mut self,
         model: &str,
         mcp_servers: Vec<Value>,
         cwd: &str,
+        mode: SessionMode,
     ) -> Result<SessionNewResponse> {
+        // Note: Auggie doesn't support mode parameter, but we log it for debugging
+        if mode != SessionMode::Agent {
+            tracing::debug!(
+                "📋 Session mode '{}' requested (Auggie ignores mode, using full access)",
+                mode.as_str()
+            );
+        }
+
         let params = json!({
             "model": model,
             "cwd": cwd,

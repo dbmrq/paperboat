@@ -26,8 +26,11 @@
 use super::retry::{is_transient_error, RetryConfig};
 use super::types::{truncate_for_log, ToolMessage, ORCHESTRATOR_PROMPT};
 use super::App;
+use crate::acp::SessionMode;
+use crate::backend::transport::{SessionConfig, SessionInfo};
 use crate::logging::AgentWriter;
-use crate::mcp_server::{TaskStateInfo, ToolCall, ToolResponse};
+use crate::mcp_server::{AgentSpec, TaskStateInfo, ToolCall, ToolResponse};
+use crate::tasks::TaskStatus;
 use crate::types::TaskResult;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -37,9 +40,9 @@ use std::time::Duration;
 
 impl App {
     /// Spawn an orchestrator agent.
-    /// Returns (`session_id`, `full_prompt`) so the prompt can be logged.
+    /// Returns (`session_id`, `model`, `full_prompt`) so the model and prompt can be logged.
     #[tracing::instrument(skip(self, prompt), fields(agent_type = "orchestrator", session_id))]
-    pub(crate) async fn spawn_orchestrator(&mut self, prompt: &str) -> Result<(String, String)> {
+    pub(crate) async fn spawn_orchestrator(&mut self, prompt: &str) -> Result<(String, String, String)> {
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
         // Get the path to the current binary
@@ -71,7 +74,7 @@ impl App {
         tracing::info!("🎭 Spawning orchestrator with MCP tools");
 
         // Create session with retry logic for transient MCP server startup errors
-        let response = self
+        let (response, model) = self
             .create_orchestrator_session_with_retry(mcp_servers, &cwd)
             .await?;
 
@@ -90,43 +93,46 @@ impl App {
         tracing::debug!("🎭 Orchestrator prompt:\n{}", full_prompt);
 
         self.acp_orchestrator
-            .session_prompt(&response.session_id, &full_prompt)
+            .send_prompt(&response.session_id, &full_prompt)
             .await?;
 
-        Ok((response.session_id, full_prompt))
+        Ok((response.session_id, model, full_prompt))
     }
 
     /// Create an orchestrator session with retry logic.
     ///
     /// This handles transient MCP server startup errors by retrying the session
     /// creation with exponential backoff.
+    /// Returns (`SessionInfo`, `model`) so the model can be recorded in logs.
     async fn create_orchestrator_session_with_retry(
         &mut self,
         mcp_servers: Vec<Value>,
         cwd: &str,
-    ) -> Result<crate::acp::SessionNewResponse> {
+    ) -> Result<(SessionInfo, String)> {
         let retry_config = RetryConfig::from_env();
-        let model = self.model_config.orchestrator_model.as_str().to_string();
+        let model = self.resolve_orchestrator_model()?;
         let mut attempt = 0;
         let mut delay = retry_config.initial_delay;
 
         loop {
             attempt += 1;
 
-            match self
-                .acp_orchestrator
-                .session_new(&model, mcp_servers.clone(), cwd)
-                .await
-            {
+            // Create session config with Agent mode - orchestrator needs to call MCP tools
+            // Note: Cursor's "plan" mode is read-only and can't call tools
+            let config = SessionConfig::new(&model, cwd)
+                .with_mcp_servers(mcp_servers.clone())
+                .with_mode(SessionMode::Agent);
+
+            match self.acp_orchestrator.create_session(config).await {
                 Ok(response) => {
                     if attempt > 1 {
                         tracing::info!(
-                            "🔄 Orchestrator session_new succeeded on attempt {}/{}",
+                            "🔄 Orchestrator create_session succeeded on attempt {}/{}",
                             attempt,
                             retry_config.max_retries + 1
                         );
                     }
-                    return Ok(response);
+                    return Ok((response, model));
                 }
                 Err(e) => {
                     let is_transient = is_transient_error(&e);
@@ -134,7 +140,7 @@ impl App {
 
                     if can_retry {
                         tracing::warn!(
-                            "⚠️ Orchestrator session_new failed (attempt {}/{}): {}. Retrying in {:?}...",
+                            "⚠️ Orchestrator create_session failed (attempt {}/{}): {}. Retrying in {:?}...",
                             attempt,
                             retry_config.max_retries + 1,
                             e,
@@ -154,10 +160,10 @@ impl App {
                             "non-transient error"
                         };
                         tracing::error!(
-                            "❌ Orchestrator session_new failed after {attempt} attempt(s) ({reason}): {e:#}",
+                            "❌ Orchestrator create_session failed after {attempt} attempt(s) ({reason}): {e:#}",
                         );
                         return Err(e).context(format!(
-                            "Orchestrator session_new failed after {attempt} attempt(s)"
+                            "Orchestrator create_session failed after {attempt} attempt(s)"
                         ));
                     }
                 }
@@ -181,7 +187,7 @@ impl App {
         prompt: &str,
         writer: &mut AgentWriter,
     ) -> Result<TaskResult> {
-        let (session_id, full_prompt) = match self.spawn_orchestrator(prompt).await {
+        let (session_id, model, full_prompt) = match self.spawn_orchestrator(prompt).await {
             Ok(result) => result,
             Err(e) => {
                 // Write error to orchestrator log so it's not empty
@@ -198,6 +204,7 @@ impl App {
             }
         };
         writer.set_session_id(session_id.clone());
+        writer.set_model(model);
         // Use the plan as the task description, but log the full prompt for debugging
         if let Err(e) = writer.write_header_with_prompt(prompt, &full_prompt).await {
             tracing::warn!("Failed to write orchestrator header: {}", e);
@@ -356,9 +363,28 @@ impl App {
                                 for agent in agents {
                                     let role =
                                         agent.role.as_deref().unwrap_or("implementer").to_string();
+
+                                    // Resolve task_id (with inference like concurrent mode)
+                                    let resolved_task_id = self.resolve_task_id_for_agent(agent).await;
+
                                     let task = self
                                         .resolve_task_description(agent.task_id.as_ref(), agent.task.as_ref())
                                         .await;
+
+                                    // Mark task as InProgress before spawning (if we have a task_id)
+                                    if let Some(ref tid) = resolved_task_id {
+                                        let mut tm = self.task_manager.write().await;
+                                        tm.update_status(
+                                            tid,
+                                            &TaskStatus::InProgress {
+                                                agent_session: None,
+                                            },
+                                        );
+                                        tracing::info!(
+                                            "📋 Task {} marked as InProgress (sequential mode)",
+                                            tid
+                                        );
+                                    }
 
                                     // Restore tool_rx before spawning (needs to receive complete signal)
                                     self.tool_rx = Some(tool_rx);
@@ -369,6 +395,24 @@ impl App {
                                         .tool_rx
                                         .take()
                                         .context("Tool receiver lost during spawn_agents")?;
+
+                                    // Update task status based on result (if we have a task_id)
+                                    if let Some(ref tid) = resolved_task_id {
+                                        let mut tm = self.task_manager.write().await;
+                                        let status = if impl_response.success {
+                                            tracing::info!("📋 Task {} marked as Complete", tid);
+                                            TaskStatus::Complete {
+                                                success: true,
+                                                summary: impl_response.summary.clone(),
+                                            }
+                                        } else {
+                                            tracing::info!("📋 Task {} marked as Failed", tid);
+                                            TaskStatus::Failed {
+                                                error: impl_response.summary.clone(),
+                                            }
+                                        };
+                                        tm.update_status(tid, &status);
+                                    }
 
                                     let status = if impl_response.success { "✓" } else { "✗" };
                                     summaries.push(format!(
@@ -571,6 +615,44 @@ impl App {
         } else {
             task.cloned().unwrap_or_else(|| "(no task)".to_string())
         }
+    }
+
+    /// Resolve the task_id for an agent spec, with inference support.
+    ///
+    /// If `task_id` is provided, uses it directly (with validation).
+    /// If not, tries to infer the task_id from the task description by matching
+    /// against existing tasks in the TaskManager.
+    ///
+    /// This mirrors the behavior in concurrent mode (`resolve_agent_spec`).
+    async fn resolve_task_id_for_agent(&self, spec: &AgentSpec) -> Option<String> {
+        // If task_id is explicitly provided, validate and return it
+        if let Some(ref tid) = spec.task_id {
+            let tm = self.task_manager.read().await;
+            if tm.get_by_id_or_name(tid).is_some() {
+                return Some(tid.clone());
+            }
+            tracing::warn!(
+                "Task '{}' not found in TaskManager. Available: {:?}",
+                tid,
+                tm.list_task_ids()
+            );
+            return None;
+        }
+
+        // Try to infer task_id from task description
+        if let Some(ref task_desc) = spec.task {
+            let tm = self.task_manager.read().await;
+            if let Some(found_id) = tm.find_by_name_or_description(task_desc) {
+                tracing::info!(
+                    "📋 Inferred task_id '{}' from task description: {}",
+                    found_id,
+                    truncate_for_log(task_desc, 60)
+                );
+                return Some(found_id);
+            }
+        }
+
+        None
     }
 
     /// Handle the `create_task` tool call.
@@ -960,5 +1042,18 @@ impl App {
             .await;
 
         (all_success, combined)
+    }
+
+    /// Resolve the orchestrator model configuration to an actual model string.
+    fn resolve_orchestrator_model(&self) -> Result<String> {
+        // Resolve fallback chain to a tier
+        let tier = self
+            .model_config
+            .orchestrator_model
+            .resolve(&self.model_config.available_tiers)?;
+
+        // Orchestrator doesn't use auto-resolution (no complexity hint)
+        // Convert tier to backend-specific model string
+        self.backend.resolve_tier(tier)
     }
 }

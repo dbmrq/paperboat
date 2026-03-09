@@ -3,13 +3,14 @@
 use super::App;
 use crate::types::TaskResult;
 use anyhow::{Context, Result};
-use std::path::PathBuf;
 
 impl App {
     /// Run the orchestrator with a goal
     ///
     /// This first spawns a Planner to create a high-level plan, then spawns
     /// an Orchestrator to execute the plan by delegating to implementers.
+    ///
+    /// Socket setup and MCP configuration happens in the App constructor.
     #[tracing::instrument(skip(self))]
     pub async fn run(&mut self, goal: &str) -> Result<TaskResult> {
         tracing::info!("Starting with goal: {}", goal);
@@ -17,25 +18,14 @@ impl App {
         // Store the original goal for context passing to implementers
         self.original_goal = goal.to_string();
 
-        // Set up Unix socket for MCP server communication (unless tool_rx is already set for tests)
-        let socket_path: Option<PathBuf> = if self.tool_rx.is_some() {
-            // Test mode: tool_rx is already injected, skip socket setup
-            // Use a placeholder socket path for MCP server config (won't actually be used)
-            tracing::debug!("Test mode: skipping socket setup, tool_rx already set");
-            let placeholder = PathBuf::from("/tmp/paperboat-test-socket-placeholder");
-            self.socket_path = Some(placeholder.clone());
-            Some(placeholder)
-        } else {
-            Some(self.setup_socket().await?)
-        };
+        // Start the worker router for message routing
+        self.start_worker_router();
 
         // Run the planning phase
         let plan_to_execute = match self.run_planning_phase(goal).await {
             Ok(plan) => plan,
             Err(e) => {
-                if let Some(ref path) = socket_path {
-                    self.cleanup_socket(path);
-                }
+                self.cleanup();
                 return Err(e);
             }
         };
@@ -44,11 +34,21 @@ impl App {
         let result = self.run_execution_phase(&plan_to_execute).await;
 
         // Always clean up, even if orchestrator failed
-        if let Some(ref path) = socket_path {
-            self.cleanup_socket(path);
-        }
+        self.cleanup();
 
         result
+    }
+
+    /// Clean up resources (socket and MCP configuration).
+    fn cleanup(&mut self) {
+        // Clean up socket - take ownership to avoid borrow issues
+        if let Some(path) = self.socket_path.take() {
+            self.cleanup_socket(&path);
+        }
+        // Clean up MCP configuration
+        if let Err(e) = self.backend.cleanup_mcp() {
+            tracing::warn!("Failed to cleanup MCP: {}", e);
+        }
     }
 
     /// Run the planning phase: spawn a planner and collect its plan.
@@ -64,8 +64,9 @@ impl App {
         // First, spawn a Planner to create a plan from the goal
         tracing::info!("📝 Planning phase: spawning planner agent");
         let planner_session = match self.spawn_planner(goal).await {
-            Ok((session, prompt)) => {
+            Ok((session, model, prompt)) => {
                 planner_writer.set_session_id(session.clone());
+                planner_writer.set_model(model);
                 if let Err(e) = planner_writer.write_header_with_prompt(goal, &prompt).await {
                     tracing::warn!("Failed to write planner header: {}", e);
                 }

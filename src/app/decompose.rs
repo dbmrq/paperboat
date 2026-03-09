@@ -140,7 +140,7 @@ impl App {
             .context("Failed to create subtask planner writer")?;
 
         // 1. Spawn planner to create plan
-        let (planner_session, planner_prompt) = match self.spawn_planner(task).await {
+        let (planner_session, planner_model, planner_prompt) = match self.spawn_planner(task).await {
             Ok(result) => result,
             Err(e) => {
                 // Write error to planner log so it's not empty
@@ -164,6 +164,7 @@ impl App {
             }
         };
         planner_writer.set_session_id(planner_session.clone());
+        planner_writer.set_model(planner_model);
         if let Err(e) = planner_writer
             .write_header_with_prompt(task, &planner_prompt)
             .await

@@ -1151,6 +1151,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "crossterm 0.28.1",
+ "dirs",
  "metrics",
  "metrics-exporter-prometheus",
  "ratatui",

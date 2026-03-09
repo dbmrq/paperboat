@@ -14,7 +14,7 @@
 //! - `PAPERBOAT_SELF_IMPROVE=0` environment variable to disable
 //! - `.paperboat/self-improve.toml` config file with `enabled = false`
 
-use crate::acp::{AcpClient, AcpClientTrait};
+use crate::acp::{AcpClient, AcpClientTrait, SessionMode};
 use crate::agents::{get_prompt, get_tool_config};
 use crate::app::retry::{retry_async, RetryConfig};
 use crate::logging::{AgentWriter, LogScope};
@@ -269,8 +269,9 @@ async fn spawn_and_run_agent(
                 .await
                 .context("Failed to initialize ACP for self-improver")?;
 
+            // Self-improver needs full tool access to make changes
             let session = acp
-                .session_new(&model, mcp_servers, &cwd)
+                .session_new(&model, mcp_servers, &cwd, SessionMode::Agent)
                 .await
                 .context("Failed to create self-improver session")?;
 

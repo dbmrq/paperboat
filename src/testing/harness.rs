@@ -1,11 +1,11 @@
 //! Test harness for integration testing.
 //!
-//! This module provides a `TestHarness` that wraps the `App` with mock clients,
+//! This module provides a `TestHarness` that wraps the `App` with mock transports,
 //! intercepts tool calls, and returns scripted responses from scenarios.
 
 use super::assertions::{FinalTaskState, TestRunResult};
 use super::interceptor::MockToolInterceptor;
-use super::{MockAcpClient, MockScenario};
+use super::{MockBackend, MockScenario, MockTransport};
 use crate::app::{App, ToolMessage};
 use crate::logging::RunLogManager;
 use crate::models::ModelConfig;
@@ -125,25 +125,32 @@ impl TestHarness {
         // Create tool channel for mock tool call injection
         let (tool_tx, tool_rx) = mpsc::channel::<ToolMessage>(100);
 
-        // Create mock ACP clients from scenario, wired with tool channel
-        // The orchestrator client handles orchestrator sessions
-        // The planner client handles planner sessions
-        // The worker client handles implementer sessions
-        let mock_orchestrator = MockAcpClient::from_scenario(&self.scenario)
+        // Create mock transports from scenario, wired with tool channel
+        // The orchestrator transport handles orchestrator sessions
+        // The planner transport handles planner sessions
+        // The worker transport handles implementer sessions
+        let mock_orchestrator = MockTransport::from_scenario(&self.scenario)
             .with_tool_channel(tool_tx.clone(), self.tool_interceptor.clone());
-        let mock_planner = MockAcpClient::from_scenario(&self.scenario)
+        let mock_planner = MockTransport::from_scenario(&self.scenario)
             .with_tool_channel(tool_tx.clone(), self.tool_interceptor.clone());
-        let mock_worker = MockAcpClient::from_scenario(&self.scenario)
+        let mock_worker = MockTransport::from_scenario(&self.scenario)
             .with_tool_channel(tool_tx, self.tool_interceptor.clone());
 
-        // Track which sessions were created (we'll capture this from the mock clients)
+        // Track which sessions were created (we'll capture this from the mock transports)
         let orchestrator_sessions = self.scenario.orchestrator_sessions.clone();
         let planner_sessions = self.scenario.planner_sessions.clone();
         let implementer_sessions = self.scenario.implementer_sessions.clone();
 
-        // Create App with mock clients and injected tool channel
-        let model_config = ModelConfig::default();
-        let mut app = App::with_mock_clients_and_tool_rx(
+        // Create App with mock transports and injected tool channel
+        // Use the mock backend's available tiers for the model config
+        use crate::models::ModelTier;
+        let available_tiers = [ModelTier::Sonnet, ModelTier::Opus, ModelTier::Haiku]
+            .into_iter()
+            .collect();
+        let model_config = ModelConfig::new(available_tiers);
+        let mock_backend = Box::new(MockBackend::new());
+        let mut app = App::with_mock_transports_and_tool_rx(
+            mock_backend,
             Box::new(mock_orchestrator),
             Box::new(mock_planner),
             Box::new(mock_worker),

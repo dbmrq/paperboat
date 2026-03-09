@@ -1,6 +1,7 @@
 //! ACP (Agent Communication Protocol) error types.
 //!
-//! Errors related to communication with the auggie process via ACP.
+//! Errors related to communication with the agent backend via ACP.
+//! This module is backend-agnostic - it works with any backend (Auggie, Cursor, etc.).
 
 use std::time::Duration;
 use thiserror::Error;
@@ -9,8 +10,8 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[allow(dead_code)]
 pub enum AcpError {
-    /// Failed to establish connection with auggie.
-    #[error("Failed to connect to auggie: {message}")]
+    /// Failed to establish connection with the agent CLI.
+    #[error("Failed to connect to agent: {message}")]
     ConnectionFailed {
         /// Description of what went wrong.
         message: String,
@@ -74,18 +75,28 @@ pub enum AcpError {
 }
 
 /// Suggestions for resolving ACP errors.
+///
+/// These suggestions are backend-agnostic and can include backend-specific
+/// information via their string parameters.
 #[derive(Debug, Error)]
 #[allow(dead_code)]
 pub enum AcpSuggestion {
-    #[error("Is auggie installed and in your PATH?")]
-    InstallAuggie,
+    /// The CLI is not installed or not in PATH.
+    /// Parameter: backend name for context (e.g., "auggie", "cursor").
+    #[error("Is the {0} CLI installed and in your PATH?")]
+    InstallCli(String),
 
-    #[error("Try running 'auggie login' first to authenticate")]
-    Authenticate,
+    /// Authentication is required to use this backend.
+    /// Parameter: backend-specific auth error message from `backend.auth_error_message()`.
+    #[error("{0}")]
+    AuthRequired(String),
 
-    #[error("Check that the auggie process is running")]
-    CheckProcess,
+    /// The agent process may not be running.
+    /// Parameter: backend name for context.
+    #[error("Check that the {0} process is running")]
+    CheckProcess(String),
 
+    /// Custom backend-specific error message.
     #[error("{0}")]
     Custom(String),
 }
@@ -98,7 +109,7 @@ mod tests {
     fn test_connection_failed_display() {
         let err = AcpError::ConnectionFailed {
             message: "spawn failed".to_string(),
-            suggestion: Some(AcpSuggestion::InstallAuggie),
+            suggestion: Some(AcpSuggestion::InstallCli("auggie".to_string())),
         };
         let display = format!("{err}");
         assert!(display.contains("spawn failed"));
@@ -143,5 +154,37 @@ mod tests {
         };
         let display = format!("{err}");
         assert!(display.contains("Invalid request"));
+    }
+
+    #[test]
+    fn test_install_cli_suggestion_display() {
+        let suggestion = AcpSuggestion::InstallCli("cursor".to_string());
+        let display = format!("{suggestion}");
+        assert!(display.contains("cursor"));
+        assert!(display.contains("CLI"));
+        assert!(display.contains("PATH"));
+    }
+
+    #[test]
+    fn test_auth_required_suggestion_display() {
+        let auth_message = "Please run 'auggie login' to authenticate.";
+        let suggestion = AcpSuggestion::AuthRequired(auth_message.to_string());
+        let display = format!("{suggestion}");
+        assert_eq!(display, auth_message);
+    }
+
+    #[test]
+    fn test_check_process_suggestion_display() {
+        let suggestion = AcpSuggestion::CheckProcess("agent".to_string());
+        let display = format!("{suggestion}");
+        assert!(display.contains("agent"));
+        assert!(display.contains("process"));
+    }
+
+    #[test]
+    fn test_custom_suggestion_display() {
+        let suggestion = AcpSuggestion::Custom("Try restarting the service".to_string());
+        let display = format!("{suggestion}");
+        assert_eq!(display, "Try restarting the service");
     }
 }

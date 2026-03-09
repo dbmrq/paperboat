@@ -15,8 +15,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::config::resolver::parse_model_string;
-use crate::models::ModelId;
+use crate::models::ModelTier;
 
 /// Returns the project-level config directory path (.paperboat/agents/)
 fn project_config_dir() -> PathBuf {
@@ -44,13 +43,12 @@ fn ensure_config_dir_at(dir: &Path) -> Result<PathBuf> {
     Ok(dir.to_path_buf())
 }
 
-/// Extracts the family name from a `ModelId` (e.g., "opus4.5" -> "opus").
+/// Returns the tier name for saving to config files.
 ///
-/// Uses the `parse_model_string` function from the resolver module.
+/// With the tier-based system, this is just the tier's string representation.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-fn model_family(model_id: &ModelId) -> String {
-    let (family, _version) = parse_model_string(model_id.as_str());
-    family
+fn tier_name(tier: ModelTier) -> &'static str {
+    tier.as_str()
 }
 
 /// Saves an agent configuration to its TOML file.
@@ -78,21 +76,21 @@ fn model_family(model_id: &ModelId) -> String {
 /// model = "opus"
 /// ```
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-pub fn save_agent_config(agent_type: &str, model_id: &ModelId) -> Result<()> {
-    save_agent_config_to_dir(&project_config_dir(), agent_type, model_id)
+pub fn save_agent_config(agent_type: &str, tier: ModelTier) -> Result<()> {
+    save_agent_config_to_dir(&project_config_dir(), agent_type, tier)
 }
 
 /// Saves an agent configuration to a specified directory (for testing).
 ///
 /// This is the testable version that accepts a custom directory path.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-fn save_agent_config_to_dir(config_dir: &Path, agent_type: &str, model_id: &ModelId) -> Result<()> {
+fn save_agent_config_to_dir(config_dir: &Path, agent_type: &str, tier: ModelTier) -> Result<()> {
     let config_dir = ensure_config_dir_at(config_dir)?;
     let file_path = config_dir.join(format!("{agent_type}.toml"));
     let temp_path = config_dir.join(format!("{agent_type}.toml.tmp"));
 
-    // Get the family name for user-friendly output
-    let family = model_family(model_id);
+    // Get the tier name for user-friendly output
+    let family = tier_name(tier);
 
     // Generate the new content
     let content = generate_config_content_for_dir(&config_dir, agent_type, &family)?;
@@ -204,31 +202,31 @@ mod tests {
     use super::*;
 
     // ========================================================================
-    // model_family Tests
+    // tier_name Tests
     // ========================================================================
 
     #[test]
-    fn test_model_family_opus() {
-        let family = model_family(&ModelId::Opus4_5);
-        assert_eq!(family, "opus");
+    fn test_tier_name_opus() {
+        let name = tier_name(ModelTier::Opus);
+        assert_eq!(name, "opus");
     }
 
     #[test]
-    fn test_model_family_sonnet() {
-        let family = model_family(&ModelId::Sonnet4_5);
-        assert_eq!(family, "sonnet");
+    fn test_tier_name_sonnet() {
+        let name = tier_name(ModelTier::Sonnet);
+        assert_eq!(name, "sonnet");
     }
 
     #[test]
-    fn test_model_family_gpt() {
-        let family = model_family(&ModelId::Gpt5_1);
-        assert_eq!(family, "gpt");
+    fn test_tier_name_codex() {
+        let name = tier_name(ModelTier::Codex);
+        assert_eq!(name, "codex");
     }
 
     #[test]
-    fn test_model_family_haiku() {
-        let family = model_family(&ModelId::Haiku4_5);
-        assert_eq!(family, "haiku");
+    fn test_tier_name_haiku() {
+        let name = tier_name(ModelTier::Haiku);
+        assert_eq!(name, "haiku");
     }
 
     // ========================================================================
@@ -324,7 +322,7 @@ mod tests {
         assert!(!file_path.exists());
 
         // Save config
-        save_agent_config_to_dir(&config_dir, "orchestrator", &ModelId::Opus4_5).unwrap();
+        save_agent_config_to_dir(&config_dir, "orchestrator", ModelTier::Opus).unwrap();
 
         // File should now exist
         assert!(file_path.exists());
@@ -347,7 +345,7 @@ mod tests {
         std::fs::write(&file_path, "# Planner config\nmodel = \"haiku\"\n").unwrap();
 
         // Save new config
-        save_agent_config_to_dir(&config_dir, "planner", &ModelId::Sonnet4_5).unwrap();
+        save_agent_config_to_dir(&config_dir, "planner", ModelTier::Sonnet).unwrap();
 
         // Check updated content
         let content = std::fs::read_to_string(&file_path).unwrap();
@@ -365,7 +363,7 @@ mod tests {
         assert!(!config_dir.exists());
 
         // Save config - should create directory
-        save_agent_config_to_dir(&config_dir, "implementer", &ModelId::Haiku4_5).unwrap();
+        save_agent_config_to_dir(&config_dir, "implementer", ModelTier::Haiku).unwrap();
 
         // Directory and file should exist
         assert!(config_dir.exists());
@@ -378,7 +376,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let config_dir = temp_dir.path().join("agents");
 
-        save_agent_config_to_dir(&config_dir, "orchestrator", &ModelId::Opus4_5).unwrap();
+        save_agent_config_to_dir(&config_dir, "orchestrator", ModelTier::Opus).unwrap();
 
         let file_path = config_dir.join("orchestrator.toml");
         let content = std::fs::read_to_string(&file_path).unwrap();
@@ -409,7 +407,7 @@ mod tests {
         std::fs::write(&file_path, original).unwrap();
 
         // Update model
-        save_agent_config_to_dir(&config_dir, "orchestrator", &ModelId::Opus4_5).unwrap();
+        save_agent_config_to_dir(&config_dir, "orchestrator", ModelTier::Opus).unwrap();
 
         // Check that extra settings are preserved
         let content = std::fs::read_to_string(&file_path).unwrap();
@@ -476,21 +474,22 @@ mod tests {
     }
 
     #[test]
-    fn test_all_model_ids_produce_valid_families() {
-        // Test that all ModelId variants produce valid family names
+    fn test_all_model_tiers_produce_valid_names() {
+        // Test that all ModelTier variants produce valid tier names
         let test_cases = [
-            (ModelId::Auto, "auto"),
-            (ModelId::Opus4_5, "opus"),
-            (ModelId::Sonnet4_5, "sonnet"),
-            (ModelId::Haiku4_5, "haiku"),
-            (ModelId::Gpt5_1, "gpt"),
+            (ModelTier::Auto, "auto"),
+            (ModelTier::Opus, "opus"),
+            (ModelTier::Sonnet, "sonnet"),
+            (ModelTier::Haiku, "haiku"),
+            (ModelTier::Codex, "codex"),
+            (ModelTier::CodexMini, "codex-mini"),
         ];
 
-        for (model_id, expected_family) in test_cases {
-            let family = model_family(&model_id);
+        for (tier, expected_name) in test_cases {
+            let name = tier_name(tier);
             assert_eq!(
-                family, expected_family,
-                "ModelId::{model_id:?} should produce family '{expected_family}'"
+                name, expected_name,
+                "ModelTier::{tier:?} should produce name '{expected_name}'"
             );
         }
     }

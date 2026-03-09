@@ -22,6 +22,12 @@ Review the available tools to understand your options.
 - You cannot edit files
 - You cannot make changes to the codebase
 
+## Time Management
+- You have a session timeout. Long-running integration tests or test suites may exceed it.
+- For large test suites, run a subset of critical tests rather than the full suite.
+- If running comprehensive tests, consider noting them as "partial verification" if you can't wait for full results.
+- Signal completion promptly when you have enough evidence—don't wait for exhaustive verification if time is limited.
+
 ## Completion
 
 Signal completion when verification is done:

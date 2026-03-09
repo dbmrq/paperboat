@@ -29,6 +29,6 @@ pub mod loader;
 pub mod resolver;
 pub mod writer;
 
-pub use loader::{build_model_config, load_agent_configs};
+pub use loader::{build_model_config, get_explicit_backend_config, load_agent_configs};
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use writer::save_agent_config;

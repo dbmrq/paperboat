@@ -1,16 +1,17 @@
 #!/bin/bash
-# Live Integration Test for Villalobos Orchestrator
+# Live Integration Test for Paperboat Orchestrator
 #
 # This script runs a real integration test using actual AI agents.
-# By default it uses the debug build which automatically uses Haiku
-# (the cheapest/fastest model).
+# By default it uses the debug build which automatically uses cheap models
+# (codex-mini/grok/haiku depending on backend).
 #
 # Usage:
-#   ./tests/integration/run_live_test.sh           # Uses debug build (Haiku)
-#   ./tests/integration/run_live_test.sh release   # Uses release build (respects config)
-#   VILLALOBOS_MODEL=sonnet4.5 ./tests/integration/run_live_test.sh  # Override model
+#   ./tests/integration/run_live_test.sh                     # Uses debug build with auggie
+#   ./tests/integration/run_live_test.sh --backend cursor    # Uses Cursor backend
+#   ./tests/integration/run_live_test.sh release             # Uses release build (respects config)
+#   PAPERBOAT_MODEL=sonnet ./tests/integration/run_live_test.sh  # Override model tier
 #
-# The test creates files in /tmp/villalobos_test_* which are cleaned up on success.
+# The test creates files in /tmp/paperboat_test_* which are cleaned up on success.
 #
 # Related tests:
 #   ./tests/integration/test_process_cleanup.sh    # Tests SIGTERM handling and orphan process cleanup
@@ -20,15 +21,15 @@ set -e
 
 # Ensure child processes are killed when this script exits
 cleanup() {
-    if [ -n "$VILLALOBOS_PID" ]; then
-        kill -- -$VILLALOBOS_PID 2>/dev/null || true
+    if [ -n "$PAPERBOAT_PID" ]; then
+        kill -- -$PAPERBOAT_PID 2>/dev/null || true
     fi
 }
 trap cleanup EXIT INT TERM
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-TEST_DIR="/tmp/villalobos_test_$$"
+TEST_DIR="/tmp/paperboat_test_$$"
 PROMPT_FILE="$SCRIPT_DIR/test_prompt.txt"
 
 # Colors for output
@@ -39,21 +40,50 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║     Villalobos Live Integration Test                       ║${NC}"
+echo -e "${BLUE}║     Paperboat Live Integration Test                        ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
 echo
 
-# Determine build mode
-BUILD_MODE="${1:-debug}"
+# Parse arguments
+BUILD_MODE="debug"
+BACKEND="auggie"
+EXTRA_ARGS=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --backend)
+            BACKEND="$2"
+            shift 2
+            ;;
+        release)
+            BUILD_MODE="release"
+            shift
+            ;;
+        debug)
+            BUILD_MODE="debug"
+            shift
+            ;;
+        *)
+            echo -e "${RED}Unknown argument: $1${NC}"
+            exit 1
+            ;;
+    esac
+done
+
+# Set backend argument
+EXTRA_ARGS="--backend $BACKEND"
+
 if [ "$BUILD_MODE" = "release" ]; then
-    BINARY="$PROJECT_ROOT/target/release/villalobos"
+    BINARY="$PROJECT_ROOT/target/release/paperboat"
     echo -e "${YELLOW}Mode: RELEASE (using configured models)${NC}"
     cargo build --release --quiet
 else
-    BINARY="$PROJECT_ROOT/target/debug/villalobos"
-    echo -e "${YELLOW}Mode: DEBUG (using Haiku for all agents)${NC}"
+    BINARY="$PROJECT_ROOT/target/debug/paperboat"
+    echo -e "${YELLOW}Mode: DEBUG (using cheap models: codex-mini/grok/haiku)${NC}"
     cargo build --quiet
 fi
+
+echo -e "${BLUE}Backend: $BACKEND${NC}"
 
 # Create test directory
 mkdir -p "$TEST_DIR"
@@ -73,9 +103,9 @@ cd "$PROJECT_ROOT"
 START_TIME=$(date +%s)
 
 # Set a 60-second session timeout for tests (instead of default 30 minutes)
-export VILLALOBOS_SESSION_TIMEOUT=60
+export PAPERBOAT_SESSION_TIMEOUT=60
 
-if $BINARY "$PROMPT"; then
+if $BINARY $EXTRA_ARGS "$PROMPT"; then
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     

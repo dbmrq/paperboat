@@ -263,6 +263,27 @@ fn build_spawn_agents_response(
         )
     } else {
         let error = response.error.as_deref().unwrap_or("Unknown error");
+
+        // Detect timeout-specific failures for targeted guidance
+        let is_timeout = error.to_lowercase().contains("timed out")
+            || error.to_lowercase().contains("timeout");
+
+        let how_to_fix = if is_timeout {
+            "## How to Fix (Timeout)\n\
+             - The agent ran out of time. This often happens with long-running tests or complex tasks.\n\
+             - Consider creating smaller, more focused tasks with create_task()\n\
+             - For verification tasks, run quick sanity checks instead of full test suites\n\
+             - If the task completed meaningful work before timeout, check its notes/results\n\
+             - You can retry by spawning another agent for the same task_id"
+        } else {
+            "## How to Fix\n\
+             - Use list_tasks() to verify the task_id exists and is in 'pending' or 'in_progress' state\n\
+             - Review the error message for specific issues in agent execution\n\
+             - Try breaking the work into smaller pieces with decompose()\n\
+             - If the task requirements are unclear, create clearer subtasks with create_task()\n\
+             - If unrecoverable, call complete(success=false) with details about what failed"
+        };
+
         format!(
             "❌ Spawned {agent_count} agent(s) [{roles:?}] failed.\n\n\
              ## Why This Happened\n\
@@ -271,12 +292,7 @@ fn build_spawn_agents_response(
              - Invalid task_id reference (task does not exist or is already completed)\n\
              - Agent execution errors (compilation failures, test failures, etc.)\n\
              - Resource constraints or timeout\n\n\
-             ## How to Fix\n\
-             - Use list_tasks() to verify the task_id exists and is in 'pending' or 'in_progress' state\n\
-             - Review the error message for specific issues in agent execution\n\
-             - Try breaking the work into smaller pieces with decompose()\n\
-             - If the task requirements are unclear, create clearer subtasks with create_task()\n\
-             - If unrecoverable, call complete(success=false) with details about what failed"
+             {how_to_fix}"
         )
     }
 }

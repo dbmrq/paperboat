@@ -114,7 +114,7 @@ fn handle_global_key(state: &mut TuiState, key: &CrosstermKeyEvent) -> Option<Ev
 /// The settings overlay is modal - all keys are captured here.
 #[allow(clippy::unnecessary_wraps)] // Returns Option for consistency with other key handlers
 fn handle_settings_key(state: &mut TuiState, key: &CrosstermKeyEvent) -> Option<EventResult> {
-    let available_count = state.available_models.len();
+    let available_count = state.available_tiers.len();
 
     match key.code {
         // Esc: close settings
@@ -164,13 +164,13 @@ fn handle_settings_key(state: &mut TuiState, key: &CrosstermKeyEvent) -> Option<
             Some(EventResult::Continue)
         }
 
-        // Enter: select the highlighted model
+        // Enter: select the highlighted model tier
         CrosstermKeyCode::Enter => {
-            if let Some(model) = state
-                .available_models
+            if let Some(&tier) = state
+                .available_tiers
                 .get(state.settings_state.selected_model_index)
             {
-                state.settings_state.set_pending_model(model.id);
+                state.settings_state.set_pending_model(tier);
             }
             Some(EventResult::Continue)
         }

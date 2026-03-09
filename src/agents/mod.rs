@@ -6,9 +6,9 @@
 pub mod config;
 mod templates;
 
-#[cfg(test)]
-pub use config::IMPLEMENTER_CONFIG;
-pub use config::{get_tool_config, ORCHESTRATOR_CONFIG, PLANNER_CONFIG};
+pub use config::{
+    get_tool_config, AgentToolConfig, IMPLEMENTER_CONFIG, ORCHESTRATOR_CONFIG, PLANNER_CONFIG,
+};
 pub use templates::AgentRegistry;
 
 // Include the auto-generated roles module

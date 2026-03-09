@@ -1,80 +1,108 @@
 //! Model configuration and discovery for Villalobos
 //!
-//! This module provides types for managing AI model configuration,
-//! including model discovery via the `auggie model list` command.
+//! This module provides types for managing AI model configuration using
+//! tier-based model selection with fallback chains.
+//!
+//! # Model Tiers
+//!
+//! Instead of specific model versions (e.g., "sonnet4.5"), this module uses
+//! model tiers (e.g., "sonnet") that each backend resolves to the best
+//! available version.
+//!
+//! # Fallback Chains
+//!
+//! Model configuration supports fallback chains like CSS font-family:
+//! ```toml
+//! orchestrator_model = ["gemini", "codex", "opus"]
+//! ```
+//! The system picks the first tier available in the current backend.
 
 use anyhow::{anyhow, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::str::FromStr;
-use tokio::process::Command;
 
-/// Known model identifiers with their CLI id strings
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Model tiers representing capability classes across backends.
+///
+/// Each tier maps to the best available model version for that tier
+/// in each backend. For example, `Sonnet` maps to:
+/// - Auggie: `sonnet4.5` (or latest)
+/// - Cursor: `sonnet-4.6` (or latest)
+///
+/// Tiers are ordered roughly by capability (Opus > Sonnet > Haiku).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum ModelId {
-    /// Auto mode: allows the orchestrator to choose the model based on task complexity.
-    /// When set, the system will dynamically select an appropriate model for each task.
-    #[serde(rename = "auto")]
+pub enum ModelTier {
+    /// Auto mode: system chooses based on task complexity
     Auto,
-    #[serde(rename = "haiku4.5")]
-    Haiku4_5,
-    #[serde(rename = "opus4.5")]
-    Opus4_5,
-    #[serde(rename = "sonnet4")]
-    Sonnet4,
-    #[serde(rename = "sonnet4.5")]
+    /// Anthropic Opus - most capable, best for complex reasoning
+    Opus,
+    /// Anthropic Sonnet - balanced capability and speed
     #[default]
-    Sonnet4_5,
-    #[serde(rename = "gpt5")]
-    Gpt5,
-    #[serde(rename = "gpt5.1")]
-    Gpt5_1,
+    Sonnet,
+    /// Anthropic Haiku - fast and cheap (Auggie only)
+    Haiku,
+    /// OpenAI GPT Codex - coding-optimized
+    Codex,
+    /// OpenAI GPT Codex Mini - cheaper coding model
+    CodexMini,
+    /// Google Gemini Pro
+    Gemini,
+    /// Google Gemini Flash - faster/cheaper
+    GeminiFlash,
+    /// xAI Grok
+    Grok,
+    /// Cursor Composer - Cursor's custom model
+    Composer,
 }
 
-impl ModelId {
-    /// Returns the CLI id string for this model
+impl ModelTier {
+    /// Returns the string identifier for this tier (used in config files).
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Auto => "auto",
-            Self::Haiku4_5 => "haiku4.5",
-            Self::Opus4_5 => "opus4.5",
-            Self::Sonnet4 => "sonnet4",
-            Self::Sonnet4_5 => "sonnet4.5",
-            Self::Gpt5 => "gpt5",
-            Self::Gpt5_1 => "gpt5.1",
+            Self::Opus => "opus",
+            Self::Sonnet => "sonnet",
+            Self::Haiku => "haiku",
+            Self::Codex => "codex",
+            Self::CodexMini => "codex-mini",
+            Self::Gemini => "gemini",
+            Self::GeminiFlash => "gemini-flash",
+            Self::Grok => "grok",
+            Self::Composer => "composer",
         }
     }
 
-    /// Returns all known model IDs (including Auto)
+    /// Returns all known model tiers.
     #[allow(dead_code)]
     pub const fn all() -> &'static [Self] {
         &[
             Self::Auto,
-            Self::Haiku4_5,
-            Self::Opus4_5,
-            Self::Sonnet4,
-            Self::Sonnet4_5,
-            Self::Gpt5,
-            Self::Gpt5_1,
+            Self::Opus,
+            Self::Sonnet,
+            Self::Haiku,
+            Self::Codex,
+            Self::CodexMini,
+            Self::Gemini,
+            Self::GeminiFlash,
+            Self::Grok,
+            Self::Composer,
         ]
     }
 
-    /// Returns `true` if this is the `Auto` variant
+    /// Returns `true` if this is the `Auto` variant.
+    #[allow(dead_code)]
     pub const fn is_auto(&self) -> bool {
         matches!(self, Self::Auto)
     }
 
-    /// Resolves the "auto" model to a concrete model based on complexity.
+    /// Resolves the "auto" tier to a concrete tier based on complexity.
     ///
-    /// If this model is not "auto", returns itself unchanged.
-    /// If this model is "auto", maps the complexity to an appropriate model:
-    /// - Simple → Haiku 4.5 (fast, efficient)
-    /// - Medium → Sonnet 4.5 (balanced)
-    /// - Complex → Opus 4.5 (most capable)
-    ///
-    /// If complexity is None and model is Auto, defaults to Sonnet 4.5.
-    #[allow(clippy::missing_const_for_fn)] // Uses imported type in match, not const-compatible
+    /// - Simple → Haiku (fast, cheap)
+    /// - Medium → Sonnet (balanced)
+    /// - Complex → Opus (most capable)
+    /// - None → Sonnet (safe default)
     pub fn resolve_auto(&self, complexity: Option<crate::mcp_server::ModelComplexity>) -> Self {
         use crate::mcp_server::ModelComplexity;
 
@@ -82,93 +110,190 @@ impl ModelId {
             return *self;
         }
 
-        // Each case intentionally mapped explicitly for clarity:
-        // - Simple tasks get fast/cheap model (Haiku)
-        // - Medium tasks get balanced model (Sonnet)
-        // - Complex tasks get most capable model (Opus)
-        // - Default (None) uses Sonnet as a safe middle ground
-        #[allow(clippy::match_same_arms)]
         match complexity {
-            Some(ModelComplexity::Simple) => Self::Haiku4_5,
-            Some(ModelComplexity::Medium) => Self::Sonnet4_5,
-            Some(ModelComplexity::Complex) => Self::Opus4_5,
-            None => Self::Sonnet4_5,
+            Some(ModelComplexity::Simple) => Self::Haiku,
+            Some(ModelComplexity::Medium) => Self::Sonnet,
+            Some(ModelComplexity::Complex) => Self::Opus,
+            None => Self::Sonnet,
         }
     }
 }
 
-impl FromStr for ModelId {
+impl FromStr for ModelTier {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        match s {
+        match s.to_lowercase().as_str() {
             "auto" => Ok(Self::Auto),
-            "haiku4.5" => Ok(Self::Haiku4_5),
-            "opus4.5" => Ok(Self::Opus4_5),
-            "sonnet4" => Ok(Self::Sonnet4),
-            "sonnet4.5" => Ok(Self::Sonnet4_5),
-            "gpt5" => Ok(Self::Gpt5),
-            "gpt5.1" => Ok(Self::Gpt5_1),
-            _ => Err(anyhow!("Unknown model id: {s}")),
+            "opus" => Ok(Self::Opus),
+            "sonnet" => Ok(Self::Sonnet),
+            "haiku" => Ok(Self::Haiku),
+            "codex" => Ok(Self::Codex),
+            "codex-mini" | "codexmini" => Ok(Self::CodexMini),
+            "gemini" => Ok(Self::Gemini),
+            "gemini-flash" | "geminiflash" => Ok(Self::GeminiFlash),
+            "grok" => Ok(Self::Grok),
+            "composer" => Ok(Self::Composer),
+            _ => Err(anyhow!("Unknown model tier: {s}")),
         }
     }
 }
 
-impl std::fmt::Display for ModelId {
+impl std::fmt::Display for ModelTier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
     }
 }
 
-/// An available model discovered from the CLI
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AvailableModel {
-    /// The model identifier
-    pub id: ModelId,
-    /// Human-readable name (e.g., "Haiku 4.5")
-    pub name: String,
-    /// Description of the model's capabilities (e.g., "Fast and efficient responses")
-    pub description: String,
+/// A fallback chain of model tiers.
+///
+/// When selecting a model, the system tries each tier in order and
+/// uses the first one available in the current backend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ModelFallbackChain(pub Vec<ModelTier>);
+
+impl ModelFallbackChain {
+    /// Create a new fallback chain from a list of tiers.
+    pub fn new(tiers: Vec<ModelTier>) -> Self {
+        Self(tiers)
+    }
+
+    /// Create a single-tier chain (no fallbacks).
+    pub fn single(tier: ModelTier) -> Self {
+        Self(vec![tier])
+    }
+
+    /// Resolve this fallback chain to a concrete tier using available tiers.
+    ///
+    /// Returns the first tier in the chain that is available in the given set.
+    /// Returns an error if no tier in the chain is available.
+    pub fn resolve(&self, available: &HashSet<ModelTier>) -> Result<ModelTier> {
+        for tier in &self.0 {
+            if tier.is_auto() || available.contains(tier) {
+                return Ok(*tier);
+            }
+        }
+        Err(anyhow!(
+            "No model tier in fallback chain {:?} is available. Available tiers: {:?}",
+            self.0.iter().map(ModelTier::as_str).collect::<Vec<_>>(),
+            available.iter().map(ModelTier::as_str).collect::<Vec<_>>()
+        ))
+    }
+
+    /// Returns `true` if the chain contains only `Auto`.
+    #[allow(dead_code)]
+    pub fn is_auto(&self) -> bool {
+        self.0.len() == 1 && self.0[0].is_auto()
+    }
+
+    /// Get the first tier in the chain (for display purposes).
+    pub fn primary(&self) -> Option<ModelTier> {
+        self.0.first().copied()
+    }
 }
 
-/// Configuration for which models to use for different roles
+impl Default for ModelFallbackChain {
+    fn default() -> Self {
+        Self::single(ModelTier::default())
+    }
+}
+
+impl std::fmt::Display for ModelFallbackChain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tiers: Vec<&str> = self.0.iter().map(ModelTier::as_str).collect();
+        write!(f, "[{}]", tiers.join(", "))
+    }
+}
+
+impl FromStr for ModelFallbackChain {
+    type Err = anyhow::Error;
+
+    /// Parse a fallback chain from a string.
+    ///
+    /// Accepts either:
+    /// - Single tier: "sonnet"
+    /// - Comma-separated list: "gemini, codex, opus"
+    fn from_str(s: &str) -> Result<Self> {
+        let tiers: Result<Vec<ModelTier>> = s
+            .split(',')
+            .map(|t| ModelTier::from_str(t.trim()))
+            .collect();
+        Ok(Self(tiers?))
+    }
+}
+
+/// Configuration for which models to use for different roles.
+///
+/// Each role has a fallback chain of model tiers. At runtime, the system
+/// resolves each chain to a concrete model using the backend's available tiers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
-    /// List of available models discovered from the CLI
-    pub available_models: Vec<AvailableModel>,
-    /// Model to use for orchestration (default: `Opus4_5` - best for complex tasks)
-    pub orchestrator_model: ModelId,
-    /// Model to use for planning (default: `Sonnet4_5` - great for everyday tasks)
-    pub planner_model: ModelId,
-    /// Model to use for implementation (default: `Sonnet4_5` - great for everyday tasks)
-    pub implementer_model: ModelId,
+    /// Available model tiers from the backend
+    pub available_tiers: HashSet<ModelTier>,
+    /// Model fallback chain for orchestration (default: opus, sonnet)
+    pub orchestrator_model: ModelFallbackChain,
+    /// Model fallback chain for planning (default: sonnet, opus)
+    pub planner_model: ModelFallbackChain,
+    /// Model fallback chain for implementation (default: sonnet, codex)
+    pub implementer_model: ModelFallbackChain,
+}
+
+/// Default fallback chains for different environments.
+pub mod defaults {
+    use super::{ModelFallbackChain, ModelTier};
+
+    /// Default orchestrator chain: prefer most capable models
+    pub fn orchestrator() -> ModelFallbackChain {
+        ModelFallbackChain::new(vec![ModelTier::Opus, ModelTier::Sonnet, ModelTier::Codex])
+    }
+
+    /// Default planner chain: balanced capability
+    pub fn planner() -> ModelFallbackChain {
+        ModelFallbackChain::new(vec![ModelTier::Sonnet, ModelTier::Opus, ModelTier::Codex])
+    }
+
+    /// Default implementer chain: coding-optimized
+    pub fn implementer() -> ModelFallbackChain {
+        ModelFallbackChain::new(vec![ModelTier::Sonnet, ModelTier::Codex, ModelTier::Opus])
+    }
+
+    /// Debug/test chain: cheapest models for fast iteration
+    pub fn cheap() -> ModelFallbackChain {
+        ModelFallbackChain::new(vec![
+            ModelTier::CodexMini,
+            ModelTier::Grok,
+            ModelTier::GeminiFlash,
+            ModelTier::Haiku,
+        ])
+    }
 }
 
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
-            available_models: Vec::new(),
-            orchestrator_model: ModelId::Opus4_5,
-            planner_model: ModelId::Sonnet4_5,
-            implementer_model: ModelId::Sonnet4_5,
+            available_tiers: HashSet::new(),
+            orchestrator_model: defaults::orchestrator(),
+            planner_model: defaults::planner(),
+            implementer_model: defaults::implementer(),
         }
     }
 }
 
 impl ModelConfig {
-    /// Creates a new `ModelConfig` with sensible defaults and the given available models
-    pub const fn new(available_models: Vec<AvailableModel>) -> Self {
+    /// Creates a new `ModelConfig` with given available tiers and default chains.
+    pub fn new(available_tiers: HashSet<ModelTier>) -> Self {
         Self {
-            available_models,
-            orchestrator_model: ModelId::Opus4_5,
-            planner_model: ModelId::Sonnet4_5,
-            implementer_model: ModelId::Sonnet4_5,
+            available_tiers,
+            orchestrator_model: defaults::orchestrator(),
+            planner_model: defaults::planner(),
+            implementer_model: defaults::implementer(),
         }
     }
 
     /// Applies debug build model override.
     ///
-    /// In debug builds, all models default to Haiku for fast, cheap testing.
+    /// In debug builds, all models use the cheap fallback chain for fast testing.
     /// This can be overridden by setting the `PAPERBOAT_MODEL` environment variable.
     ///
     /// In release builds, this is a no-op (respects user configuration).
@@ -176,140 +301,127 @@ impl ModelConfig {
     pub fn apply_debug_override(&mut self) {
         // Check for environment variable override first
         if let Ok(model_str) = std::env::var("PAPERBOAT_MODEL") {
-            if let Ok(model_id) = ModelId::from_str(&model_str) {
-                tracing::info!(
-                    "🧪 PAPERBOAT_MODEL override: using {} for all agents",
-                    model_id
-                );
-                self.orchestrator_model = model_id;
-                self.planner_model = model_id;
-                self.implementer_model = model_id;
+            if let Ok(tier) = ModelTier::from_str(&model_str) {
+                let chain = ModelFallbackChain::single(tier);
+                tracing::info!("🧪 PAPERBOAT_MODEL override: using {} for all agents", tier);
+                self.orchestrator_model = chain.clone();
+                self.planner_model = chain.clone();
+                self.implementer_model = chain;
                 return;
             }
             tracing::warn!(
-                "⚠️  Invalid PAPERBOAT_MODEL '{}', falling back to debug default (haiku)",
+                "⚠️  Invalid PAPERBOAT_MODEL '{}', falling back to debug default",
                 model_str
             );
         }
 
-        // Debug build default: use Haiku for all agents (cheap and fast)
+        // Debug build default: use cheap fallback chain
+        let cheap = defaults::cheap();
         tracing::info!(
-            "🧪 Debug build: using haiku4.5 for all agents (override with PAPERBOAT_MODEL)"
+            "🧪 Debug build: using cheap models {} (override with PAPERBOAT_MODEL)",
+            cheap
         );
-        self.orchestrator_model = ModelId::Haiku4_5;
-        self.planner_model = ModelId::Haiku4_5;
-        self.implementer_model = ModelId::Haiku4_5;
+        self.orchestrator_model = cheap.clone();
+        self.planner_model = cheap.clone();
+        self.implementer_model = cheap;
     }
 
     /// Applies debug build model override (no-op in release builds).
     #[cfg(not(debug_assertions))]
-    #[allow(clippy::missing_const_for_fn)] // Paired with debug version which cannot be const
+    #[allow(clippy::missing_const_for_fn)]
     pub fn apply_debug_override(&mut self) {
         // Release build: respect user configuration
     }
 
-    /// Validates that all selected models are in the available list.
-    /// The `Auto` variant is always valid (it will be resolved at runtime).
+    /// Validates that at least one tier in each fallback chain is available.
     pub fn validate(&self) -> Result<()> {
-        let available_ids: Vec<ModelId> = self.available_models.iter().map(|m| m.id).collect();
+        // Try to resolve each chain - this will error if no tier is available
+        self.orchestrator_model
+            .resolve(&self.available_tiers)
+            .map_err(|_| anyhow!("No orchestrator model tier is available"))?;
 
-        // Auto is always valid - it will be resolved at runtime
-        if !self.orchestrator_model.is_auto() && !available_ids.contains(&self.orchestrator_model) {
-            return Err(anyhow!(
-                "Orchestrator model '{}' is not available",
-                self.orchestrator_model
-            ));
-        }
+        self.planner_model
+            .resolve(&self.available_tiers)
+            .map_err(|_| anyhow!("No planner model tier is available"))?;
 
-        if !self.planner_model.is_auto() && !available_ids.contains(&self.planner_model) {
-            return Err(anyhow!(
-                "Planner model '{}' is not available",
-                self.planner_model
-            ));
-        }
-
-        if !self.implementer_model.is_auto() && !available_ids.contains(&self.implementer_model) {
-            return Err(anyhow!(
-                "Implementer model '{}' is not available",
-                self.implementer_model
-            ));
-        }
+        self.implementer_model
+            .resolve(&self.available_tiers)
+            .map_err(|_| anyhow!("No implementer model tier is available"))?;
 
         Ok(())
     }
-}
 
-/// Discovers available models by running `auggie model list`
-///
-/// Parses output in the format:
-/// ```text
-///  - Haiku 4.5 [haiku4.5]
-///      Fast and efficient responses
-/// ```
-pub async fn discover_models() -> Result<Vec<AvailableModel>> {
-    let output = Command::new("auggie")
-        .args(["model", "list"])
-        .output()
-        .await
-        .map_err(|e| anyhow!("Failed to run 'auggie model list': {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "auggie model list failed with status {}: {}",
-            output.status,
-            stderr
-        ));
+    /// Resolve the orchestrator model chain to a concrete tier.
+    #[allow(dead_code)]
+    pub fn resolve_orchestrator(&self) -> Result<ModelTier> {
+        self.orchestrator_model.resolve(&self.available_tiers)
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_model_list(&stdout)
+    /// Resolve the planner model chain to a concrete tier.
+    #[allow(dead_code)]
+    pub fn resolve_planner(&self) -> Result<ModelTier> {
+        self.planner_model.resolve(&self.available_tiers)
+    }
+
+    /// Resolve the implementer model chain to a concrete tier.
+    #[allow(dead_code)]
+    pub fn resolve_implementer(&self) -> Result<ModelTier> {
+        self.implementer_model.resolve(&self.available_tiers)
+    }
 }
 
-/// Parses the output of `auggie model list` into `AvailableModel` structs
-fn parse_model_list(output: &str) -> Result<Vec<AvailableModel>> {
-    let mut models = Vec::new();
+/// Parses the output of `auggie model list` and returns available tiers.
+///
+/// This function parses the model list output format and extracts
+/// the tier from model IDs like "haiku4.5", "sonnet4.5", "opus4.5".
+///
+/// # Arguments
+///
+/// * `output` - The raw output from `auggie model list`
+///
+/// # Returns
+///
+/// A set of available `ModelTier`s parsed from the output.
+pub fn parse_auggie_model_list(output: &str) -> Result<HashSet<ModelTier>> {
+    let mut tiers = HashSet::new();
 
     // Pattern to match lines like " - Haiku 4.5 [haiku4.5]"
-    let model_re = Regex::new(r"^\s*-\s*(.+?)\s*\[([^\]]+)\]\s*$")?;
+    let model_re = Regex::new(r"^\s*-\s*.+?\s*\[([^\]]+)\]\s*$")?;
 
-    let lines: Vec<&str> = output.lines().collect();
-    let mut i = 0;
-
-    while i < lines.len() {
-        if let Some(caps) = model_re.captures(lines[i]) {
-            let name = caps.get(1).map_or("", |m| m.as_str()).trim().to_string();
-            let id_str = caps.get(2).map_or("", |m| m.as_str()).trim();
-
-            // Try to parse the model ID - skip unknown models
-            if let Ok(id) = ModelId::from_str(id_str) {
-                // Look for description on the next line(s)
-                let mut description = String::new();
-                let mut j = i + 1;
-                while j < lines.len() {
-                    let line = lines[j].trim();
-                    // Stop if we hit another model line or empty line
-                    if model_re.is_match(lines[j]) || line.is_empty() {
-                        break;
-                    }
-                    if !description.is_empty() {
-                        description.push(' ');
-                    }
-                    description.push_str(line);
-                    j += 1;
-                }
-
-                models.push(AvailableModel {
-                    id,
-                    name,
-                    description,
-                });
+    for line in output.lines() {
+        if let Some(caps) = model_re.captures(line) {
+            let id_str = caps.get(1).map_or("", |m| m.as_str()).trim();
+            // Extract tier from model ID (e.g., "haiku4.5" -> "haiku")
+            if let Some(tier) = extract_tier_from_auggie_id(id_str) {
+                tiers.insert(tier);
             }
         }
-        i += 1;
     }
 
-    Ok(models)
+    Ok(tiers)
+}
+
+/// Extract a ModelTier from an Auggie model ID string.
+///
+/// Examples:
+/// - "haiku4.5" -> Haiku
+/// - "sonnet4.5" -> Sonnet
+/// - "opus4.5" -> Opus
+fn extract_tier_from_auggie_id(id: &str) -> Option<ModelTier> {
+    let lower = id.to_lowercase();
+    if lower.starts_with("haiku") {
+        Some(ModelTier::Haiku)
+    } else if lower.starts_with("sonnet") {
+        Some(ModelTier::Sonnet)
+    } else if lower.starts_with("opus") {
+        Some(ModelTier::Opus)
+    } else if lower.starts_with("gpt") {
+        Some(ModelTier::Codex) // Map GPT models to Codex tier
+    } else if lower == "auto" {
+        Some(ModelTier::Auto)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -317,163 +429,157 @@ mod tests {
     use super::*;
 
     // ========================================================================
-    // ModelId Tests
+    // ModelTier Tests
     // ========================================================================
 
     #[test]
-    fn test_model_id_as_str() {
-        assert_eq!(ModelId::Auto.as_str(), "auto");
-        assert_eq!(ModelId::Haiku4_5.as_str(), "haiku4.5");
-        assert_eq!(ModelId::Opus4_5.as_str(), "opus4.5");
-        assert_eq!(ModelId::Sonnet4.as_str(), "sonnet4");
-        assert_eq!(ModelId::Sonnet4_5.as_str(), "sonnet4.5");
-        assert_eq!(ModelId::Gpt5.as_str(), "gpt5");
-        assert_eq!(ModelId::Gpt5_1.as_str(), "gpt5.1");
+    fn test_model_tier_as_str() {
+        assert_eq!(ModelTier::Auto.as_str(), "auto");
+        assert_eq!(ModelTier::Opus.as_str(), "opus");
+        assert_eq!(ModelTier::Sonnet.as_str(), "sonnet");
+        assert_eq!(ModelTier::Haiku.as_str(), "haiku");
+        assert_eq!(ModelTier::Codex.as_str(), "codex");
+        assert_eq!(ModelTier::CodexMini.as_str(), "codex-mini");
     }
 
     #[test]
-    fn test_model_id_from_str() {
-        assert_eq!(ModelId::from_str("auto").unwrap(), ModelId::Auto);
-        assert_eq!(ModelId::from_str("haiku4.5").unwrap(), ModelId::Haiku4_5);
-        assert_eq!(ModelId::from_str("opus4.5").unwrap(), ModelId::Opus4_5);
-        assert_eq!(ModelId::from_str("sonnet4").unwrap(), ModelId::Sonnet4);
-        assert_eq!(ModelId::from_str("sonnet4.5").unwrap(), ModelId::Sonnet4_5);
-        assert_eq!(ModelId::from_str("gpt5").unwrap(), ModelId::Gpt5);
-        assert_eq!(ModelId::from_str("gpt5.1").unwrap(), ModelId::Gpt5_1);
+    fn test_model_tier_from_str() {
+        assert_eq!(ModelTier::from_str("auto").unwrap(), ModelTier::Auto);
+        assert_eq!(ModelTier::from_str("opus").unwrap(), ModelTier::Opus);
+        assert_eq!(ModelTier::from_str("sonnet").unwrap(), ModelTier::Sonnet);
+        assert_eq!(ModelTier::from_str("SONNET").unwrap(), ModelTier::Sonnet); // case insensitive
+        assert_eq!(
+            ModelTier::from_str("codex-mini").unwrap(),
+            ModelTier::CodexMini
+        );
+        assert_eq!(
+            ModelTier::from_str("codexmini").unwrap(),
+            ModelTier::CodexMini
+        );
     }
 
     #[test]
-    fn test_model_id_from_str_invalid() {
-        assert!(ModelId::from_str("invalid").is_err());
-        assert!(ModelId::from_str("gpt4").is_err());
-        assert!(ModelId::from_str("").is_err());
+    fn test_model_tier_from_str_invalid() {
+        assert!(ModelTier::from_str("invalid").is_err());
+        assert!(ModelTier::from_str("").is_err());
     }
 
     #[test]
-    fn test_model_id_default() {
-        assert_eq!(ModelId::default(), ModelId::Sonnet4_5);
+    fn test_model_tier_default() {
+        assert_eq!(ModelTier::default(), ModelTier::Sonnet);
     }
 
     #[test]
-    fn test_model_id_display() {
-        assert_eq!(format!("{}", ModelId::Opus4_5), "opus4.5");
-        assert_eq!(format!("{}", ModelId::Sonnet4_5), "sonnet4.5");
+    fn test_model_tier_is_auto() {
+        assert!(ModelTier::Auto.is_auto());
+        assert!(!ModelTier::Sonnet.is_auto());
+        assert!(!ModelTier::Opus.is_auto());
     }
 
     #[test]
-    fn test_model_id_serde_roundtrip() {
-        for model_id in ModelId::all() {
-            let json = serde_json::to_string(model_id).unwrap();
-            let parsed: ModelId = serde_json::from_str(&json).unwrap();
-            assert_eq!(*model_id, parsed);
+    fn test_model_tier_resolve_auto() {
+        use crate::mcp_server::ModelComplexity;
+
+        assert_eq!(
+            ModelTier::Auto.resolve_auto(Some(ModelComplexity::Simple)),
+            ModelTier::Haiku
+        );
+        assert_eq!(
+            ModelTier::Auto.resolve_auto(Some(ModelComplexity::Medium)),
+            ModelTier::Sonnet
+        );
+        assert_eq!(
+            ModelTier::Auto.resolve_auto(Some(ModelComplexity::Complex)),
+            ModelTier::Opus
+        );
+        assert_eq!(ModelTier::Auto.resolve_auto(None), ModelTier::Sonnet);
+    }
+
+    #[test]
+    fn test_model_tier_resolve_auto_non_auto_unchanged() {
+        use crate::mcp_server::ModelComplexity;
+
+        assert_eq!(
+            ModelTier::Sonnet.resolve_auto(Some(ModelComplexity::Complex)),
+            ModelTier::Sonnet
+        );
+        assert_eq!(
+            ModelTier::Opus.resolve_auto(Some(ModelComplexity::Simple)),
+            ModelTier::Opus
+        );
+    }
+
+    #[test]
+    fn test_model_tier_serde_roundtrip() {
+        for tier in ModelTier::all() {
+            let json = serde_json::to_string(tier).unwrap();
+            let parsed: ModelTier = serde_json::from_str(&json).unwrap();
+            assert_eq!(*tier, parsed);
         }
     }
 
-    #[test]
-    fn test_model_id_serde_format() {
-        let json = serde_json::to_string(&ModelId::Sonnet4_5).unwrap();
-        assert_eq!(json, "\"sonnet4.5\"");
-
-        let json = serde_json::to_string(&ModelId::Gpt5_1).unwrap();
-        assert_eq!(json, "\"gpt5.1\"");
-    }
-
-    #[test]
-    fn test_model_id_all() {
-        let all = ModelId::all();
-        assert_eq!(all.len(), 7);
-        assert!(all.contains(&ModelId::Auto));
-        assert!(all.contains(&ModelId::Haiku4_5));
-        assert!(all.contains(&ModelId::Opus4_5));
-        assert!(all.contains(&ModelId::Sonnet4));
-        assert!(all.contains(&ModelId::Sonnet4_5));
-        assert!(all.contains(&ModelId::Gpt5));
-        assert!(all.contains(&ModelId::Gpt5_1));
-    }
-
-    #[test]
-    fn test_model_id_is_auto() {
-        assert!(ModelId::Auto.is_auto());
-        assert!(!ModelId::Haiku4_5.is_auto());
-        assert!(!ModelId::Opus4_5.is_auto());
-        assert!(!ModelId::Sonnet4.is_auto());
-        assert!(!ModelId::Sonnet4_5.is_auto());
-        assert!(!ModelId::Gpt5.is_auto());
-        assert!(!ModelId::Gpt5_1.is_auto());
-    }
-
-    #[test]
-    fn test_model_id_auto_serde() {
-        let json = serde_json::to_string(&ModelId::Auto).unwrap();
-        assert_eq!(json, "\"auto\"");
-
-        let parsed: ModelId = serde_json::from_str("\"auto\"").unwrap();
-        assert_eq!(parsed, ModelId::Auto);
-    }
-
-    #[test]
-    fn test_model_id_resolve_auto_simple() {
-        use crate::mcp_server::ModelComplexity;
-        let model = ModelId::Auto;
-        let resolved = model.resolve_auto(Some(ModelComplexity::Simple));
-        assert_eq!(resolved, ModelId::Haiku4_5);
-    }
-
-    #[test]
-    fn test_model_id_resolve_auto_medium() {
-        use crate::mcp_server::ModelComplexity;
-        let model = ModelId::Auto;
-        let resolved = model.resolve_auto(Some(ModelComplexity::Medium));
-        assert_eq!(resolved, ModelId::Sonnet4_5);
-    }
-
-    #[test]
-    fn test_model_id_resolve_auto_complex() {
-        use crate::mcp_server::ModelComplexity;
-        let model = ModelId::Auto;
-        let resolved = model.resolve_auto(Some(ModelComplexity::Complex));
-        assert_eq!(resolved, ModelId::Opus4_5);
-    }
-
-    #[test]
-    fn test_model_id_resolve_auto_none_defaults_to_medium() {
-        let model = ModelId::Auto;
-        let resolved = model.resolve_auto(None);
-        assert_eq!(resolved, ModelId::Sonnet4_5);
-    }
-
-    #[test]
-    fn test_model_id_resolve_auto_non_auto_unchanged() {
-        use crate::mcp_server::ModelComplexity;
-
-        // Non-auto models should be unchanged regardless of complexity
-        assert_eq!(
-            ModelId::Haiku4_5.resolve_auto(Some(ModelComplexity::Complex)),
-            ModelId::Haiku4_5
-        );
-        assert_eq!(
-            ModelId::Opus4_5.resolve_auto(Some(ModelComplexity::Simple)),
-            ModelId::Opus4_5
-        );
-        assert_eq!(ModelId::Sonnet4_5.resolve_auto(None), ModelId::Sonnet4_5);
-    }
-
     // ========================================================================
-    // AvailableModel Tests
+    // ModelFallbackChain Tests
     // ========================================================================
 
     #[test]
-    fn test_available_model_serde() {
-        let model = AvailableModel {
-            id: ModelId::Haiku4_5,
-            name: "Haiku 4.5".to_string(),
-            description: "Fast and efficient responses".to_string(),
-        };
+    fn test_fallback_chain_single() {
+        let chain = ModelFallbackChain::single(ModelTier::Sonnet);
+        assert_eq!(chain.0.len(), 1);
+        assert_eq!(chain.primary(), Some(ModelTier::Sonnet));
+    }
 
-        let json = serde_json::to_string(&model).unwrap();
-        let parsed: AvailableModel = serde_json::from_str(&json).unwrap();
+    #[test]
+    fn test_fallback_chain_resolve_first_available() {
+        let chain =
+            ModelFallbackChain::new(vec![ModelTier::Gemini, ModelTier::Codex, ModelTier::Opus]);
 
-        assert_eq!(model, parsed);
+        // Only Codex and Opus available
+        let available: HashSet<ModelTier> =
+            [ModelTier::Codex, ModelTier::Opus].into_iter().collect();
+
+        let resolved = chain.resolve(&available).unwrap();
+        assert_eq!(resolved, ModelTier::Codex); // First available
+    }
+
+    #[test]
+    fn test_fallback_chain_resolve_none_available() {
+        let chain = ModelFallbackChain::new(vec![ModelTier::Gemini, ModelTier::Grok]);
+
+        let available: HashSet<ModelTier> = [ModelTier::Sonnet].into_iter().collect();
+
+        assert!(chain.resolve(&available).is_err());
+    }
+
+    #[test]
+    fn test_fallback_chain_auto_always_resolves() {
+        let chain = ModelFallbackChain::single(ModelTier::Auto);
+        let available: HashSet<ModelTier> = HashSet::new(); // Empty!
+
+        // Auto should always resolve, even with no available tiers
+        let resolved = chain.resolve(&available).unwrap();
+        assert_eq!(resolved, ModelTier::Auto);
+    }
+
+    #[test]
+    fn test_fallback_chain_from_str_single() {
+        let chain: ModelFallbackChain = "sonnet".parse().unwrap();
+        assert_eq!(chain.0, vec![ModelTier::Sonnet]);
+    }
+
+    #[test]
+    fn test_fallback_chain_from_str_multiple() {
+        let chain: ModelFallbackChain = "gemini, codex, opus".parse().unwrap();
+        assert_eq!(
+            chain.0,
+            vec![ModelTier::Gemini, ModelTier::Codex, ModelTier::Opus]
+        );
+    }
+
+    #[test]
+    fn test_fallback_chain_display() {
+        let chain = ModelFallbackChain::new(vec![ModelTier::Sonnet, ModelTier::Opus]);
+        assert_eq!(format!("{}", chain), "[sonnet, opus]");
     }
 
     // ========================================================================
@@ -483,108 +589,47 @@ mod tests {
     #[test]
     fn test_model_config_default() {
         let config = ModelConfig::default();
-        assert!(config.available_models.is_empty());
-        assert_eq!(config.orchestrator_model, ModelId::Opus4_5);
-        assert_eq!(config.planner_model, ModelId::Sonnet4_5);
-        assert_eq!(config.implementer_model, ModelId::Sonnet4_5);
-    }
-
-    #[test]
-    fn test_model_config_new() {
-        let models = vec![AvailableModel {
-            id: ModelId::Sonnet4_5,
-            name: "Sonnet 4.5".to_string(),
-            description: "Great for everyday tasks".to_string(),
-        }];
-
-        let config = ModelConfig::new(models.clone());
-        assert_eq!(config.available_models, models);
-        assert_eq!(config.orchestrator_model, ModelId::Opus4_5);
+        assert!(config.available_tiers.is_empty());
     }
 
     #[test]
     fn test_model_config_validate_success() {
-        let models = vec![
-            AvailableModel {
-                id: ModelId::Opus4_5,
-                name: "Opus 4.5".to_string(),
-                description: "Best for complex tasks".to_string(),
-            },
-            AvailableModel {
-                id: ModelId::Sonnet4_5,
-                name: "Sonnet 4.5".to_string(),
-                description: "Great for everyday tasks".to_string(),
-            },
-        ];
+        let available: HashSet<ModelTier> = [ModelTier::Opus, ModelTier::Sonnet, ModelTier::Codex]
+            .into_iter()
+            .collect();
 
-        let config = ModelConfig::new(models);
+        let config = ModelConfig::new(available);
         assert!(config.validate().is_ok());
     }
 
     #[test]
-    fn test_model_config_validate_missing_orchestrator() {
-        let models = vec![AvailableModel {
-            id: ModelId::Sonnet4_5,
-            name: "Sonnet 4.5".to_string(),
-            description: "Great for everyday tasks".to_string(),
-        }];
+    fn test_model_config_validate_fails_when_no_tier_available() {
+        // Config with only Gemini available, but default chains don't include it
+        let available: HashSet<ModelTier> = [ModelTier::Gemini].into_iter().collect();
 
-        let config = ModelConfig::new(models);
-        let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("Orchestrator model"));
+        let config = ModelConfig::new(available);
+        assert!(config.validate().is_err());
     }
 
     #[test]
-    fn test_model_config_validate_missing_planner() {
-        let models = vec![AvailableModel {
-            id: ModelId::Opus4_5,
-            name: "Opus 4.5".to_string(),
-            description: "Best for complex tasks".to_string(),
-        }];
+    fn test_model_config_resolve_tiers() {
+        let available: HashSet<ModelTier> =
+            [ModelTier::Sonnet, ModelTier::Codex].into_iter().collect();
 
-        let mut config = ModelConfig::new(models);
-        config.orchestrator_model = ModelId::Opus4_5;
-        config.planner_model = ModelId::Haiku4_5; // Not in available
+        let mut config = ModelConfig::new(available);
+        config.orchestrator_model =
+            ModelFallbackChain::new(vec![ModelTier::Opus, ModelTier::Sonnet]);
 
-        let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("Planner model"));
-    }
-
-    #[test]
-    fn test_model_config_validate_auto_always_valid() {
-        // Auto should be valid even if not in available_models list
-        let models = vec![AvailableModel {
-            id: ModelId::Sonnet4_5,
-            name: "Sonnet 4.5".to_string(),
-            description: "Great for everyday tasks".to_string(),
-        }];
-
-        let mut config = ModelConfig::new(models);
-        config.orchestrator_model = ModelId::Auto;
-        config.planner_model = ModelId::Auto;
-        config.implementer_model = ModelId::Auto;
-
-        // Should pass validation because Auto is always valid
-        assert!(config.validate().is_ok());
+        // Should resolve to Sonnet (first available in chain)
+        assert_eq!(config.resolve_orchestrator().unwrap(), ModelTier::Sonnet);
     }
 
     // ========================================================================
-    // parse_model_list Tests
+    // parse_auggie_model_list Tests
     // ========================================================================
 
     #[test]
-    fn test_parse_model_list_single() {
-        let output = " - Haiku 4.5 [haiku4.5]\n      Fast and efficient responses";
-        let models = parse_model_list(output).unwrap();
-
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, ModelId::Haiku4_5);
-        assert_eq!(models[0].name, "Haiku 4.5");
-        assert_eq!(models[0].description, "Fast and efficient responses");
-    }
-
-    #[test]
-    fn test_parse_model_list_multiple() {
+    fn test_parse_auggie_model_list() {
         let output = r" - Haiku 4.5 [haiku4.5]
       Fast and efficient responses
  - Opus 4.5 [opus4.5]
@@ -592,59 +637,23 @@ mod tests {
  - Sonnet 4.5 [sonnet4.5]
       Great for everyday tasks";
 
-        let models = parse_model_list(output).unwrap();
+        let tiers = parse_auggie_model_list(output).unwrap();
 
-        assert_eq!(models.len(), 3);
-        assert_eq!(models[0].id, ModelId::Haiku4_5);
-        assert_eq!(models[1].id, ModelId::Opus4_5);
-        assert_eq!(models[2].id, ModelId::Sonnet4_5);
+        assert!(tiers.contains(&ModelTier::Haiku));
+        assert!(tiers.contains(&ModelTier::Opus));
+        assert!(tiers.contains(&ModelTier::Sonnet));
     }
 
     #[test]
-    fn test_parse_model_list_skips_unknown() {
-        let output = r" - Haiku 4.5 [haiku4.5]
-      Fast and efficient responses
- - Unknown Model [unknown-model]
-      This should be skipped
- - Sonnet 4.5 [sonnet4.5]
-      Great for everyday tasks";
-
-        let models = parse_model_list(output).unwrap();
-
-        assert_eq!(models.len(), 2);
-        assert_eq!(models[0].id, ModelId::Haiku4_5);
-        assert_eq!(models[1].id, ModelId::Sonnet4_5);
-    }
-
-    #[test]
-    fn test_parse_model_list_empty() {
-        let output = "";
-        let models = parse_model_list(output).unwrap();
-        assert!(models.is_empty());
-    }
-
-    #[test]
-    fn test_parse_model_list_multiline_description() {
-        let output = r" - Opus 4.5 [opus4.5]
-      Best for complex tasks
-      with multiple lines
-      of description";
-
-        let models = parse_model_list(output).unwrap();
-
-        assert_eq!(models.len(), 1);
-        assert_eq!(
-            models[0].description,
-            "Best for complex tasks with multiple lines of description"
-        );
+    fn test_parse_auggie_model_list_empty() {
+        let tiers = parse_auggie_model_list("").unwrap();
+        assert!(tiers.is_empty());
     }
 
     // ========================================================================
     // Debug Override Tests
     // ========================================================================
 
-    // Use a mutex to serialize tests that modify PAPERBOAT_MODEL env var
-    // Only needed for debug-mode tests
     #[cfg(debug_assertions)]
     use std::sync::Mutex;
     #[cfg(debug_assertions)]
@@ -652,56 +661,31 @@ mod tests {
 
     #[test]
     #[cfg(debug_assertions)]
-    fn test_apply_debug_override_sets_haiku() {
+    fn test_apply_debug_override_sets_cheap_chain() {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
-
-        // Clear any env var that might interfere
         std::env::remove_var("PAPERBOAT_MODEL");
 
         let mut config = ModelConfig::default();
         config.apply_debug_override();
 
-        assert_eq!(config.orchestrator_model, ModelId::Haiku4_5);
-        assert_eq!(config.planner_model, ModelId::Haiku4_5);
-        assert_eq!(config.implementer_model, ModelId::Haiku4_5);
+        // Should use cheap chain (codex-mini, grok, gemini-flash, haiku)
+        assert_eq!(
+            config.orchestrator_model.primary(),
+            Some(ModelTier::CodexMini)
+        );
     }
 
     #[test]
     #[cfg(debug_assertions)]
     fn test_apply_debug_override_respects_env_var() {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
-
-        // Set env var to override
-        std::env::set_var("PAPERBOAT_MODEL", "sonnet4.5");
+        std::env::set_var("PAPERBOAT_MODEL", "sonnet");
 
         let mut config = ModelConfig::default();
         config.apply_debug_override();
 
-        assert_eq!(config.orchestrator_model, ModelId::Sonnet4_5);
-        assert_eq!(config.planner_model, ModelId::Sonnet4_5);
-        assert_eq!(config.implementer_model, ModelId::Sonnet4_5);
+        assert_eq!(config.orchestrator_model.primary(), Some(ModelTier::Sonnet));
 
-        // Clean up
-        std::env::remove_var("PAPERBOAT_MODEL");
-    }
-
-    #[test]
-    #[cfg(debug_assertions)]
-    fn test_apply_debug_override_invalid_env_var_falls_back() {
-        let _guard = ENV_VAR_MUTEX.lock().unwrap();
-
-        // Set invalid env var
-        std::env::set_var("PAPERBOAT_MODEL", "invalid-model");
-
-        let mut config = ModelConfig::default();
-        config.apply_debug_override();
-
-        // Should fall back to Haiku
-        assert_eq!(config.orchestrator_model, ModelId::Haiku4_5);
-        assert_eq!(config.planner_model, ModelId::Haiku4_5);
-        assert_eq!(config.implementer_model, ModelId::Haiku4_5);
-
-        // Clean up
         std::env::remove_var("PAPERBOAT_MODEL");
     }
 }

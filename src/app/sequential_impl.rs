@@ -44,7 +44,7 @@ impl App {
         );
 
         // Spawn implementer
-        let (impl_session, impl_prompt) = match self.spawn_implementer(task).await {
+        let (impl_session, impl_model, impl_prompt) = match self.spawn_implementer(task).await {
             Ok(result) => result,
             Err(e) => {
                 // Write error to implementer log so it's not empty
@@ -70,6 +70,7 @@ impl App {
             }
         };
         impl_writer.set_session_id(impl_session.clone());
+        impl_writer.set_model(impl_model);
         if let Err(e) = impl_writer
             .write_header_with_prompt(task, &impl_prompt)
             .await

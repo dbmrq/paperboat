@@ -267,6 +267,92 @@ Settings are merged with this priority (highest to lowest):
 
 This allows you to set personal defaults in your home directory while allowing project-specific overrides.
 
+## Backend Configuration
+
+Paperboat supports multiple backends for agent communication. The default backend is Auggie (Augment's CLI).
+
+### Supported Backends and Transports
+
+Each backend can use one or more transport protocols:
+
+| Backend | Transport | CLI Value | Description |
+|---------|-----------|-----------|-------------|
+| **Auggie** | ACP | `auggie` or `auggie:acp` | Augment's Auggie CLI (default backend) |
+| **Cursor** | CLI | `cursor` or `cursor:cli` | Cursor's CLI mode (default for Cursor, **recommended**) |
+| **Cursor** | ACP | `cursor:acp` | Cursor's ACP mode (for future use when Cursor fixes MCP) |
+
+**Recommended Configuration:**
+- **Auggie users**: Use `auggie` (ACP is the only transport)
+- **Cursor users**: Use `cursor` or `cursor:cli` (CLI transport has better MCP tool support)
+
+### Backend:Transport Syntax
+
+The `--backend` flag supports an optional transport suffix:
+
+```bash
+# Backend with default transport
+--backend cursor        # Cursor with CLI transport (default)
+--backend auggie        # Auggie with ACP transport (default)
+
+# Explicit transport selection
+--backend cursor:cli    # Cursor with CLI transport (explicit)
+--backend cursor:acp    # Cursor with ACP transport
+--backend auggie:acp    # Auggie with ACP transport (explicit but redundant)
+```
+
+### Selecting a Backend
+
+You can select a backend using any of these methods (in priority order):
+
+1. **CLI flag**: `--backend <name[:transport]>`
+2. **Environment variable**: `PAPERBOAT_BACKEND=<name[:transport]>`
+3. **Project config**: `.paperboat/config.toml`
+4. **User config**: `~/.paperboat/config.toml`
+5. **Default**: Auggie with ACP
+
+```bash
+# Using CLI flag (highest priority)
+cargo run --release -- --backend cursor "your task"
+cargo run --release -- --backend cursor:cli "your task"
+
+# Using environment variable
+PAPERBOAT_BACKEND=cursor:cli cargo run --release -- "your task"
+```
+
+### Config File Format
+
+```toml
+# .paperboat/config.toml or ~/.paperboat/config.toml
+
+# Simple backend selection (uses default transport)
+backend = "cursor"
+
+# Or with explicit transport
+backend = "cursor:cli"
+backend = "cursor:acp"
+```
+
+### Transport Details
+
+| Transport | Protocol | Use Case |
+|-----------|----------|----------|
+| **CLI** | Streaming JSON via `agent --print` | Better MCP tool support, used by Cursor |
+| **ACP** | JSON-RPC 2.0 over stdio | Bidirectional communication, used by Auggie |
+
+**Why CLI is default for Cursor:**
+Cursor's ACP mode currently has a known issue where MCP tools are not loaded properly. The CLI transport (`agent --print`) correctly loads MCP servers from `~/.cursor/mcp.json` and properly executes MCP tools. Once Cursor fixes this issue, ACP can be used via `--backend cursor:acp`.
+
+### Authentication
+
+Each backend requires its own authentication:
+
+| Backend | Authentication Methods |
+|---------|----------------------|
+| **Auggie** | Run `auggie login` |
+| **Cursor** | Run `agent login`, or set `CURSOR_API_KEY` or `CURSOR_AUTH_TOKEN` env var |
+
+Paperboat checks authentication before starting and provides helpful error messages if not authenticated.
+
 ## Troubleshooting
 
 ### TUI Issues
@@ -306,6 +392,25 @@ Tested terminals:
 - ✅ Kitty
 - ✅ VS Code integrated terminal
 - ✅ Linux: GNOME Terminal, Konsole, xterm
+
+### MCP Tools Not Working (Cursor)
+
+**MCP tools not loading or failing:**
+If you're using Cursor and MCP tools aren't working properly:
+
+1. **Use CLI transport** (recommended):
+   ```bash
+   cargo run --release -- --backend cursor:cli "your task"
+   ```
+
+2. **Check MCP configuration**:
+   Ensure your MCP servers are configured in `~/.cursor/mcp.json`
+
+3. **Avoid ACP mode** for now:
+   Cursor's ACP mode (`cursor:acp`) has a known issue where MCP servers are not loaded. Until Cursor fixes this, use CLI transport.
+
+**Why this happens:**
+The CLI transport (`agent --print`) correctly reads MCP server configuration and loads tools. The ACP transport (`agent acp`) currently doesn't load MCP servers due to a bug in Cursor. This is a Cursor issue, not a Paperboat issue.
 
 ## Architecture Notes
 
@@ -358,16 +463,24 @@ The TUI runs on a dedicated OS thread separate from the async Tokio runtime:
 | Flag | Description |
 |------|-------------|
 | `--headless` | Disable TUI, use console output (TUI is enabled by default in interactive terminals) |
+| `--backend <name[:transport]>` | Select backend and transport (see below) |
 | `--mcp-server` | Run as MCP server (mutually exclusive with TUI mode) |
 | `--socket <path>` | Unix socket path for MCP server (with `--mcp-server`) |
 | `--validate-config` | Validate configuration files and exit (checks model aliases, file syntax) |
 | `--json-logs` | Enable JSON-formatted log output for machine parsing |
 | `--metrics` | Enable metrics collection with Prometheus exporter (requires `metrics` feature) |
 
+**Backend flag examples:**
+- `--backend auggie` - Auggie with ACP (default)
+- `--backend cursor` - Cursor with CLI (default for Cursor)
+- `--backend cursor:cli` - Cursor with CLI (explicit)
+- `--backend cursor:acp` - Cursor with ACP (for future use)
+
 ### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
+| `PAPERBOAT_BACKEND` | Backend and transport (`cursor`, `cursor:cli`, `cursor:acp`, `auggie`, `auggie:acp`) |
 | `PAPERBOAT_LOG_DIR` | Override log directory (default: `.paperboat/logs`) |
 | `PAPERBOAT_SOCKET` | Default socket path for MCP server (fallback if `--socket` not provided) |
 | `PAPERBOAT_MODEL` | Override model for all agents in debug builds |

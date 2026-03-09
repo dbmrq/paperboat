@@ -99,7 +99,7 @@ pub fn complete_schema_implementer() -> Value {
                 },
                 "add_tasks": {
                     "type": "array",
-                    "description": "Optional tasks to add to the plan. Use for work you discovered was needed but didn't do (outside scope, or should be done later). These become available for the orchestrator to execute.",
+                    "description": "Optional tasks to add to the plan. Use ONLY for genuinely NEW work you discovered that is NOT already covered by existing planned tasks. Check the 'Next Tasks' section in your context - if the work is already planned there, do NOT add it. The orchestrator will skip duplicates, so avoid suggesting tasks that overlap with the existing plan.",
                     "items": {
                         "type": "object",
                         "properties": {

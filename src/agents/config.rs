@@ -2,11 +2,13 @@
 //!
 //! This module defines which tools each agent type has access to, for both:
 //! - **MCP tools**: Our orchestration tools (`spawn_agents`, complete, `create_task`, etc.)
-//! - **Auggie tools**: The agent's built-in tools (str-replace-editor, save-file, etc.)
+//! - **Backend tools**: The agent's built-in tools (str-replace-editor, save-file, etc.)
 //!
 //! Tool access is controlled via:
 //! - `PAPERBOAT_AGENT_TYPE` env var: Controls which MCP tools are exposed
-//! - `PAPERBOAT_REMOVED_TOOLS` env var: Controls which auggie tools are removed
+//! - `PAPERBOAT_REMOVED_TOOLS` env var: Controls which backend tools are removed
+//!
+//! Note: The `removed_auggie_tools` field name is historical but applies to all backends.
 
 /// All auggie tools that can be filtered (used in tests).
 /// These are the tools provided by the Augment platform.
@@ -44,7 +46,8 @@ const ALL_AUGGIE_TOOLS: &[&str] = &[
 pub struct AgentToolConfig {
     /// MCP tools this agent can use.
     pub mcp_tools: &'static [&'static str],
-    /// Auggie tools to REMOVE from this agent (tools it cannot use).
+    /// Backend tools to REMOVE from this agent (tools it cannot use).
+    /// Named `removed_auggie_tools` for historical reasons, but applies to all backends.
     pub removed_auggie_tools: &'static [&'static str],
 }
 

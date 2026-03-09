@@ -27,7 +27,11 @@ pub fn create_spawn_error(spec: &AgentSpec, error: &anyhow::Error) -> AgentResul
 
     // Analyze the error and provide actionable guidance
     let error_str = format!("{error:#}").to_lowercase();
-    let recovery_hint = if error_str.contains("mcp server startup") {
+    let recovery_hint = if error_str.contains("not found") && error_str.contains("task") {
+        "The task_id you provided does not exist. This often happens when using a fabricated ID \
+         instead of actual task IDs from the plan. Call list_tasks() to see available task IDs \
+         (e.g., 'task001', 'task002'), then retry spawn_agents with the correct IDs."
+    } else if error_str.contains("mcp server startup") {
         "This may be a transient MCP server startup issue. The system attempted automatic retries. \
          Consider: (1) waiting a moment and retrying with spawn_agents, \
          (2) checking system resources, or (3) reducing concurrent agent count."

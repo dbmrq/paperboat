@@ -30,7 +30,7 @@ use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::models::{AvailableModel, ModelId};
+use crate::models::ModelTier;
 use crate::tui::TuiState;
 
 // ============================================================================
@@ -92,14 +92,14 @@ impl SelectedAgentType {
 pub struct SettingsState {
     /// Currently selected agent type (tab)
     pub selected_agent_type: SelectedAgentType,
-    /// Currently selected model index within the available models list
+    /// Currently selected model index within the available tiers list
     pub selected_model_index: usize,
     /// Pending orchestrator model change (not yet applied)
-    pub pending_orchestrator: Option<ModelId>,
+    pub pending_orchestrator: Option<ModelTier>,
     /// Pending planner model change (not yet applied)
-    pub pending_planner: Option<ModelId>,
+    pub pending_planner: Option<ModelTier>,
     /// Pending implementer model change (not yet applied)
-    pub pending_implementer: Option<ModelId>,
+    pub pending_implementer: Option<ModelTier>,
 }
 
 impl SettingsState {
@@ -138,27 +138,29 @@ impl SettingsState {
         self.selected_model_index = 0; // Reset model selection when changing tabs
     }
 
-    /// Gets the current model for the selected agent type.
-    pub fn get_current_model(&self, state: &TuiState) -> ModelId {
+    /// Gets the current model tier for the selected agent type.
+    ///
+    /// Returns the pending tier if set, otherwise the primary tier from config.
+    pub fn get_current_model(&self, state: &TuiState) -> Option<ModelTier> {
         match self.selected_agent_type {
             SelectedAgentType::Orchestrator => self
                 .pending_orchestrator
-                .unwrap_or(state.model_config.orchestrator_model),
+                .or_else(|| state.model_config.orchestrator_model.primary()),
             SelectedAgentType::Planner => self
                 .pending_planner
-                .unwrap_or(state.model_config.planner_model),
+                .or_else(|| state.model_config.planner_model.primary()),
             SelectedAgentType::Implementer => self
                 .pending_implementer
-                .unwrap_or(state.model_config.implementer_model),
+                .or_else(|| state.model_config.implementer_model.primary()),
         }
     }
 
-    /// Sets the pending model for the selected agent type.
-    pub const fn set_pending_model(&mut self, model_id: ModelId) {
+    /// Sets the pending model tier for the selected agent type.
+    pub const fn set_pending_model(&mut self, tier: ModelTier) {
         match self.selected_agent_type {
-            SelectedAgentType::Orchestrator => self.pending_orchestrator = Some(model_id),
-            SelectedAgentType::Planner => self.pending_planner = Some(model_id),
-            SelectedAgentType::Implementer => self.pending_implementer = Some(model_id),
+            SelectedAgentType::Orchestrator => self.pending_orchestrator = Some(tier),
+            SelectedAgentType::Planner => self.pending_planner = Some(tier),
+            SelectedAgentType::Implementer => self.pending_implementer = Some(tier),
         }
     }
 
@@ -231,9 +233,9 @@ fn build_settings_content(state: &TuiState) -> Vec<Line<'static>> {
     lines.push(build_tab_bar(settings.selected_agent_type));
     lines.push(Line::from(""));
 
-    // Get current model for the selected agent type
-    let current_model = settings.get_current_model(state);
-    let original_model = get_original_model(state, settings.selected_agent_type);
+    // Get current model tier for the selected agent type
+    let current_tier = settings.get_current_model(state);
+    let original_tier = get_original_model(state, settings.selected_agent_type);
 
     // Section header
     lines.push(Line::from(Span::styled(
@@ -244,32 +246,19 @@ fn build_settings_content(state: &TuiState) -> Vec<Line<'static>> {
     )));
     lines.push(Line::from(""));
 
-    // Available models list
-    let available_models = &state.available_models;
-    if available_models.is_empty() {
+    // Available model tiers list
+    let available_tiers = &state.available_tiers;
+    if available_tiers.is_empty() {
         lines.push(Line::from(Span::styled(
             "  No models available",
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        for (idx, model) in available_models.iter().enumerate() {
+        for (idx, &tier) in available_tiers.iter().enumerate() {
             let is_selected = idx == settings.selected_model_index;
-            let is_current = model.id == current_model;
-            let is_original = model.id == original_model;
-            lines.push(build_model_line(
-                model,
-                is_selected,
-                is_current,
-                is_original,
-            ));
-
-            // Show description on a separate line if the model is selected
-            if is_selected && !model.description.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    format!("     {}", model.description),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
+            let is_current = current_tier == Some(tier);
+            let is_original = original_tier == Some(tier);
+            lines.push(build_model_line(tier, is_selected, is_current, is_original));
         }
     }
 
@@ -326,9 +315,9 @@ fn build_tab_bar(selected: SelectedAgentType) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Builds a single model line with selection and status indicators.
+/// Builds a single model tier line with selection and status indicators.
 fn build_model_line(
-    model: &AvailableModel,
+    tier: ModelTier,
     is_selected: bool,
     is_current: bool,
     is_original: bool,
@@ -354,7 +343,13 @@ fn build_model_line(
         Style::default().fg(radio_color),
     ));
 
-    // Model name
+    // Tier name (capitalize first letter)
+    let name = tier.as_str();
+    let display_name = name
+        .chars()
+        .enumerate()
+        .map(|(i, c)| if i == 0 { c.to_ascii_uppercase() } else { c })
+        .collect::<String>();
     let name_style = if is_selected {
         Style::default()
             .fg(Color::White)
@@ -364,7 +359,7 @@ fn build_model_line(
     } else {
         Style::default().fg(Color::White)
     };
-    spans.push(Span::styled(model.name.clone(), name_style));
+    spans.push(Span::styled(display_name, name_style));
 
     // Pending change indicator
     if is_current && !is_original {
@@ -379,12 +374,12 @@ fn build_model_line(
     Line::from(spans)
 }
 
-/// Gets the original (non-pending) model for an agent type.
-const fn get_original_model(state: &TuiState, agent_type: SelectedAgentType) -> ModelId {
+/// Gets the original (non-pending) model tier for an agent type.
+fn get_original_model(state: &TuiState, agent_type: SelectedAgentType) -> Option<ModelTier> {
     match agent_type {
-        SelectedAgentType::Orchestrator => state.model_config.orchestrator_model,
-        SelectedAgentType::Planner => state.model_config.planner_model,
-        SelectedAgentType::Implementer => state.model_config.implementer_model,
+        SelectedAgentType::Orchestrator => state.model_config.orchestrator_model.primary(),
+        SelectedAgentType::Planner => state.model_config.planner_model.primary(),
+        SelectedAgentType::Implementer => state.model_config.implementer_model.primary(),
     }
 }
 
@@ -558,18 +553,18 @@ mod tests {
 
         // Test orchestrator
         state.selected_agent_type = SelectedAgentType::Orchestrator;
-        state.set_pending_model(ModelId::Sonnet4_5);
-        assert_eq!(state.pending_orchestrator, Some(ModelId::Sonnet4_5));
+        state.set_pending_model(ModelTier::Sonnet);
+        assert_eq!(state.pending_orchestrator, Some(ModelTier::Sonnet));
 
         // Test planner
         state.selected_agent_type = SelectedAgentType::Planner;
-        state.set_pending_model(ModelId::Haiku4_5);
-        assert_eq!(state.pending_planner, Some(ModelId::Haiku4_5));
+        state.set_pending_model(ModelTier::Haiku);
+        assert_eq!(state.pending_planner, Some(ModelTier::Haiku));
 
         // Test implementer
         state.selected_agent_type = SelectedAgentType::Implementer;
-        state.set_pending_model(ModelId::Opus4_5);
-        assert_eq!(state.pending_implementer, Some(ModelId::Opus4_5));
+        state.set_pending_model(ModelTier::Opus);
+        assert_eq!(state.pending_implementer, Some(ModelTier::Opus));
     }
 
     #[test]
@@ -577,22 +572,22 @@ mod tests {
         let mut state = SettingsState::new();
         assert!(!state.has_pending_changes());
 
-        state.pending_orchestrator = Some(ModelId::Sonnet4_5);
+        state.pending_orchestrator = Some(ModelTier::Sonnet);
         assert!(state.has_pending_changes());
 
         state.clear_pending();
         assert!(!state.has_pending_changes());
 
-        state.pending_planner = Some(ModelId::Haiku4_5);
+        state.pending_planner = Some(ModelTier::Haiku);
         assert!(state.has_pending_changes());
     }
 
     #[test]
     fn test_settings_state_clear_pending() {
         let mut state = SettingsState::new();
-        state.pending_orchestrator = Some(ModelId::Sonnet4_5);
-        state.pending_planner = Some(ModelId::Haiku4_5);
-        state.pending_implementer = Some(ModelId::Opus4_5);
+        state.pending_orchestrator = Some(ModelTier::Sonnet);
+        state.pending_planner = Some(ModelTier::Haiku);
+        state.pending_implementer = Some(ModelTier::Opus);
 
         state.clear_pending();
 
@@ -607,67 +602,88 @@ mod tests {
 
     #[test]
     fn test_get_current_model_returns_config_when_no_pending() {
-        use crate::models::ModelConfig;
+        use crate::models::{ModelConfig, ModelFallbackChain};
 
         let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelId::Opus4_5;
-        config.planner_model = ModelId::Sonnet4_5;
-        config.implementer_model = ModelId::Haiku4_5;
+        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Opus);
+        config.planner_model = ModelFallbackChain::single(ModelTier::Sonnet);
+        config.implementer_model = ModelFallbackChain::single(ModelTier::Haiku);
 
         let tui_state = TuiState::with_model_config(config);
 
         // Test orchestrator
         let mut settings = SettingsState::new();
         settings.selected_agent_type = SelectedAgentType::Orchestrator;
-        assert_eq!(settings.get_current_model(&tui_state), ModelId::Opus4_5);
+        assert_eq!(
+            settings.get_current_model(&tui_state),
+            Some(ModelTier::Opus)
+        );
 
         // Test planner
         settings.selected_agent_type = SelectedAgentType::Planner;
-        assert_eq!(settings.get_current_model(&tui_state), ModelId::Sonnet4_5);
+        assert_eq!(
+            settings.get_current_model(&tui_state),
+            Some(ModelTier::Sonnet)
+        );
 
         // Test implementer
         settings.selected_agent_type = SelectedAgentType::Implementer;
-        assert_eq!(settings.get_current_model(&tui_state), ModelId::Haiku4_5);
+        assert_eq!(
+            settings.get_current_model(&tui_state),
+            Some(ModelTier::Haiku)
+        );
     }
 
     #[test]
     fn test_get_current_model_returns_pending_when_set() {
-        use crate::models::ModelConfig;
+        use crate::models::{ModelConfig, ModelFallbackChain};
 
         let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelId::Haiku4_5;
+        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Haiku);
         let tui_state = TuiState::with_model_config(config);
 
         let mut settings = SettingsState::new();
         settings.selected_agent_type = SelectedAgentType::Orchestrator;
-        settings.pending_orchestrator = Some(ModelId::Opus4_5);
+        settings.pending_orchestrator = Some(ModelTier::Opus);
 
         // Should return pending, not config
-        assert_eq!(settings.get_current_model(&tui_state), ModelId::Opus4_5);
+        assert_eq!(
+            settings.get_current_model(&tui_state),
+            Some(ModelTier::Opus)
+        );
     }
 
     #[test]
     fn test_get_current_model_pending_per_agent_type() {
-        use crate::models::ModelConfig;
+        use crate::models::{ModelConfig, ModelFallbackChain};
 
         let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelId::Haiku4_5;
-        config.planner_model = ModelId::Haiku4_5;
-        config.implementer_model = ModelId::Haiku4_5;
+        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Haiku);
+        config.planner_model = ModelFallbackChain::single(ModelTier::Haiku);
+        config.implementer_model = ModelFallbackChain::single(ModelTier::Haiku);
         let tui_state = TuiState::with_model_config(config);
 
         let mut settings = SettingsState::new();
-        settings.pending_orchestrator = Some(ModelId::Opus4_5);
-        settings.pending_planner = Some(ModelId::Sonnet4_5);
+        settings.pending_orchestrator = Some(ModelTier::Opus);
+        settings.pending_planner = Some(ModelTier::Sonnet);
         // implementer has no pending
 
         settings.selected_agent_type = SelectedAgentType::Orchestrator;
-        assert_eq!(settings.get_current_model(&tui_state), ModelId::Opus4_5);
+        assert_eq!(
+            settings.get_current_model(&tui_state),
+            Some(ModelTier::Opus)
+        );
 
         settings.selected_agent_type = SelectedAgentType::Planner;
-        assert_eq!(settings.get_current_model(&tui_state), ModelId::Sonnet4_5);
+        assert_eq!(
+            settings.get_current_model(&tui_state),
+            Some(ModelTier::Sonnet)
+        );
 
         settings.selected_agent_type = SelectedAgentType::Implementer;
-        assert_eq!(settings.get_current_model(&tui_state), ModelId::Haiku4_5); // From config
+        assert_eq!(
+            settings.get_current_model(&tui_state),
+            Some(ModelTier::Haiku)
+        ); // From config
     }
 }

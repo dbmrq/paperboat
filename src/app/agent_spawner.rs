@@ -23,7 +23,8 @@ use super::spawn_config::{build_custom_prompt, validate_no_unreplaced_placeholde
 use super::tool_filtering::{build_mcp_server_config, compute_removed_tools};
 use super::types::truncate_for_log;
 use super::App;
-use crate::acp::AcpClientTrait;
+use crate::acp::{AcpClientTrait, SessionMode};
+use crate::backend::transport::{SessionConfig, SessionInfo};
 use crate::mcp_server::{AgentSpec, ResolvedAgentSpec, WaitMode};
 use crate::tasks::TaskStatus;
 use anyhow::{Context, Result};
@@ -34,7 +35,7 @@ use tokio::sync::oneshot;
 
 /// Spawn and initialize an ACP client with retry logic.
 ///
-/// This function handles the common pattern of spawning auggie, initializing
+/// This function handles the common pattern of spawning an ACP client, initializing
 /// the connection, and creating a session - all with automatic retry for
 /// transient errors like MCP server startup failures.
 async fn spawn_acp_with_retry(
@@ -54,23 +55,23 @@ async fn spawn_acp_with_retry(
         let agent_id = agent_id.to_string();
 
         async move {
-            // Create a fresh auggie instance
+            // Create a fresh ACP client instance
             let mut agent_acp = crate::acp::AcpClient::spawn_with_timeout(
                 None, // Use default cache
                 request_timeout,
             )
             .await
-            .with_context(|| format!("Failed to spawn auggie for agent_id={agent_id}"))?;
+            .with_context(|| format!("Failed to spawn ACP client for agent_id={agent_id}"))?;
 
             // Initialize the ACP connection
             agent_acp
                 .initialize()
                 .await
-                .with_context(|| format!("Failed to initialize auggie for agent_id={agent_id}"))?;
+                .with_context(|| format!("Failed to initialize ACP for agent_id={agent_id}"))?;
 
-            // Create the session with MCP servers
+            // Create the session with MCP servers (Agent mode for full tool access)
             let response = agent_acp
-                .session_new(&model, mcp_servers, &cwd)
+                .session_new(&model, mcp_servers, &cwd, SessionMode::Agent)
                 .await
                 .with_context(|| format!("Failed to create ACP session for agent_id={agent_id}"))?;
 
@@ -82,9 +83,9 @@ async fn spawn_acp_with_retry(
 
 impl App {
     /// Spawn an implementer agent (convenience wrapper for `spawn_agent_with_resolved_spec`).
-    /// Returns (`session_id`, prompt) so the prompt can be logged.
+    /// Returns (`session_id`, `model`, `prompt`) so the model and prompt can be logged.
     #[tracing::instrument(skip(self), fields(agent_type = "implementer"))]
-    pub(crate) async fn spawn_implementer(&mut self, task: &str) -> Result<(String, String)> {
+    pub(crate) async fn spawn_implementer(&mut self, task: &str) -> Result<(String, String, String)> {
         let spec = ResolvedAgentSpec {
             role: "implementer".to_string(),
             task: task.to_string(),
@@ -103,12 +104,12 @@ impl App {
     /// - Template roles (implementer, verifier, explorer): uses registry templates
     /// - Unknown roles: falls back to implementer behavior with warning
     ///
-    /// Returns (`session_id`, prompt) so the prompt can be logged.
+    /// Returns (`session_id`, `model`, `prompt`) so the model and prompt can be logged.
     #[tracing::instrument(skip(self, spec), fields(agent_type = %spec.role, task_id = ?spec.task_id, session_id))]
     pub(crate) async fn spawn_agent_with_resolved_spec(
         &mut self,
         spec: &ResolvedAgentSpec,
-    ) -> Result<(String, String)> {
+    ) -> Result<(String, String, String)> {
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
         // Get the path to the current binary and socket
@@ -133,24 +134,12 @@ impl App {
             build_mcp_server_config(&binary_path, &socket_path, &spec.role, &removed_tools, None);
         let mcp_servers = vec![mcp_server];
 
-        // Resolve auto model to concrete model based on complexity
-        let resolved_model = self
-            .model_config
-            .implementer_model
-            .resolve_auto(spec.model_complexity);
-
-        if self.model_config.implementer_model.is_auto() {
-            tracing::info!(
-                "🤖 Auto model resolved: {:?} → {} for {}",
-                spec.model_complexity,
-                resolved_model,
-                spec.role
-            );
-        }
+        // Resolve model: fallback chain -> tier -> auto resolution -> backend model string
+        let resolved_model_str = self.resolve_implementer_model(spec.model_complexity)?;
 
         // Create session with retry logic for transient MCP server startup errors
         let response = self
-            .create_worker_session_with_retry(resolved_model.as_str(), mcp_servers, &cwd)
+            .create_worker_session_with_retry(&resolved_model_str, mcp_servers, &cwd)
             .await?;
 
         // Record session_id in the current span for tracing correlation
@@ -158,10 +147,10 @@ impl App {
         tracing::debug!("🔨 {} prompt:\n{}", spec.role, prompt);
 
         self.acp_worker
-            .session_prompt(&response.session_id, &prompt)
+            .send_prompt(&response.session_id, &prompt)
             .await?;
 
-        Ok((response.session_id, prompt))
+        Ok((response.session_id, resolved_model_str, prompt))
     }
 
     /// Create a worker session with retry logic.
@@ -173,7 +162,7 @@ impl App {
         model: &str,
         mcp_servers: Vec<Value>,
         cwd: &str,
-    ) -> Result<crate::acp::SessionNewResponse> {
+    ) -> Result<SessionInfo> {
         use super::retry::is_transient_error;
 
         let retry_config = RetryConfig::from_env();
@@ -183,15 +172,16 @@ impl App {
         loop {
             attempt += 1;
 
-            match self
-                .acp_worker
-                .session_new(model, mcp_servers.clone(), cwd)
-                .await
-            {
+            // Create session config with Agent mode for full tool access
+            let config = SessionConfig::new(model, cwd)
+                .with_mcp_servers(mcp_servers.clone())
+                .with_mode(SessionMode::Agent);
+
+            match self.acp_worker.create_session(config).await {
                 Ok(response) => {
                     if attempt > 1 {
                         tracing::info!(
-                            "🔄 Worker session_new succeeded on attempt {}/{}",
+                            "🔄 Worker create_session succeeded on attempt {}/{}",
                             attempt,
                             retry_config.max_retries + 1
                         );
@@ -204,7 +194,7 @@ impl App {
 
                     if can_retry {
                         tracing::warn!(
-                            "⚠️ Worker session_new failed (attempt {}/{}): {}. Retrying in {:?}...",
+                            "⚠️ Worker create_session failed (attempt {}/{}): {}. Retrying in {:?}...",
                             attempt,
                             retry_config.max_retries + 1,
                             e,
@@ -224,10 +214,10 @@ impl App {
                             "non-transient error"
                         };
                         tracing::error!(
-                            "❌ Worker session_new failed after {attempt} attempt(s) ({reason}): {e:#}",
+                            "❌ Worker create_session failed after {attempt} attempt(s) ({reason}): {e:#}",
                         );
                         return Err(e).context(format!(
-                            "Worker session_new failed after {attempt} attempt(s)"
+                            "Worker create_session failed after {attempt} attempt(s)"
                         ));
                     }
                 }
@@ -240,8 +230,8 @@ impl App {
     /// This is used for concurrent agent execution where each agent needs
     /// its own socket to receive tool call responses.
     ///
-    /// Returns (`session_id`, prompt, `AgentSocketHandle`, `AcpClient`) so the caller can:
-    /// - Log the prompt
+    /// Returns (`session_id`, `model`, prompt, `AgentSocketHandle`, `AcpClient`) so the caller can:
+    /// - Log the model and prompt
     /// - Receive tool calls on the agent's dedicated socket
     /// - Clean up the socket when done
     /// - Keep the `AcpClient` alive until the agent completes
@@ -250,7 +240,7 @@ impl App {
         &mut self,
         spec: &ResolvedAgentSpec,
         context: &str,
-    ) -> Result<(String, String, AgentSocketHandle, crate::acp::AcpClient)> {
+    ) -> Result<(String, String, String, AgentSocketHandle, crate::acp::AcpClient)> {
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
         // Get the path to the current binary
@@ -306,26 +296,13 @@ impl App {
             socket_path_str
         );
 
-        // Resolve auto model to concrete model based on complexity
-        let resolved_model = self
-            .model_config
-            .implementer_model
-            .resolve_auto(spec.model_complexity);
-
-        if self.model_config.implementer_model.is_auto() {
-            tracing::info!(
-                "🤖 Auto model resolved: {:?} → {} for {} (agent_id={})",
-                spec.model_complexity,
-                resolved_model,
-                spec.role,
-                &agent_id[..8]
-            );
-        }
+        // Resolve model: fallback chain -> tier -> auto resolution -> backend model string
+        let resolved_model_str = self.resolve_implementer_model(spec.model_complexity)?;
 
         // Spawn ACP client with retry logic for transient MCP server startup errors
         let (mut agent_acp, response) = spawn_acp_with_retry(
             self.timeout_config.request_timeout,
-            resolved_model.as_str(),
+            &resolved_model_str,
             mcp_servers,
             &cwd,
             &agent_id[..8],
@@ -355,6 +332,7 @@ impl App {
         // Return the auggie instance so it stays alive while the agent runs
         Ok((
             response.session_id,
+            resolved_model_str,
             prompt.clone(),
             socket_handle,
             agent_acp,
@@ -579,7 +557,7 @@ impl App {
         let spawn_result = self.spawn_agent_with_own_socket(&resolved, context).await;
 
         // If spawn failed, log the error to the implementer log file before propagating
-        let (session_id, agent_prompt, socket_handle, mut agent_acp) = match spawn_result {
+        let (session_id, model, agent_prompt, socket_handle, mut agent_acp) = match spawn_result {
             Ok(result) => result,
             Err(e) => {
                 // Mark task as failed if spawn failed
@@ -599,6 +577,7 @@ impl App {
             }
         };
         impl_writer.set_session_id(session_id.clone());
+        impl_writer.set_model(model);
         // Record session_id in the current span for tracing correlation
         tracing::Span::current().record("session_id", &session_id);
         if let Err(e) = impl_writer
@@ -695,5 +674,38 @@ impl App {
             WaitMode::Any => wait_for_any(receivers, spawn_errors).await,
             WaitMode::All => wait_for_all(receivers, spawn_errors).await,
         }
+    }
+
+    /// Resolve the implementer model configuration to an actual model string.
+    ///
+    /// This method:
+    /// 1. Resolves the fallback chain to a tier using available_tiers
+    /// 2. If the tier is Auto, resolves it based on complexity
+    /// 3. Uses the backend to convert the tier to the actual model ID string
+    fn resolve_implementer_model(
+        &self,
+        complexity: Option<crate::mcp_server::ModelComplexity>,
+    ) -> Result<String> {
+        // Step 1: Resolve fallback chain to a tier
+        let tier = self
+            .model_config
+            .implementer_model
+            .resolve(&self.model_config.available_tiers)?;
+
+        // Step 2: If Auto, resolve based on complexity
+        let resolved_tier = if tier.is_auto() {
+            let concrete = tier.resolve_auto(complexity);
+            tracing::info!(
+                "🤖 Auto model resolved: {:?} → {} for implementer",
+                complexity,
+                concrete
+            );
+            concrete
+        } else {
+            tier
+        };
+
+        // Step 3: Convert tier to backend-specific model string
+        self.backend.resolve_tier(resolved_tier)
     }
 }

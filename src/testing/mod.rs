@@ -10,6 +10,8 @@ mod builders;
 mod harness;
 mod interceptor;
 mod mock_acp;
+mod mock_backend;
+mod mock_transport;
 mod scenario;
 mod types;
 
@@ -44,6 +46,12 @@ pub use builders::{MockSessionBuilder, MockToolResponseBuilder};
 
 // From mock_acp module
 pub use mock_acp::MockAcpClient;
+
+// From mock_backend module
+pub use mock_backend::{MockBackend, MockBackendBuilder};
+
+// From mock_transport module
+pub use mock_transport::MockTransport;
 
 // From assertions module
 pub use assertions::{

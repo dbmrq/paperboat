@@ -50,25 +50,30 @@ pub mod types;
 
 pub use types::ToolMessage;
 
-use crate::acp::{AcpClient, AcpClientTrait};
 use crate::agents::{AgentRegistry, ORCHESTRATOR_CONFIG, PLANNER_CONFIG};
+use crate::backend::transport::{AgentTransport, AgentType, TransportKind};
+use crate::backend::{AgentCacheType, Backend, TransportConfig};
 use crate::error::TimeoutConfig;
 use crate::logging::{LogScope, RunLogManager};
 use crate::models::ModelConfig;
 use crate::tasks::TaskManager;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use router::SessionRouter;
-use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use types::{ORCHESTRATOR_CACHE_DIR, PLANNER_CACHE_DIR};
 
 /// The main application struct that orchestrates multi-agent workflows.
 pub struct App {
-    pub(crate) acp_orchestrator: Box<dyn AcpClientTrait + Send>,
-    pub(crate) acp_planner: Box<dyn AcpClientTrait + Send>,
-    pub(crate) acp_worker: Box<dyn AcpClientTrait + Send>,
+    /// The backend provider for agent communication (Auggie, Cursor, etc.)
+    #[allow(dead_code)]
+    backend: Box<dyn Backend>,
+    /// Transport for the orchestrator agent (coordinates task execution)
+    pub(crate) acp_orchestrator: Box<dyn AgentTransport>,
+    /// Transport for the planner agent (decomposes tasks into subtasks)
+    pub(crate) acp_planner: Box<dyn AgentTransport>,
+    /// Transport for worker agents (implements tasks)
+    pub(crate) acp_worker: Box<dyn AgentTransport>,
     pub(crate) socket_path: Option<PathBuf>,
     /// Channel for receiving tool messages from socket handlers
     pub(crate) tool_rx: Option<mpsc::Receiver<ToolMessage>>,
@@ -100,142 +105,94 @@ pub struct App {
 }
 
 impl App {
-    /// Set up the orchestrator cache directory with the required configuration.
-    /// This ensures the orchestrator agent has editing tools removed.
-    fn setup_orchestrator_cache() -> Result<String> {
-        // First, check if auggie is authenticated
-        let main_augment_dir = shellexpand::tilde("~/.augment").to_string();
-        let main_session = std::path::Path::new(&main_augment_dir).join("session.json");
-
-        if !main_session.exists() {
-            anyhow::bail!(
-                "Augment CLI is not authenticated.\n\n\
-                Please run 'auggie login' first to authenticate, then try again."
-            );
-        }
-
-        let cache_dir = shellexpand::tilde(ORCHESTRATOR_CACHE_DIR).to_string();
-        let cache_path = std::path::Path::new(&cache_dir);
-
-        // Create directory if it doesn't exist
-        if !cache_path.exists() {
-            std::fs::create_dir_all(cache_path)
-                .context("Failed to create orchestrator cache directory")?;
-            tracing::info!("Created orchestrator cache directory: {}", cache_dir);
-        }
-
-        // Copy session.json from main augment directory for authentication
-        let orchestrator_session = cache_path.join("session.json");
-
-        if !orchestrator_session.exists() {
-            std::fs::copy(&main_session, &orchestrator_session)
-                .context("Failed to copy session.json to orchestrator cache")?;
-            tracing::info!("Copied session.json to orchestrator cache");
-        }
-
-        // Always write settings.json to ensure removedTools is current
-        // Use centralized config from agents::config
-        let settings = json!({
-            "removedTools": ORCHESTRATOR_CONFIG.removed_auggie_tools
-        });
-        let settings_path = cache_path.join("settings.json");
-        std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)
-            .context("Failed to write orchestrator settings.json")?;
-        tracing::debug!(
-            "Wrote orchestrator settings.json with {} removed tools",
-            ORCHESTRATOR_CONFIG.removed_auggie_tools.len()
-        );
-
-        Ok(cache_dir)
-    }
-
-    /// Set up the planner cache directory with the required configuration.
-    /// This ensures the planner agent has file editing and process execution tools removed.
-    fn setup_planner_cache() -> Result<String> {
-        // First, check if auggie is authenticated
-        let main_augment_dir = shellexpand::tilde("~/.augment").to_string();
-        let main_session = std::path::Path::new(&main_augment_dir).join("session.json");
-
-        if !main_session.exists() {
-            anyhow::bail!(
-                "Augment CLI is not authenticated.\n\n\
-                Please run 'auggie login' first to authenticate, then try again."
-            );
-        }
-
-        let cache_dir = shellexpand::tilde(PLANNER_CACHE_DIR).to_string();
-        let cache_path = std::path::Path::new(&cache_dir);
-
-        // Create directory if it doesn't exist
-        if !cache_path.exists() {
-            std::fs::create_dir_all(cache_path)
-                .context("Failed to create planner cache directory")?;
-            tracing::info!("Created planner cache directory: {}", cache_dir);
-        }
-
-        // Copy session.json from main augment directory for authentication
-        let planner_session = cache_path.join("session.json");
-
-        if !planner_session.exists() {
-            std::fs::copy(&main_session, &planner_session)
-                .context("Failed to copy session.json to planner cache")?;
-            tracing::info!("Copied session.json to planner cache");
-        }
-
-        // Always write settings.json to ensure removedTools is current
-        // Use centralized config from agents::config
-        let settings = json!({
-            "removedTools": PLANNER_CONFIG.removed_auggie_tools
-        });
-        let settings_path = cache_path.join("settings.json");
-        std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)
-            .context("Failed to write planner settings.json")?;
-        tracing::debug!(
-            "Wrote planner settings.json with {} removed tools",
-            PLANNER_CONFIG.removed_auggie_tools.len()
-        );
-
-        Ok(cache_dir)
-    }
-
-    /// Create a new App with a pre-created log manager.
+    /// Create a new App with a pre-created log manager and backend.
+    ///
+    /// Uses the backend's default transport kind.
     pub async fn with_log_manager(
         model_config: ModelConfig,
         log_manager: Arc<RunLogManager>,
+        backend: Box<dyn Backend>,
+        transport_kind: TransportKind,
     ) -> Result<Self> {
-        Self::with_log_manager_and_timeout(model_config, log_manager, TimeoutConfig::default())
-            .await
+        Self::with_log_manager_and_timeout(
+            model_config,
+            log_manager,
+            TimeoutConfig::default(),
+            backend,
+            transport_kind,
+        )
+        .await
     }
 
-    /// Create a new App with a pre-created log manager and custom timeout configuration.
+    /// Create a new App with a pre-created log manager, custom timeout configuration, and backend.
+    ///
+    /// # Arguments
+    ///
+    /// * `model_config` - Configuration for model selection
+    /// * `log_manager` - Log manager for this run
+    /// * `timeout_config` - Timeout configuration for sessions and requests
+    /// * `backend` - Backend provider (Auggie, Cursor, etc.)
+    /// * `transport_kind` - Transport protocol to use (ACP, CLI)
     pub async fn with_log_manager_and_timeout(
         model_config: ModelConfig,
         log_manager: Arc<RunLogManager>,
         timeout_config: TimeoutConfig,
+        backend: Box<dyn Backend>,
+        transport_kind: TransportKind,
     ) -> Result<Self> {
-        // Set up orchestrator cache directory with removed tools
-        let orchestrator_cache = Self::setup_orchestrator_cache()?;
+        // Check backend authentication first
+        backend.check_auth()?;
 
-        // Set up planner cache directory with task management tools removed
-        let planner_cache = Self::setup_planner_cache()?;
+        tracing::info!(
+            "🔌 Creating App with {} backend using {} transport",
+            backend.name(),
+            transport_kind
+        );
+
+        // Set up Unix socket FIRST - we need this for MCP setup
+        let (socket_path, tool_rx, listener_task) = socket::setup_socket().await?;
+        let socket_path_str = socket_path.to_string_lossy();
+
+        // Set up MCP server configuration for this backend
+        // For Cursor, this writes to ~/.cursor/mcp.json and enables the MCP
+        // This MUST happen before creating transports
+        backend.setup_mcp(&socket_path_str).await?;
+
+        // Set up orchestrator cache directory with removed tools via backend
+        let orchestrator_cache = backend.setup_agent_cache(
+            AgentCacheType::Orchestrator,
+            ORCHESTRATOR_CONFIG.removed_auggie_tools,
+        )?;
+
+        // Set up planner cache directory with task management tools removed via backend
+        let planner_cache = backend
+            .setup_agent_cache(AgentCacheType::Planner, PLANNER_CONFIG.removed_auggie_tools)?;
+
+        // Get current working directory for transport workspace
+        let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
         // Orchestrator uses a custom cache directory with editing tools removed
-        let mut acp_orchestrator = AcpClient::spawn_with_timeout(
-            Some(&orchestrator_cache),
-            timeout_config.request_timeout,
-        )
-        .await?;
+        let orchestrator_config = TransportConfig::new(&orchestrator_cache)
+            .with_request_timeout(timeout_config.request_timeout);
+        let mut acp_orchestrator = backend
+            .create_transport(transport_kind, AgentType::Orchestrator, orchestrator_config)
+            .await?;
         acp_orchestrator.initialize().await?;
 
         // Planner uses a custom cache directory with task management tools removed
-        let mut acp_planner =
-            AcpClient::spawn_with_timeout(Some(&planner_cache), timeout_config.request_timeout)
-                .await?;
+        let planner_config = TransportConfig::new(&planner_cache)
+            .with_request_timeout(timeout_config.request_timeout);
+        let mut acp_planner = backend
+            .create_transport(transport_kind, AgentType::Planner, planner_config)
+            .await?;
         acp_planner.initialize().await?;
 
-        // Workers use the default cache directory with all tools available
-        let mut acp_worker =
-            AcpClient::spawn_with_timeout(None, timeout_config.request_timeout).await?;
+        // Workers use the default workspace with all tools available
+        let worker_config =
+            TransportConfig::new(&workspace).with_request_timeout(timeout_config.request_timeout);
+        let mut acp_worker = backend
+            .create_transport(transport_kind, AgentType::Implementer, worker_config)
+            .await?;
         acp_worker.initialize().await?;
 
         let current_scope = log_manager.root_scope();
@@ -245,21 +202,23 @@ impl App {
         let task_manager = Arc::new(RwLock::new(TaskManager::new(event_tx)));
 
         tracing::info!(
-            "⏱️  Timeout config: session={}s, request={}s",
+            "⏱️  Timeout config: session={}s, request={}s (backend: {})",
             timeout_config.session_timeout.as_secs(),
-            timeout_config.request_timeout.as_secs()
+            timeout_config.request_timeout.as_secs(),
+            backend.name()
         );
 
         Ok(Self {
-            acp_orchestrator: Box::new(acp_orchestrator),
-            acp_planner: Box::new(acp_planner),
-            acp_worker: Box::new(acp_worker),
-            socket_path: None,
-            tool_rx: None,
+            backend,
+            acp_orchestrator,
+            acp_planner,
+            acp_worker,
+            socket_path: Some(socket_path),
+            tool_rx: Some(tool_rx),
             model_config,
             timeout_config,
             original_goal: String::new(),
-            socket_listener_task: None,
+            socket_listener_task: Some(listener_task),
             router_task: None,
             router_active: false,
             log_manager,
@@ -278,20 +237,25 @@ impl App {
     /// testing without requiring live agent processes.
     #[cfg(any(test, feature = "testing"))]
     #[allow(dead_code)]
-    pub fn with_mock_clients(
-        orchestrator: Box<dyn AcpClientTrait + Send>,
-        planner: Box<dyn AcpClientTrait + Send>,
-        worker: Box<dyn AcpClientTrait + Send>,
+    pub fn with_mock_transports(
+        backend: Box<dyn Backend>,
+        orchestrator: Box<dyn AgentTransport>,
+        planner: Box<dyn AgentTransport>,
+        worker: Box<dyn AgentTransport>,
         model_config: ModelConfig,
         log_manager: Arc<RunLogManager>,
     ) -> Self {
         let current_scope = log_manager.root_scope();
 
         Self {
+            backend,
             acp_orchestrator: orchestrator,
             acp_planner: planner,
             acp_worker: worker,
-            socket_path: None,
+            // Use a placeholder socket path for tests
+            socket_path: Some(std::path::PathBuf::from(
+                "/tmp/paperboat-test-placeholder.sock",
+            )),
             tool_rx: None,
             model_config,
             timeout_config: TimeoutConfig::default(),
@@ -309,15 +273,16 @@ impl App {
         }
     }
 
-    /// Create a new App with mock ACP clients and an injected tool channel for testing.
+    /// Create a new App with mock transports and an injected tool channel for testing.
     ///
     /// This constructor enables full test control over tool call handling by injecting
     /// the `tool_rx` channel directly, bypassing Unix socket setup.
     #[cfg(any(test, feature = "testing"))]
-    pub fn with_mock_clients_and_tool_rx(
-        orchestrator: Box<dyn AcpClientTrait + Send>,
-        planner: Box<dyn AcpClientTrait + Send>,
-        worker: Box<dyn AcpClientTrait + Send>,
+    pub fn with_mock_transports_and_tool_rx(
+        backend: Box<dyn Backend>,
+        orchestrator: Box<dyn AgentTransport>,
+        planner: Box<dyn AgentTransport>,
+        worker: Box<dyn AgentTransport>,
         model_config: ModelConfig,
         log_manager: Arc<RunLogManager>,
         tool_rx: mpsc::Receiver<ToolMessage>,
@@ -325,10 +290,14 @@ impl App {
         let current_scope = log_manager.root_scope();
 
         Self {
+            backend,
             acp_orchestrator: orchestrator,
             acp_planner: planner,
             acp_worker: worker,
-            socket_path: None,
+            // Use a placeholder socket path for tests - it won't be used since tool_rx is injected
+            socket_path: Some(std::path::PathBuf::from(
+                "/tmp/paperboat-test-placeholder.sock",
+            )),
             tool_rx: Some(tool_rx),
             model_config,
             timeout_config: TimeoutConfig::default(),
@@ -347,6 +316,7 @@ impl App {
     }
 
     /// Set up Unix socket for MCP server communication
+    #[allow(dead_code)]
     async fn setup_socket(&mut self) -> Result<PathBuf> {
         let (socket_path, tool_rx, listener_task) = socket::setup_socket().await?;
 
@@ -393,7 +363,8 @@ impl App {
             any_router_started = true;
             tracing::debug!("Started worker message router task");
         } else {
-            tracing::warn!("Worker notification receiver already taken, skipping router setup");
+            // This is expected when using CLI transport - the CLI handles messages differently
+            tracing::debug!("Worker notification receiver already taken, skipping router setup");
         }
 
         // Start router for planner client
@@ -421,7 +392,8 @@ impl App {
             any_router_started = true;
             tracing::debug!("Started planner message router task");
         } else {
-            tracing::warn!(
+            // This is expected when using CLI transport - the CLI handles messages differently
+            tracing::debug!(
                 "Planner notification receiver already taken, skipping planner router setup"
             );
         }
@@ -468,25 +440,26 @@ impl App {
     #[cfg(feature = "tui")]
     pub fn apply_model_config_update(&mut self, update: &crate::tui::ModelConfigUpdate) {
         use crate::config::save_agent_config;
+        use crate::models::ModelFallbackChain;
 
-        if let Some(model) = update.orchestrator_model {
-            tracing::info!("📝 Model config updated: orchestrator -> {}", model);
-            self.model_config.orchestrator_model = model;
-            if let Err(e) = save_agent_config("orchestrator", &model) {
+        if let Some(tier) = update.orchestrator_model {
+            tracing::info!("📝 Model config updated: orchestrator -> {}", tier);
+            self.model_config.orchestrator_model = ModelFallbackChain::single(tier);
+            if let Err(e) = save_agent_config("orchestrator", tier) {
                 tracing::warn!("Failed to persist orchestrator config: {}", e);
             }
         }
-        if let Some(model) = update.planner_model {
-            tracing::info!("📝 Model config updated: planner -> {}", model);
-            self.model_config.planner_model = model;
-            if let Err(e) = save_agent_config("planner", &model) {
+        if let Some(tier) = update.planner_model {
+            tracing::info!("📝 Model config updated: planner -> {}", tier);
+            self.model_config.planner_model = ModelFallbackChain::single(tier);
+            if let Err(e) = save_agent_config("planner", tier) {
                 tracing::warn!("Failed to persist planner config: {}", e);
             }
         }
-        if let Some(model) = update.implementer_model {
-            tracing::info!("📝 Model config updated: implementer -> {}", model);
-            self.model_config.implementer_model = model;
-            if let Err(e) = save_agent_config("implementer", &model) {
+        if let Some(tier) = update.implementer_model {
+            tracing::info!("📝 Model config updated: implementer -> {}", tier);
+            self.model_config.implementer_model = ModelFallbackChain::single(tier);
+            if let Err(e) = save_agent_config("implementer", tier) {
                 tracing::warn!("Failed to persist implementer config: {}", e);
             }
         }

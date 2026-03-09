@@ -41,6 +41,8 @@ pub struct AgentWriter {
     depth: u32,
     /// Session ID this writer is associated with (set after session creation)
     session_id: Option<String>,
+    /// Model used for this agent session (set after session creation)
+    model: Option<String>,
     /// Timestamp when the writer was created (for duration calculation)
     start_time: std::time::Instant,
 }
@@ -61,6 +63,7 @@ impl AgentWriter {
             event_tx,
             depth,
             session_id: None,
+            model: None,
             start_time: std::time::Instant::now(),
         })
     }
@@ -76,9 +79,14 @@ impl AgentWriter {
         self.depth
     }
 
-    /// Associate this writer with a session ID and emit `AgentStarted` event.
+    /// Associate this writer with a session ID.
     pub fn set_session_id(&mut self, session_id: String) {
         self.session_id = Some(session_id);
+    }
+
+    /// Set the model used for this agent session.
+    pub fn set_model(&mut self, model: String) {
+        self.model = Some(model);
     }
 
     /// Emit an `AgentStarted` event after the session has been created.
@@ -107,11 +115,17 @@ impl AgentWriter {
             .as_ref()
             .map(|id| format!("\nSession: {id}"))
             .unwrap_or_default();
+        let model_info = self
+            .model
+            .as_ref()
+            .map(|m| format!("\nModel: {m}"))
+            .unwrap_or_default();
         let header = format!(
-            "=== {} Log ===\nStarted: {}{}\nTask: {}\n{}\n\n",
+            "=== {} Log ===\nStarted: {}{}{}\nTask: {}\n{}\n\n",
             self.agent_type.name().to_uppercase(),
             timestamp,
             session_info,
+            model_info,
             task,
             "=".repeat(60)
         );
@@ -132,11 +146,17 @@ impl AgentWriter {
             .as_ref()
             .map(|id| format!("\nSession: {id}"))
             .unwrap_or_default();
+        let model_info = self
+            .model
+            .as_ref()
+            .map(|m| format!("\nModel: {m}"))
+            .unwrap_or_default();
         let header = format!(
-            "=== {} Log ===\nStarted: {}{}\nTask: {}\n{}\n\n## Full Prompt Sent to Agent\n\n{}\n\n{}\n\n",
+            "=== {} Log ===\nStarted: {}{}{}\nTask: {}\n{}\n\n## Full Prompt Sent to Agent\n\n{}\n\n{}\n\n",
             self.agent_type.name().to_uppercase(),
             timestamp,
             session_info,
+            model_info,
             task,
             "=".repeat(60),
             prompt,

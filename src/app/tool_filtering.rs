@@ -6,8 +6,10 @@
 use serde_json::json;
 use std::path::Path;
 
-/// All available auggie tools that can be whitelisted/removed.
-pub const ALL_AUGGIE_TOOLS: &[&str] = &[
+/// All available backend tools that can be whitelisted/removed.
+///
+/// These are the standard tools available across backends (Auggie, Cursor, etc.).
+pub const ALL_BACKEND_TOOLS: &[&str] = &[
     "str-replace-editor",
     "save-file",
     "remove-files",
@@ -26,7 +28,7 @@ pub const ALL_AUGGIE_TOOLS: &[&str] = &[
 /// If `allowed_tools` is `None`, returns an empty vec (all tools enabled).
 pub fn compute_removed_tools(allowed_tools: Option<&Vec<String>>) -> Vec<String> {
     match allowed_tools {
-        Some(whitelist) => ALL_AUGGIE_TOOLS
+        Some(whitelist) => ALL_BACKEND_TOOLS
             .iter()
             .filter(|t| !whitelist.contains(&(*t).to_string()))
             .map(std::string::ToString::to_string)
@@ -110,7 +112,7 @@ mod tests {
         let result = compute_removed_tools(Some(&whitelist));
 
         // All tools should be removed
-        assert_eq!(result.len(), ALL_AUGGIE_TOOLS.len());
+        assert_eq!(result.len(), ALL_BACKEND_TOOLS.len());
     }
 
     #[test]
