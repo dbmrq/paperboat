@@ -229,7 +229,7 @@ pub fn create_task_schema_orchestrator() -> Value {
 pub fn skip_tasks_schema() -> Value {
     json!({
         "name": "skip_tasks",
-        "description": "<usecase>Skip one or more tasks that are no longer needed.</usecase>\n<instructions>Use this when tasks become unnecessary (e.g., already done by another task, no longer relevant, or blocked permanently). Skipped tasks will not be executed and will be marked as skipped in the plan.</instructions>\n<on_error>If a task_id is not found, use list_tasks() to see available task IDs. If a task cannot be skipped because it's already completed or in progress, no action is needed - the task will proceed as planned. Provide a reason to help future agents understand why the task was skipped.</on_error>",
+        "description": "<usecase>Skip one or more tasks that are no longer needed.</usecase>\n<instructions>Use this when tasks become unnecessary (e.g., already done by another task, no longer relevant, or blocked permanently). Skipped tasks will not be executed and will be marked as skipped in the plan.</instructions>\n<on_error>If a task_id is not found, use list_tasks() to see available task IDs. If a task cannot be skipped because it's already completed, in progress, or has already failed, no action is needed - the task already has a definitive status. Failed tasks do not need to be skipped; they are already accounted for in task reconciliation. Provide a reason to help future agents understand why the task was skipped.</on_error>",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -263,6 +263,28 @@ pub fn list_tasks_schema() -> Value {
                     "description": "Filter tasks by status. Defaults to 'all'."
                 }
             }
+        }
+    })
+}
+
+/// Generate the `report_human_action` tool definition.
+pub fn report_human_action_schema() -> Value {
+    json!({
+        "name": "report_human_action",
+        "description": "<usecase>Report that something requires manual user intervention.</usecase>\n<instructions>Use this when you encounter work that cannot be automated and needs the user to take action manually. Examples: creating API tokens, setting up external services, making decisions that require human judgment, pushing git tags. The description should be clear and actionable - tell the user exactly what they need to do. These will be prominently displayed at the end of the run.</instructions>\n<on_error>If the description is too vague, be more specific about what action is needed, where to do it, and why it's necessary.</on_error>",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "Clear, actionable description of what the user needs to do manually. Include specific steps if possible."
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Optional task ID this action relates to (e.g., 'task003'). Helps provide context."
+                }
+            },
+            "required": ["description"]
         }
     })
 }

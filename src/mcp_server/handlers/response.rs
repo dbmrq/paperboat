@@ -138,6 +138,9 @@ pub fn build_response_text_with_state(
         ToolCall::ListTasks { status_filter } => {
             build_list_tasks_response(status_filter.as_deref(), response)
         }
+        ToolCall::ReportHumanAction { description, .. } => {
+            build_report_human_action_response(description, response)
+        }
     }
 }
 
@@ -158,6 +161,28 @@ fn build_list_tasks_response(status_filter: Option<&str>, response: &ToolRespons
              - Call set_goal() first to establish the goal context\n\
              - Try again with a different status_filter (e.g., 'pending', 'completed', or omit for 'all')\n\
              - If the problem persists, the orchestrator may need to be restarted"
+        )
+    }
+}
+
+fn build_report_human_action_response(description: &str, response: &ToolResponse) -> String {
+    if response.success {
+        let preview = if description.len() > 60 {
+            format!("{}...", &description[..57])
+        } else {
+            description.to_string()
+        };
+        format!(
+            "✅ Human action recorded: \"{preview}\"\n\n\
+             This will be displayed prominently at the end of the run."
+        )
+    } else {
+        let error_msg = response.error.as_deref().unwrap_or(&response.summary);
+        format!(
+            "❌ Failed to record human action: {error_msg}\n\n\
+             ## How to Fix\n\
+             - Ensure the description is a non-empty string\n\
+             - Try calling the tool again with a valid description"
         )
     }
 }

@@ -361,6 +361,15 @@ pub enum ToolCall {
         #[serde(default)]
         status_filter: Option<String>,
     },
+    /// Report that something requires human intervention (used by orchestrator agents).
+    /// Use this when a task cannot be fully automated and needs manual user action.
+    ReportHumanAction {
+        /// Clear description of what the user needs to do.
+        description: String,
+        /// Optional task ID this action relates to.
+        #[serde(default)]
+        task_id: Option<String>,
+    },
 }
 
 impl ToolCall {
@@ -374,6 +383,7 @@ impl ToolCall {
             Self::SetGoal { .. } => "set_goal",
             Self::SkipTasks { .. } => "skip_tasks",
             Self::ListTasks { .. } => "list_tasks",
+            Self::ReportHumanAction { .. } => "report_human_action",
         }
     }
 }

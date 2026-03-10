@@ -369,11 +369,11 @@ mod tests {
         let resp = response.unwrap();
         let tools = resp["result"]["tools"].as_array().unwrap();
 
-        // Orchestrator has 6 tools: decompose, spawn_agents, complete, create_task, skip_tasks, list_tasks
+        // Orchestrator has 7 tools: decompose, spawn_agents, complete, create_task, skip_tasks, list_tasks, report_human_action
         assert_eq!(
             tools.len(),
-            6,
-            "Expected 6 orchestrator tools, got: {:?}",
+            7,
+            "Expected 7 orchestrator tools, got: {:?}",
             tools
                 .iter()
                 .map(|t| t["name"].as_str().unwrap_or("?"))
@@ -388,6 +388,7 @@ mod tests {
         assert!(tool_names.contains(&"create_task"));
         assert!(tool_names.contains(&"skip_tasks"));
         assert!(tool_names.contains(&"list_tasks"));
+        assert!(tool_names.contains(&"report_human_action"));
     }
 
     #[tokio::test]

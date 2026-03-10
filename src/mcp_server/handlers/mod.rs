@@ -110,7 +110,8 @@ fn handle_tools_list(id: Option<&Value>) -> Value {
                     tool_schemas::complete_schema_orchestrator(),
                     tool_schemas::create_task_schema_orchestrator(),
                     tool_schemas::skip_tasks_schema(),
-                    tool_schemas::list_tasks_schema()
+                    tool_schemas::list_tasks_schema(),
+                    tool_schemas::report_human_action_schema()
                 ]
             })
         }
@@ -197,6 +198,16 @@ async fn handle_tool_call(
             Ok(tc) => tc,
             Err(msg) => return Ok(Some(invalid_params_error(id.as_ref(), "list_tasks", msg))),
         },
+        "report_human_action" => match tool_parsing::parse_report_human_action(arguments) {
+            Ok(tc) => tc,
+            Err(msg) => {
+                return Ok(Some(invalid_params_error(
+                    id.as_ref(),
+                    "report_human_action",
+                    msg,
+                )))
+            }
+        },
         _ => {
             tracing::warn!("⚠️  Unknown tool requested: {}", name);
             return Ok(Some(method_not_found_error(
@@ -210,6 +221,7 @@ async fn handle_tool_call(
                     "set_goal",
                     "skip_tasks",
                     "list_tasks",
+                    "report_human_action",
                 ],
             )));
         }
@@ -366,7 +378,7 @@ mod tests {
 
         let tool_names = extract_tool_names(&response);
 
-        // Orchestrator should have: decompose, spawn_agents, complete, create_task, skip_tasks
+        // Orchestrator should have: decompose, spawn_agents, complete, create_task, skip_tasks, list_tasks, report_human_action
         assert!(
             tool_names.contains("decompose"),
             "Orchestrator should have decompose tool"
@@ -391,12 +403,16 @@ mod tests {
             tool_names.contains("list_tasks"),
             "Orchestrator should have list_tasks tool"
         );
+        assert!(
+            tool_names.contains("report_human_action"),
+            "Orchestrator should have report_human_action tool"
+        );
 
         // Verify exact count
         assert_eq!(
             tool_names.len(),
-            6,
-            "Orchestrator should have exactly 6 tools, got: {tool_names:?}",
+            7,
+            "Orchestrator should have exactly 7 tools, got: {tool_names:?}",
         );
     }
 

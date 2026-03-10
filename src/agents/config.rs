@@ -102,6 +102,7 @@ pub const ORCHESTRATOR_CONFIG: AgentToolConfig = AgentToolConfig {
         "create_task",
         "skip_tasks",
         "list_tasks",
+        "report_human_action",
     ],
     removed_auggie_tools: &[
         // No file editing - orchestrator delegates to implementers

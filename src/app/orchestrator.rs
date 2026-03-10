@@ -554,6 +554,12 @@ impl App {
                                 .await;
                             let _ = response_tx.send(response);
                         }
+                        ToolCall::ReportHumanAction { ref description, ref task_id } => {
+                            let response = self
+                                .handle_report_human_action(description, task_id.as_ref(), &request.request_id, writer)
+                                .await;
+                            let _ = response_tx.send(response);
+                        }
                     }
                 }
 
@@ -772,6 +778,41 @@ impl App {
         response
     }
 
+    /// Handle the `report_human_action` tool call.
+    ///
+    /// Records an action that requires manual user intervention.
+    async fn handle_report_human_action(
+        &self,
+        description: &str,
+        task_id: Option<&String>,
+        request_id: &str,
+        writer: &mut AgentWriter,
+    ) -> ToolResponse {
+        let depth = self.current_scope.depth();
+        let preview = truncate_for_log(description, 50);
+        let _ = writer
+            .write_mcp_tool_call("report_human_action", &preview)
+            .await;
+        tracing::info!("[L{}] 📋 report_human_action: {}", depth, preview);
+
+        // Add to task manager
+        {
+            let mut tm = self.task_manager.write().await;
+            tm.add_human_action(description.to_string(), task_id.cloned());
+        }
+
+        let response = ToolResponse::success(
+            request_id.to_string(),
+            "Human action recorded. It will be displayed prominently at the end of the run."
+                .to_string(),
+        );
+        let _ = writer
+            .write_mcp_tool_result("report_human_action", true, "Action recorded")
+            .await;
+
+        response
+    }
+
     /// Handle the `skip_tasks` tool call.
     ///
     /// Marks tasks as skipped if they are in `NotStarted` status.
@@ -839,11 +880,14 @@ impl App {
                             errors.push(msg);
                         }
                         TaskStatus::Failed { .. } => {
-                            let msg = format!(
-                                "Task '{task_id}' has already failed and cannot be skipped"
+                            // Failed tasks don't need to be skipped - they already have a
+                            // definitive status. This is not an error, just informational.
+                            tracing::info!(
+                                "ℹ️ Task '{}' has already failed (no skip needed)",
+                                task_id
                             );
-                            tracing::warn!("⚠️ {}", msg);
-                            errors.push(msg);
+                            // Don't add to errors - failed tasks are already accounted for
+                            // in task reconciliation, so the orchestrator can proceed.
                         }
                         TaskStatus::Skipped { .. } => {
                             tracing::info!("⏭️ Task '{}' is already skipped", task_id);

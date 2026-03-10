@@ -181,6 +181,23 @@ impl MockToolInterceptor {
                 });
                 return Ok(response);
             }
+            ToolCall::ReportHumanAction { description, .. } => {
+                // ReportHumanAction always succeeds
+                let preview = if description.len() > 40 {
+                    format!("{}...", &description[..37])
+                } else {
+                    description.clone()
+                };
+                let response = ToolResponse::success(
+                    request_id.to_string(),
+                    format!("Human action recorded: {preview}"),
+                );
+                self.captured_calls.push(CapturedToolCall {
+                    call: call.clone(),
+                    response: response.clone(),
+                });
+                return Ok(response);
+            }
         };
 
         // Find a matching response in the queue (only for Implement at this point)

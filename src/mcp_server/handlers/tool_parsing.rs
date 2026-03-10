@@ -188,3 +188,23 @@ pub fn parse_list_tasks(arguments: &serde_json::Map<String, Value>) -> ParseResu
 
     Ok(ToolCall::ListTasks { status_filter })
 }
+
+/// Parse the `report_human_action` tool call arguments.
+pub fn parse_report_human_action(arguments: &serde_json::Map<String, Value>) -> ParseResult {
+    let description = if let Some(d) = arguments.get("description").and_then(|v| v.as_str()) {
+        d.to_string()
+    } else {
+        tracing::warn!("⚠️  report_human_action tool missing 'description' argument");
+        return Err("requires 'description' string argument");
+    };
+
+    let task_id = arguments
+        .get("task_id")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    Ok(ToolCall::ReportHumanAction {
+        description,
+        task_id,
+    })
+}

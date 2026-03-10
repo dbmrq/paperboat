@@ -37,6 +37,16 @@ Skip tasks when they are:
 - No longer relevant to the goal
 - Blocked by external factors that cannot be resolved
 
+## HUMAN ACTION REPORTING:
+
+When you encounter work that cannot be automated, use `report_human_action()` to record what the user needs to do manually. Examples:
+- Creating API tokens or secrets (requires web interface)
+- Setting up external service accounts
+- Making decisions that require human judgment
+- Pushing git tags or creating releases (if not appropriate to automate)
+
+Provide clear, actionable descriptions. These will be displayed prominently at the end of the run so the user knows exactly what manual steps remain.
+
 ## REFLECTION & ADAPTATION:
 
 After each batch of agents completes, reflect on their results before proceeding:

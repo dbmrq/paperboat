@@ -25,6 +25,18 @@ pub struct AgentNote {
     pub content: String,
 }
 
+/// Represents an action that requires human intervention.
+///
+/// Reported by the orchestrator when it determines that something
+/// cannot be automated and needs manual user action.
+#[derive(Debug, Clone)]
+pub struct HumanActionItem {
+    /// Clear description of what the user needs to do.
+    pub description: String,
+    /// Optional task ID this action relates to.
+    pub task_id: Option<String>,
+}
+
 /// Snapshot of `TaskManager` state for nested orchestration.
 ///
 /// When decomposing tasks, we need to temporarily clear the task manager
@@ -58,6 +70,8 @@ pub struct TaskManager {
     /// Current depth in the task hierarchy (0 = root level).
     /// Used when emitting `TaskCreated` events for nested task visualization.
     depth: u32,
+    /// Actions that require human intervention, reported by the orchestrator.
+    human_actions: Vec<HumanActionItem>,
 }
 
 impl TaskManager {
@@ -70,6 +84,7 @@ impl TaskManager {
             goal: None,
             notes: Vec::new(),
             depth: 0,
+            human_actions: Vec::new(),
         }
     }
 
@@ -562,6 +577,91 @@ impl TaskManager {
         }
 
         lines.join("\n")
+    }
+
+    /// Add a human action item reported by the orchestrator.
+    ///
+    /// Called when the orchestrator determines that something requires
+    /// manual user intervention.
+    pub fn add_human_action(&mut self, description: String, task_id: Option<String>) {
+        tracing::info!(
+            "📋 Human action reported: {} (task: {:?})",
+            description,
+            task_id
+        );
+        self.human_actions.push(HumanActionItem {
+            description,
+            task_id,
+        });
+    }
+
+    /// Get all reported human actions.
+    #[allow(dead_code)]
+    pub fn get_human_actions(&self) -> &[HumanActionItem] {
+        &self.human_actions
+    }
+
+    /// Format human action items into a prominent display string.
+    ///
+    /// Returns `None` if there are no items requiring human intervention.
+    pub fn format_human_actions_required(&self) -> Option<String> {
+        if self.human_actions.is_empty() {
+            return None;
+        }
+
+        let mut lines = Vec::new();
+        lines.push(String::new());
+        lines.push(
+            "╔══════════════════════════════════════════════════════════════════════╗".to_string(),
+        );
+        lines.push(
+            "║                    🔧 HUMAN ACTION REQUIRED                          ║".to_string(),
+        );
+        lines.push(
+            "╚══════════════════════════════════════════════════════════════════════╝".to_string(),
+        );
+        lines.push(String::new());
+        lines.push(format!(
+            "The following {} item(s) need your attention:",
+            self.human_actions.len()
+        ));
+        lines.push(String::new());
+
+        for (i, item) in self.human_actions.iter().enumerate() {
+            // Add task context if available
+            let task_context = if let Some(ref tid) = item.task_id {
+                if let Some(task) = self.tasks.get(tid) {
+                    let name = &task.name;
+                    format!(" ({name})")
+                } else {
+                    format!(" ({tid})")
+                }
+            } else {
+                String::new()
+            };
+
+            lines.push(format!(
+                "{}. {}{}",
+                i + 1,
+                item.description.lines().next().unwrap_or(&item.description),
+                task_context
+            ));
+
+            // If description has multiple lines, indent the rest
+            for line in item.description.lines().skip(1) {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    lines.push(format!("   {trimmed}"));
+                }
+            }
+        }
+
+        lines.push(String::new());
+        lines.push(
+            "───────────────────────────────────────────────────────────────────────".to_string(),
+        );
+
+        Some(lines.join("\n"))
     }
 
     /// Update task status.

@@ -759,6 +759,14 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Print human action items if any exist
+    {
+        let task_manager = app.task_manager().read().await;
+        if let Some(human_actions) = task_manager.format_human_actions_required() {
+            println!("{human_actions}");
+        }
+    }
+
     if result.success {
         println!("\n✅ Task completed successfully!");
     } else {
