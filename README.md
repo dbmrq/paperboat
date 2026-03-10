@@ -41,20 +41,65 @@ See `paperboat --help` for all options.
 
 ## Configuration
 
-### Model Selection
+### Backends
+
+Paperboat supports multiple AI backends:
+
+| Backend | Description | Transports |
+|---------|-------------|------------|
+| `auggie` | Augment's Auggie CLI (default) | ACP |
+| `cursor` | Cursor's agent CLI | CLI (default), ACP |
+
+```bash
+paperboat --backend auggie "Your task"
+paperboat --backend cursor "Your task"
+paperboat --backend cursor:cli "Your task"   # Explicit transport
+```
+
+### Model Tiers
+
+Instead of specific model versions, Paperboat uses **model tiers** that each backend resolves to the best available version:
+
+| Tier | Description |
+|------|-------------|
+| `opus` | Most capable, best for complex reasoning |
+| `sonnet` | Balanced capability and speed (default) |
+| `haiku` | Fast and cheap |
+| `codex` | OpenAI Codex |
+| `codex-mini` | Smaller Codex variant |
+| `gemini` | Google Gemini |
+| `gemini-flash` | Faster Gemini variant |
+| `grok` | xAI Grok |
+| `composer` | Cursor Composer |
+| `auto` | System chooses based on task complexity |
+
+### Model Fallback Chains
+
+Models can be specified as **fallback chains** (like CSS font-family). The system picks the first tier available in the current backend:
+
+```toml
+# ~/.paperboat/agents/orchestrator.toml
+model = "opus, sonnet, codex"   # Try opus first, fall back to sonnet, then codex
+```
 
 Configure models per agent in `~/.paperboat/agents/` (user defaults) or `.paperboat/agents/` (project overrides):
 
 ```toml
-# orchestrator.toml, planner.toml, or implementer.toml
-model = "opus"
+# orchestrator.toml - complex reasoning, prefers most capable
+model = "opus, sonnet"
+
+# planner.toml - balanced capability
+model = "sonnet, opus"
+
+# implementer.toml - coding-optimized
+model = "sonnet, codex"
 ```
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
-| `--backend <name>` | AI backend (`auggie`, `cursor`) |
+| `--backend <name>` | AI backend (`auggie`, `cursor`, `cursor:cli`, `cursor:acp`) |
 | `--headless` | Console mode (no TUI) |
 | `--validate-config` | Validate config and exit |
 
