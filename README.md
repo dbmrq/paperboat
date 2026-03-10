@@ -39,16 +39,6 @@ paperboat                       # Interactive mode
 
 See `paperboat --help` for all options.
 
-## The Idea
-
-> "Any abyss can be sailed using tiny paper boats." — João Guimarães Rosa
-
-1. AI agents can perform small tasks
-2. AI agents can break large tasks into smaller tasks
-3. AI agents can spawn new AI agents
-
-Paperboat uses these three concepts to accomplish nearly anything.
-
 ## Configuration
 
 ### Model Selection
