@@ -4,7 +4,14 @@
 [![Security](https://github.com/dbmrq/paperboat/actions/workflows/security.yml/badge.svg)](https://github.com/dbmrq/paperboat/actions/workflows/security.yml)
 [![codecov](https://codecov.io/gh/dbmrq/paperboat/graph/badge.svg?token=O2TCUWQVJ6)](https://codecov.io/gh/dbmrq/paperboat)
 
-**Autonomous AI agents that break down complex tasks and accomplish nearly anything.**
+> Any abyss can be sailed using tiny paper boats.\
+> — João Guimarães Rosa
+
+1. AI agents can perform most small tasks
+2. AI agents can be used to break large tasks into smaller tasks
+3. AI agents can be used to spawn new AI agents
+
+Paperboat uses these three concepts to accomplish nearly anything.
 
 ## Quick Start
 
