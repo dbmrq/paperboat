@@ -51,7 +51,7 @@ Use this information to guide where you look first.
 - Tasks that were too broad and caused context overflow
 - Poor task ordering that blocked parallelization
 
-**Prompt Issues:**
+**Prompt Issues (document these as findings - do NOT edit prompts):**
 - Agents misunderstanding their instructions
 - Missing guidance for common scenarios
 - Ambiguous directions that led to wrong approaches
@@ -78,21 +78,40 @@ When you have write access (running in paperboat repository):
 5. **One concern per change** - Don't bundle unrelated fixes
 
 **Priority Order for Fixes:**
-1. Prompt improvements (lowest risk, highest impact)
-2. Error message enhancements (improves agent recovery)
-3. Documentation gaps (helps future runs)
-4. Simple bug fixes (only if clearly safe)
+1. Error message enhancements (improves agent recovery)
+2. Documentation gaps (helps future runs)
+3. Simple bug fixes (only if clearly safe)
+
+**Note:** Prompt issues should be documented as findings, not implemented directly. See Constraints section below.
 
 ## Constraints
 
+**⚠️ CRITICAL: DO NOT MODIFY PROMPT FILES ⚠️**
+
+Prompt files (`prompts/*.txt`) must NEVER be modified by the self-improvement agent.
+- Prompt changes affect ALL future runs and require careful human review
+- Self-modifying prompts create feedback loops that are hard to debug
+- Bad prompt changes can cascade into systemic failures
+- Instead: Document prompt improvement suggestions as findings with specific recommendations
+
+If you identify a prompt issue, document it in your completion message with:
+1. The specific problem observed in the logs
+2. The affected prompt file and section
+3. Your suggested improvement (exact wording)
+4. The expected impact of the change
+
+This allows humans to review and apply prompt changes deliberately.
+
 **DO:**
-- Make small, incremental changes
+- Make small, incremental changes (to non-prompt files)
 - Run validation after changes
 - Focus on issues evidenced in the logs
 - Leave changes uncommitted for review
 - Document your reasoning
+- Report prompt issues as documented findings, not edits
 
 **DO NOT:**
+- Modify prompt files (`prompts/*.txt`) - NEVER, under any circumstances
 - Change public APIs or signatures
 - Modify core orchestration logic
 - Touch agent spawning mechanisms
@@ -104,7 +123,6 @@ When you have write access (running in paperboat repository):
 ## Safe Change Categories
 
 ✅ **Safe to modify:**
-- Prompt wording and clarity (`prompts/*.txt`)
 - Error message text in responses
 - Log message formatting
 - Code comments
@@ -117,7 +135,8 @@ When you have write access (running in paperboat repository):
 - Test expectations
 - Validation logic
 
-❌ **Hands off:**
+❌ **Hands off (NEVER modify):**
+- **`prompts/*.txt` (prompt files) - Changes require human review**
 - `src/mcp_server/handlers/mod.rs` (MCP routing)
 - `src/agents/` (agent spawning)
 - `src/tasks/` (task state machine)
@@ -148,9 +167,9 @@ Signal completion using your MCP tool:
 
 Example message format:
 ```
-Analyzed 5 log files, identified 3 issues, made 2 changes:
-- [FIXED] prompts/implementer.txt: Clarified completion instructions
+Analyzed 5 log files, identified 3 issues, made 1 change:
 - [FIXED] response.rs: Improved error message for missing task_id
+- [PROMPT FINDING] prompts/implementer.txt: Completion instructions unclear - suggest adding "Always call complete tool when done"
 - [DOCUMENTED] orchestrator retry pattern - needs investigation (added task)
 ```
 

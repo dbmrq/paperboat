@@ -20,13 +20,18 @@ use anyhow::Result;
 use backend::{discover_available_backends, prompt_backend_selection, BackendConfig};
 use config::{build_model_config, get_explicit_backend_config, load_agent_configs};
 use logging::RunLogManager;
+use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 /// Parsed command-line arguments.
 #[allow(clippy::struct_excessive_bools)]
 struct CliArgs {
+    /// Show help and exit
+    help_mode: bool,
     /// Disable TUI mode and run headlessly
     headless_mode: bool,
     /// Run in MCP server mode
@@ -48,6 +53,13 @@ struct CliArgs {
 
 /// Parse command-line arguments and extract flags and the goal.
 ///
+/// # Goal Resolution
+///
+/// The goal argument is resolved in this priority order:
+/// 1. If argument is a file path that exists → read file contents as goal
+/// 2. Otherwise → use argument as direct prompt string
+/// 3. No argument → `None` (handled later with interactive prompt)
+///
 /// # Backend Selection
 ///
 /// The `--backend` flag supports an optional transport suffix:
@@ -57,6 +69,8 @@ struct CliArgs {
 /// - `--backend auggie` - Auggie with default transport (ACP)
 /// - `--backend auggie:acp` - Auggie with ACP transport (explicit)
 fn parse_args(args: &[String]) -> CliArgs {
+    // --help or -h shows help and exits
+    let help_mode = args.contains(&"--help".to_string()) || args.contains(&"-h".to_string());
     // --headless disables TUI mode (TUI is enabled by default)
     let headless_mode = args.contains(&"--headless".to_string());
     let mcp_server_mode = args.get(1).is_some_and(|a| a == "--mcp-server");
@@ -102,7 +116,7 @@ fn parse_args(args: &[String]) -> CliArgs {
     // Goal is the first non-flag argument after the program name
     // Skip arguments that are values for flags (like --backend value)
     let flags_with_values = ["--backend", "--socket"];
-    let goal = args
+    let goal_arg = args
         .iter()
         .enumerate()
         .skip(1)
@@ -124,7 +138,11 @@ fn parse_args(args: &[String]) -> CliArgs {
         .map(|(_, arg)| arg.clone())
         .next();
 
+    // Resolve goal: check if argument is a file path or direct prompt
+    let goal = goal_arg.and_then(|arg| resolve_goal_argument(&arg));
+
     CliArgs {
+        help_mode,
         headless_mode,
         mcp_server_mode,
         validate_config_mode,
@@ -135,13 +153,146 @@ fn parse_args(args: &[String]) -> CliArgs {
     }
 }
 
+/// Resolves a goal argument, checking if it's a file path or a direct prompt.
+///
+/// Returns:
+/// - `Some(content)` if argument is a file that exists (reads file content)
+/// - `Some(arg)` if argument is not a file (uses as direct prompt)
+/// - Exits with error if file exists but cannot be read
+fn resolve_goal_argument(arg: &str) -> Option<String> {
+    let path = PathBuf::from(arg);
+
+    // Check if the argument looks like a file path and exists
+    if path.exists() {
+        match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                let trimmed = content.trim();
+                if trimmed.is_empty() {
+                    eprintln!("❌ Goal file is empty: {}", path.display());
+                    std::process::exit(1);
+                }
+                eprintln!("📄 Reading goal from file: {}", path.display());
+                Some(trimmed.to_string())
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to read goal file '{}': {}", path.display(), e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        // Not a file, use as direct prompt
+        let trimmed = arg.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+}
+
+/// Prompts the user for a goal interactively via stdin.
+///
+/// This function handles:
+/// - Checking if stdin is a terminal (returns None if not)
+/// - Timeout handling (60 seconds)
+/// - Ctrl+C/Ctrl+D handling (exits gracefully)
+/// - Empty input handling
+///
+/// Returns `Some(goal)` if user enters valid input, `None` if stdin is not a terminal.
+fn prompt_goal_interactively() -> Option<String> {
+    // Don't prompt if stdin is not a terminal
+    if !std::io::IsTerminal::is_terminal(&io::stdin()) {
+        return None;
+    }
+
+    println!("\n🎯 No goal provided. Please enter your task:");
+    println!("(Enter your task/goal. Press Enter twice or Ctrl+D when done)\n");
+    print!("> ");
+    io::stdout().flush().ok()?;
+
+    // Use a channel with timeout for reading input
+    let (tx, rx) = mpsc::channel();
+    let stdin_thread = std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut lines = Vec::new();
+
+        // Read multiple lines until empty line or EOF
+        loop {
+            let mut line = String::new();
+            let read_result = stdin.lock().read_line(&mut line);
+            match read_result {
+                Ok(0) => {
+                    // EOF (Ctrl+D on Unix)
+                    break;
+                }
+                Ok(_) => {
+                    // Check for empty line (just Enter pressed) to end input
+                    if line.trim().is_empty() && !lines.is_empty() {
+                        break;
+                    }
+                    lines.push(line);
+                }
+                Err(_) => {
+                    // Read error (possibly Ctrl+C)
+                    let _ = tx.send(None);
+                    return;
+                }
+            }
+        }
+
+        let combined = lines.concat();
+        let trimmed = combined.trim();
+        if trimmed.is_empty() {
+            let _ = tx.send(None);
+        } else {
+            let _ = tx.send(Some(trimmed.to_string()));
+        }
+    });
+
+    // Wait for input with a 60-second timeout
+    let result = match rx.recv_timeout(Duration::from_secs(60)) {
+        Ok(Some(goal)) => {
+            println!("\n✓ Goal received\n");
+            Some(goal)
+        }
+        Ok(None) => {
+            // Empty input or error
+            println!();
+            eprintln!("\n❌ No goal provided. Exiting.");
+            std::process::exit(1);
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            println!();
+            eprintln!("\n⏱ Input timeout. Exiting.");
+            std::process::exit(1);
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            // Thread panicked or disconnected
+            println!();
+            eprintln!("\n❌ Input error. Exiting.");
+            std::process::exit(1);
+        }
+    };
+
+    // Wait for the stdin thread to finish
+    let _ = stdin_thread.join();
+
+    result
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse command-line arguments
     let args: Vec<String> = std::env::args().collect();
     let cli_args = parse_args(&args);
 
-    // Handle --validate-config mode FIRST - just validate and exit
+    // Handle --help mode FIRST - show help and exit
+    if cli_args.help_mode {
+        print_help();
+        return Ok(());
+    }
+
+    // Handle --validate-config mode - just validate and exit
     if cli_args.validate_config_mode {
         return run_validate_config_mode();
     }
@@ -189,6 +340,83 @@ async fn main() -> Result<()> {
     // TUI is enabled by default unless --headless is passed or stdout is not a terminal
     #[cfg(feature = "tui")]
     let tui_enabled = !headless_mode && std::io::IsTerminal::is_terminal(&std::io::stdout());
+
+    // ==========================================================================
+    // EARLY GOAL RESOLUTION (before TUI takes over terminal)
+    // ==========================================================================
+    // This must happen BEFORE the TUI starts because the interactive prompt uses stdin/stdout.
+    // If no goal was provided via CLI args, we prompt the user interactively.
+    let goal = if let Some(g) = goal_arg {
+        g
+    } else if let Some(g) = prompt_goal_interactively() {
+        // No goal provided - try interactive prompt
+        g
+    } else {
+        // Not a terminal or other error - exit with usage message
+        eprintln!(
+            "❌ No goal provided.\n\n\
+            Usage:\n  \
+              paperboat \"Your task description\"     # Direct prompt\n  \
+              paperboat path/to/goal.txt            # Read goal from file\n  \
+              paperboat                             # Interactive mode (terminal required)\n\n\
+            Options:\n  \
+              --backend <name>    Select AI backend (auggie, cursor)\n  \
+              --headless          Disable TUI mode\n  \
+              --help              Show help"
+        );
+        std::process::exit(1);
+    };
+
+    // ==========================================================================
+    // EARLY BACKEND SELECTION (before TUI takes over terminal)
+    // ==========================================================================
+    // This must happen BEFORE the TUI starts because the prompt uses stdin/stdout.
+    // We determine backend_kind and transport_kind here, then use them after TUI init.
+    let (backend_kind, transport_kind) = if let Some(ref config) = cli_backend_config {
+        // CLI flag takes precedence - no prompt needed
+        let transport = config.effective_transport();
+        (config.kind, transport)
+    } else if let Some(config) = get_explicit_backend_config() {
+        // Explicit config from env var or config file - no prompt needed
+        let transport = config.effective_transport();
+        (config.kind, transport)
+    } else {
+        // No explicit config - auto-detect available backends
+        // This may prompt the user if multiple backends are available
+        let available = discover_available_backends().await;
+
+        match available.len() {
+            0 => {
+                eprintln!(
+                    "❌ No AI backends available.\n\n\
+                    Please install and authenticate at least one backend:\n  \
+                    • Augment CLI: Install auggie and run 'auggie login'\n  \
+                    • Cursor: Install cursor-agent and run 'agent login'\n\n\
+                    You can also specify a backend explicitly with --backend <name>"
+                );
+                std::process::exit(1);
+            }
+            1 => {
+                // Only one backend available - use it automatically
+                let kind = available[0];
+                let transport = kind.default_transport();
+                (kind, transport)
+            }
+            _ => {
+                // Multiple backends available - prompt user to select
+                // This MUST happen before TUI starts since it uses stdin/stdout
+                if let Some(kind) = prompt_backend_selection(&available) {
+                    let transport = kind.default_transport();
+                    (kind, transport)
+                } else {
+                    // Could not prompt (not a terminal) - use first available
+                    let kind = available[0];
+                    let transport = kind.default_transport();
+                    (kind, transport)
+                }
+            }
+        }
+    };
 
     // Store TUI config channels for later use (after model_config is built)
     #[cfg(feature = "tui")]
@@ -333,10 +561,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Get goal from parsed arguments
-    let goal =
-        goal_arg.unwrap_or_else(|| "Create a simple hello world program in Python".to_string());
-
     // Initialize metrics collection if enabled
     if metrics_enabled {
         // Default port for Prometheus exporter (can be customized via PAPERBOAT_METRICS_PORT env var)
@@ -355,87 +579,12 @@ async fn main() -> Result<()> {
     let loaded_configs = load_agent_configs()?;
     tracing::debug!("Loaded configs: {:?}", loaded_configs);
 
-    // Determine which backend and transport to use
-    // Priority: CLI --backend flag > PAPERBOAT_BACKEND env var > config file > auto-detect > default
-    let (backend_kind, transport_kind) = if let Some(ref config) = cli_backend_config {
-        // CLI flag takes precedence
-        let transport = config.effective_transport();
-        if config.transport.is_some() {
-            tracing::info!(
-                "🔌 Backend '{}' with '{}' transport selected from --backend CLI flag",
-                config.kind,
-                transport
-            );
-        } else {
-            tracing::info!(
-                "🔌 Backend '{}' selected from --backend CLI flag (using default transport '{}')",
-                config.kind,
-                transport
-            );
-        }
-        (config.kind, transport)
-    } else if let Some(config) = get_explicit_backend_config() {
-        // Explicit config from env var or config file
-        let transport = config.effective_transport();
-        tracing::info!(
-            "🔌 Using configured backend '{}' with transport '{}'",
-            config.kind,
-            transport
-        );
-        (config.kind, transport)
-    } else {
-        // No explicit config - auto-detect available backends
-        tracing::info!("🔍 No backend configured, detecting available backends...");
-        let available = discover_available_backends().await;
-
-        match available.len() {
-            0 => {
-                eprintln!(
-                    "❌ No AI backends available.\n\n\
-                    Please install and authenticate at least one backend:\n  \
-                    • Augment CLI: Install auggie and run 'auggie login'\n  \
-                    • Cursor: Install cursor-agent and run 'agent login'\n\n\
-                    You can also specify a backend explicitly with --backend <name>"
-                );
-                std::process::exit(1);
-            }
-            1 => {
-                // Only one backend available - use it automatically
-                let kind = available[0];
-                let transport = kind.default_transport();
-                tracing::info!(
-                    "🔌 Auto-selected backend '{}' (only available backend)",
-                    kind
-                );
-                (kind, transport)
-            }
-            _ => {
-                // Multiple backends available - prompt user to select
-                tracing::info!(
-                    "📋 Found {} available backends: {:?}",
-                    available.len(),
-                    available
-                        .iter()
-                        .map(backend::BackendKind::as_str)
-                        .collect::<Vec<_>>()
-                );
-
-                if let Some(kind) = prompt_backend_selection(&available) {
-                    let transport = kind.default_transport();
-                    (kind, transport)
-                } else {
-                    // Could not prompt (not a terminal) - use first available
-                    let kind = available[0];
-                    let transport = kind.default_transport();
-                    tracing::info!(
-                        "🔌 Using first available backend '{}' (non-interactive mode)",
-                        kind
-                    );
-                    (kind, transport)
-                }
-            }
-        }
-    };
+    // Log the backend selection (already determined before TUI init)
+    tracing::info!(
+        "🔌 Using backend '{}' with transport '{}'",
+        backend_kind,
+        transport_kind
+    );
 
     // Create the backend for agent communication
     let backend = backend_kind.create();
@@ -617,6 +766,48 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Print help message and exit.
+fn print_help() {
+    println!(
+        r#"paperboat - AI-powered task automation
+
+USAGE:
+    paperboat [OPTIONS] [GOAL]
+
+ARGS:
+    <GOAL>    Task description as a string, or path to a file containing the goal
+              If omitted, paperboat will prompt interactively for input
+
+EXAMPLES:
+    paperboat "Fix all TODO comments in src/"
+    paperboat plan.txt
+    paperboat
+
+OPTIONS:
+    -h, --help              Show this help message and exit
+    --backend <NAME>        Select AI backend (auggie, cursor, cursor:cli, cursor:acp)
+    --headless              Disable TUI mode and run in console mode
+    --json-logs             Enable JSON formatted logs
+    --metrics               Enable Prometheus metrics collection
+    --validate-config       Validate configuration files and exit
+
+ENVIRONMENT:
+    PAPERBOAT_BACKEND       Set default backend (same format as --backend)
+    PAPERBOAT_LOG_DIR       Set custom log directory (default: .paperboat/logs)
+    PAPERBOAT_JSON_LOGS     Enable JSON logs (set to "1" or "true")
+    PAPERBOAT_METRICS       Enable metrics (set to "1" or "true")
+    PAPERBOAT_METRICS_PORT  Set Prometheus metrics port (default: 9090)
+
+CONFIG:
+    Configuration files are loaded from:
+      - ~/.paperboat/         User-level configuration
+      - .paperboat/           Project-level configuration (overrides user-level)
+
+For more information, see https://github.com/your-repo/paperboat
+"#
+    );
 }
 
 /// Run config validation mode.

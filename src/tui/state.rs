@@ -81,6 +81,7 @@ impl FocusedPanel {
 /// - Help and settings visibility
 /// - Animation frame counter for UI animations
 /// - Model configuration for display and editing
+#[allow(clippy::struct_excessive_bools)] // UI state naturally has many boolean flags
 pub struct TuiState {
     /// Currently focused panel
     pub current_focus: FocusedPanel,
@@ -794,7 +795,6 @@ mod tests {
     #[test]
     fn test_tui_state_with_model_config() {
         use crate::models::{ModelConfig, ModelFallbackChain, ModelTier};
-        use std::collections::HashSet;
 
         let mut config = ModelConfig::default();
         config.orchestrator_model = ModelFallbackChain::single(ModelTier::Opus);
@@ -814,7 +814,6 @@ mod tests {
     #[test]
     fn test_tui_state_update_model_config() {
         use crate::models::{ModelConfig, ModelFallbackChain, ModelTier};
-        use std::collections::HashSet;
 
         let mut state = TuiState::new();
 

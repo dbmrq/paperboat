@@ -1,0 +1,262 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: paperboat_VERSION_Darwin_x86_64.tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: paperboat_VERSION_Darwin_arm64.tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: paperboat_VERSION_Linux_x86_64.tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            archive: paperboat_VERSION_Linux_arm64.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: paperboat_VERSION_Windows_x86_64.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          fi
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          ARCHIVE_NAME="${{ matrix.archive }}"
+          ARCHIVE_NAME="${ARCHIVE_NAME/VERSION/${{ steps.version.outputs.version }}}"
+          tar czf "../../../$ARCHIVE_NAME" paperboat
+          cd ../../..
+          shasum -a 256 "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          $archiveName = "${{ matrix.archive }}".Replace("VERSION", "${{ steps.version.outputs.version }}")
+          Compress-Archive -Path paperboat.exe -DestinationPath "../../../$archiveName"
+          cd ../../..
+          (Get-FileHash -Algorithm SHA256 $archiveName).Hash.ToLower() + "  " + $archiveName | Out-File -Encoding ASCII "$archiveName.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            paperboat_*.tar.gz
+            paperboat_*.tar.gz.sha256
+            paperboat_*.zip
+            paperboat_*.zip.sha256
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) -exec mv {} release/ \;
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          files: release/*
+          generate_release_notes: true
+
+  update-homebrew:
+    name: Update Homebrew Formula
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Calculate SHA256 sums
+        id: sha
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          echo "darwin_x86_64=$(cat artifacts/x86_64-apple-darwin/paperboat_${VERSION}_Darwin_x86_64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "darwin_arm64=$(cat artifacts/aarch64-apple-darwin/paperboat_${VERSION}_Darwin_arm64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "linux_x86_64=$(cat artifacts/x86_64-unknown-linux-gnu/paperboat_${VERSION}_Linux_x86_64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "linux_arm64=$(cat artifacts/aarch64-unknown-linux-gnu/paperboat_${VERSION}_Linux_arm64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+      - name: Update Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+
+          cat > formula.rb << 'FORMULA_EOF'
+          # typed: false
+          # frozen_string_literal: true
+
+          class Paperboat < Formula
+            desc "AI agents can be used to accomplish nearly anything"
+            homepage "https://github.com/dbmrq/paperboat"
+            version "VERSION_PLACEHOLDER"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.intel?
+                url "https://github.com/dbmrq/paperboat/releases/download/vVERSION_PLACEHOLDER/paperboat_VERSION_PLACEHOLDER_Darwin_x86_64.tar.gz"
+                sha256 "SHA_DARWIN_X86_64"
+
+                def install
+                  bin.install "paperboat"
+                end
+              end
+              if Hardware::CPU.arm?
+                url "https://github.com/dbmrq/paperboat/releases/download/vVERSION_PLACEHOLDER/paperboat_VERSION_PLACEHOLDER_Darwin_arm64.tar.gz"
+                sha256 "SHA_DARWIN_ARM64"
+
+                def install
+                  bin.install "paperboat"
+                end
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
+                url "https://github.com/dbmrq/paperboat/releases/download/vVERSION_PLACEHOLDER/paperboat_VERSION_PLACEHOLDER_Linux_x86_64.tar.gz"
+                sha256 "SHA_LINUX_X86_64"
+                def install
+                  bin.install "paperboat"
+                end
+              end
+              if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
+                url "https://github.com/dbmrq/paperboat/releases/download/vVERSION_PLACEHOLDER/paperboat_VERSION_PLACEHOLDER_Linux_arm64.tar.gz"
+                sha256 "SHA_LINUX_ARM64"
+                def install
+                  bin.install "paperboat"
+                end
+              end
+            end
+
+            test do
+              system "#{bin}/paperboat", "--help"
+            end
+          end
+          FORMULA_EOF
+
+          # Remove the leading whitespace from heredoc (it was indented for YAML readability)
+          sed -i 's/^          //' formula.rb
+
+          # Replace placeholders with actual values
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" formula.rb
+          sed -i "s/SHA_DARWIN_X86_64/${{ steps.sha.outputs.darwin_x86_64 }}/g" formula.rb
+          sed -i "s/SHA_DARWIN_ARM64/${{ steps.sha.outputs.darwin_arm64 }}/g" formula.rb
+          sed -i "s/SHA_LINUX_X86_64/${{ steps.sha.outputs.linux_x86_64 }}/g" formula.rb
+          sed -i "s/SHA_LINUX_ARM64/${{ steps.sha.outputs.linux_arm64 }}/g" formula.rb
+
+          # Get the current file SHA if it exists
+          EXISTING_SHA=$(gh api repos/dbmrq/homebrew-tap/contents/Formula/paperboat.rb --jq '.sha' 2>/dev/null || echo "")
+
+          # Prepare the API call
+          CONTENT=$(base64 -w 0 formula.rb)
+
+          if [ -n "$EXISTING_SHA" ]; then
+            # Update existing file
+            gh api repos/dbmrq/homebrew-tap/contents/Formula/paperboat.rb \
+              -X PUT \
+              -f message="Update paperboat to v${VERSION}" \
+              -f content="$CONTENT" \
+              -f sha="$EXISTING_SHA" \
+              -f branch="main"
+          else
+            # Create new file
+            gh api repos/dbmrq/homebrew-tap/contents/Formula/paperboat.rb \
+              -X PUT \
+              -f message="Add paperboat v${VERSION}" \
+              -f content="$CONTENT" \
+              -f branch="main"
+          fi

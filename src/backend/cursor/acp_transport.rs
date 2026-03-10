@@ -278,14 +278,18 @@ impl AgentTransport for CursorAcpTransport {
     ///
     /// For ACP transport, this sends a tool response via the ACP protocol.
     /// Note: Currently uses recv() to handle tool responses inline.
+    ///
+    /// Tool responses are handled internally by the ACP client via its permission system.
+    /// This method exists for trait compatibility but does not need to send responses
+    /// externally since the ACP protocol manages tool execution permissions directly.
     async fn respond_to_tool(
         &mut self,
         _session_id: &str,
         _tool_use_id: &str,
         _result: ToolResult,
     ) -> Result<()> {
-        // TODO: Implement proper tool response handling
-        // For now, the ACP client handles tool responses internally via permission system
+        // ACP client handles tool responses internally via its permission system.
+        // This no-op implementation is intentional for trait compatibility.
         tracing::trace!("respond_to_tool called on ACP transport (handled internally)");
         Ok(())
     }

@@ -79,9 +79,16 @@ mod tests {
         calculate_layout(Rect::new(0, 0, 120, 40))
     }
 
+    /// Helper to create a TuiState with splash dismissed (ready for testing)
+    fn test_state() -> TuiState {
+        let mut state = TuiState::new();
+        state.splash_visible = false;
+        state
+    }
+
     #[test]
     fn test_quit_key() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         let result = handle_key_event(&mut state, key(CrosstermKeyCode::Char('q')), &layout);
         assert_eq!(result, EventResult::Quit);
@@ -89,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_tab_cycles_focus() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         assert_eq!(state.current_focus, FocusedPanel::AgentTree);
 
@@ -108,7 +115,7 @@ mod tests {
 
     #[test]
     fn test_shift_tab_cycles_focus_reverse() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         assert_eq!(state.current_focus, FocusedPanel::AgentTree);
 
@@ -121,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_question_mark_toggles_help() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         assert!(!state.help_visible);
 
@@ -134,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_esc_closes_help() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.help_visible = true;
 
@@ -145,7 +152,7 @@ mod tests {
 
     #[test]
     fn test_f_toggles_auto_follow_in_agent_tree() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.current_focus = FocusedPanel::AgentTree;
         assert!(state.auto_follow_enabled);
@@ -159,7 +166,7 @@ mod tests {
 
     #[test]
     fn test_task_list_navigation() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.current_focus = FocusedPanel::TaskList;
 
@@ -201,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_task_list_home_end() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.current_focus = FocusedPanel::TaskList;
 
@@ -228,7 +235,7 @@ mod tests {
     #[test]
     fn test_app_logs_key_events_handled() {
         // Tests that App Logs panel key events are handled without panics.
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.current_focus = FocusedPanel::AppLogs;
 
@@ -266,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_help_visible_blocks_panel_keys() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.current_focus = FocusedPanel::TaskList;
         state.help_visible = true;
@@ -296,7 +303,7 @@ mod tests {
             FocusedPanel::TaskList,
             FocusedPanel::AppLogs,
         ] {
-            let mut state = TuiState::new();
+            let mut state = test_state();
             state.current_focus = panel;
 
             let result = handle_key_event(&mut state, key(CrosstermKeyCode::Tab), &layout);
@@ -311,7 +318,7 @@ mod tests {
             FocusedPanel::TaskList,
             FocusedPanel::AppLogs,
         ] {
-            let mut state = TuiState::new();
+            let mut state = test_state();
             state.current_focus = panel;
 
             let result = handle_key_event(&mut state, key(CrosstermKeyCode::Char('q')), &layout);
@@ -341,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_mouse_click_switches_to_agent_tree() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         state.current_focus = FocusedPanel::AgentOutput;
         let layout = test_layout();
 
@@ -351,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_mouse_click_switches_to_agent_output() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
 
         handle_mouse_click(&mut state, mouse_click(50, 10), &layout);
@@ -360,7 +367,7 @@ mod tests {
 
     #[test]
     fn test_mouse_click_switches_to_task_list() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
 
         handle_mouse_click(&mut state, mouse_click(100, 10), &layout);
@@ -369,7 +376,7 @@ mod tests {
 
     #[test]
     fn test_mouse_click_switches_to_app_logs() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
 
         handle_mouse_click(&mut state, mouse_click(60, 30), &layout);
@@ -378,7 +385,7 @@ mod tests {
 
     #[test]
     fn test_mouse_click_on_status_bar_no_change() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         state.current_focus = FocusedPanel::AgentTree;
         let layout = test_layout();
 
@@ -388,7 +395,7 @@ mod tests {
 
     #[test]
     fn test_mouse_click_ignored_when_help_visible() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         state.current_focus = FocusedPanel::AgentTree;
         state.help_visible = true;
         let layout = test_layout();
@@ -440,7 +447,7 @@ mod tests {
 
     #[test]
     fn test_s_toggles_settings() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         assert!(!state.settings_visible);
 
@@ -453,7 +460,7 @@ mod tests {
 
     #[test]
     fn test_esc_closes_settings() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.settings_visible = true;
 
@@ -464,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_settings_blocks_quit() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.settings_visible = true;
 
@@ -478,7 +485,7 @@ mod tests {
     fn test_settings_tab_switches_agent_type() {
         use crate::tui::widgets::SelectedAgentType;
 
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.settings_visible = true;
         assert_eq!(
@@ -509,7 +516,7 @@ mod tests {
     fn test_settings_left_right_switches_agent_type() {
         use crate::tui::widgets::SelectedAgentType;
 
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.settings_visible = true;
         assert_eq!(
@@ -548,7 +555,7 @@ mod tests {
     fn test_settings_up_down_navigates_models() {
         use crate::models::ModelTier;
 
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.settings_visible = true;
 
@@ -571,7 +578,7 @@ mod tests {
     fn test_settings_enter_selects_model() {
         use crate::models::ModelTier;
 
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.settings_visible = true;
 
@@ -590,7 +597,7 @@ mod tests {
 
     #[test]
     fn test_settings_visible_blocks_panel_keys() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
         state.settings_visible = true;
         state.current_focus = FocusedPanel::TaskList;
@@ -636,7 +643,7 @@ mod tests {
 
     #[test]
     fn test_mouse_scroll_agent_output() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
 
         // Start at scroll position 0
@@ -654,7 +661,7 @@ mod tests {
 
     #[test]
     fn test_mouse_scroll_task_list_moves_selection() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
 
         // Add some tasks
@@ -683,7 +690,7 @@ mod tests {
 
     #[test]
     fn test_mouse_scroll_ignored_when_help_visible() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         state.help_visible = true;
         let layout = test_layout();
 
@@ -701,7 +708,7 @@ mod tests {
 
     #[test]
     fn test_mouse_scroll_ignored_when_settings_visible() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         state.settings_visible = true;
         let layout = test_layout();
 
@@ -719,7 +726,7 @@ mod tests {
 
     #[test]
     fn test_mouse_scroll_on_status_bar_no_action() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
 
         // Set a known scroll position for agent output
@@ -742,7 +749,7 @@ mod tests {
 
     #[test]
     fn test_mouse_click_task_list_selects_task() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
 
         // Add some tasks
@@ -774,7 +781,7 @@ mod tests {
 
     #[test]
     fn test_mouse_click_task_list_first_task() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
 
         // Add tasks
@@ -808,7 +815,7 @@ mod tests {
 
     #[test]
     fn test_mouse_click_task_list_out_of_bounds_row_ignored() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
 
         // Add only 2 tasks
@@ -847,7 +854,7 @@ mod tests {
 
     #[test]
     fn test_mouse_click_task_list_empty_list() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
 
         // No tasks added - list is empty
@@ -871,7 +878,7 @@ mod tests {
 
     #[test]
     fn test_mouse_click_task_list_on_border_no_select() {
-        let mut state = TuiState::new();
+        let mut state = test_state();
         let layout = test_layout();
 
         // Add a task

@@ -505,10 +505,15 @@ pub async fn discover_available_backends() -> Vec<BackendKind> {
     available
 }
 
-/// Prompt the user to select a backend interactively.
+/// Prompt the user to select a backend interactively with timeout.
 ///
-/// Displays available backends and waits for user input.
-/// Returns `None` if stdin is not a terminal or if there's an error reading input.
+/// Displays available backends and waits for user input with a 10-second timeout.
+/// If no input is received within the timeout, returns the first available backend.
+/// Returns `None` if stdin is not a terminal.
+///
+/// # Ctrl+C Handling
+///
+/// If the user presses Ctrl+C during the prompt, this function will exit the process.
 ///
 /// # Arguments
 ///
@@ -519,6 +524,8 @@ pub async fn discover_available_backends() -> Vec<BackendKind> {
 /// The selected `BackendKind`, or `None` if selection failed.
 pub fn prompt_backend_selection(available: &[BackendKind]) -> Option<BackendKind> {
     use std::io::{self, BufRead, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     // Don't prompt if stdin is not a terminal
     if !std::io::IsTerminal::is_terminal(&io::stdin()) {
@@ -536,25 +543,86 @@ pub fn prompt_backend_selection(available: &[BackendKind]) -> Option<BackendKind
     }
 
     println!();
-    print!("Select a backend [1-{}]: ", available.len());
+    print!(
+        "Select a backend [1-{}] (10s timeout, default=1): ",
+        available.len()
+    );
     io::stdout().flush().ok()?;
 
-    let stdin = io::stdin();
-    let mut line = String::new();
-    stdin.lock().read_line(&mut line).ok()?;
+    // Use a channel with timeout for reading input
+    let (tx, rx) = mpsc::channel();
+    let stdin_thread = std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut line = String::new();
+        let read_result = stdin.lock().read_line(&mut line);
+        match read_result {
+            Ok(0) => {
+                // EOF (Ctrl+D on Unix)
+                let _ = tx.send(None);
+            }
+            Ok(_) => {
+                let _ = tx.send(Some(line));
+            }
+            Err(_) => {
+                // Read error (possibly Ctrl+C)
+                let _ = tx.send(None);
+            }
+        }
+    });
 
-    let selection: usize = line.trim().parse().ok()?;
-    if selection >= 1 && selection <= available.len() {
-        let selected = available[selection - 1];
-        println!("✓ Selected: {}\n", selected.as_str());
-        Some(selected)
-    } else {
-        eprintln!(
-            "Invalid selection. Using default: {}",
-            available[0].as_str()
-        );
-        Some(available[0])
-    }
+    // Wait for input with a 10-second timeout
+    let result = match rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(Some(line)) => {
+            // Check if line is empty (just Enter pressed)
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                // Default to first option
+                println!();
+                println!("✓ Selected: {} (default)\n", available[0].as_str());
+                Some(available[0])
+            } else {
+                // Try to parse the selection
+                match trimmed.parse::<usize>() {
+                    Ok(selection) if selection >= 1 && selection <= available.len() => {
+                        let selected = available[selection - 1];
+                        println!("✓ Selected: {}\n", selected.as_str());
+                        Some(selected)
+                    }
+                    _ => {
+                        eprintln!(
+                            "Invalid selection. Using default: {}",
+                            available[0].as_str()
+                        );
+                        Some(available[0])
+                    }
+                }
+            }
+        }
+        Ok(None) => {
+            // EOF or error - user pressed Ctrl+C or Ctrl+D
+            println!();
+            eprintln!("\nCancelled.");
+            std::process::exit(130); // Standard exit code for Ctrl+C
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            // Timeout - use default
+            println!();
+            println!("⏱ Timeout. Using default: {}\n", available[0].as_str());
+            Some(available[0])
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            // Thread panicked or disconnected - use default
+            println!();
+            println!("✓ Using default: {}\n", available[0].as_str());
+            Some(available[0])
+        }
+    };
+
+    // Wait for the stdin thread to finish (it may be blocked on stdin)
+    // We don't want to leave dangling threads, but also don't want to block forever
+    let _ = stdin_thread.join();
+
+    result
 }
 
 #[cfg(test)]

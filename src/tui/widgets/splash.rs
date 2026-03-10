@@ -59,6 +59,7 @@ const BASE_COLOR: Color = Color::DarkGray;
 /// * `frame` - The ratatui frame to render to
 /// * `area` - The full terminal area
 /// * `animation_frame` - Current animation frame for timing the ripple
+#[allow(clippy::cast_possible_truncation)] // ASCII art dimensions always fit in u16
 pub fn render_splash_screen(frame: &mut Frame, area: Rect, animation_frame: u32) {
     let lines: Vec<&str> = PAPERBOAT_ART.lines().collect();
     let art_height = lines.len() as u16;
@@ -113,6 +114,9 @@ pub fn render_splash_screen(frame: &mut Frame, area: Rect, animation_frame: u32)
 ///
 /// Creates a diagonal wave pattern that moves across the art,
 /// with smooth color transitions between warm tones.
+#[allow(clippy::cast_precision_loss)] // Precision loss acceptable for animation math
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Palette index always in range
+#[allow(clippy::suboptimal_flops, clippy::manual_midpoint)] // Readable animation math preferred
 fn calculate_ripple_color(row: usize, col: usize, animation_frame: u32) -> Color {
     // Create diagonal wave pattern
     // The wave moves diagonally from top-left to bottom-right
@@ -138,4 +142,3 @@ fn calculate_ripple_color(row: usize, col: usize, animation_frame: u32) -> Color
         BASE_COLOR
     }
 }
-
