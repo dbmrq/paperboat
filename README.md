@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/dbmrq/paperboat/actions/workflows/ci.yml/badge.svg)](https://github.com/dbmrq/paperboat/actions/workflows/ci.yml)
 [![Security](https://github.com/dbmrq/paperboat/actions/workflows/security.yml/badge.svg)](https://github.com/dbmrq/paperboat/actions/workflows/security.yml)
-[![codecov](https://codecov.io/gh/dbmrq/paperboat/branch/main/graph/badge.svg)](https://codecov.io/gh/dbmrq/paperboat)
+[![codecov](https://codecov.io/gh/dbmrq/paperboat/graph/badge.svg?token=O2TCUWQVJ6)](https://codecov.io/gh/dbmrq/paperboat)
 
 **Autonomous AI agents that break down complex tasks and accomplish nearly anything.**
 
