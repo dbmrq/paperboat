@@ -85,7 +85,10 @@ impl App {
     /// Spawn an implementer agent (convenience wrapper for `spawn_agent_with_resolved_spec`).
     /// Returns (`session_id`, `model`, `prompt`) so the model and prompt can be logged.
     #[tracing::instrument(skip(self), fields(agent_type = "implementer"))]
-    pub(crate) async fn spawn_implementer(&mut self, task: &str) -> Result<(String, String, String)> {
+    pub(crate) async fn spawn_implementer(
+        &mut self,
+        task: &str,
+    ) -> Result<(String, String, String)> {
         let spec = ResolvedAgentSpec {
             role: "implementer".to_string(),
             task: task.to_string(),
@@ -240,7 +243,13 @@ impl App {
         &mut self,
         spec: &ResolvedAgentSpec,
         context: &str,
-    ) -> Result<(String, String, String, AgentSocketHandle, crate::acp::AcpClient)> {
+    ) -> Result<(
+        String,
+        String,
+        String,
+        AgentSocketHandle,
+        crate::acp::AcpClient,
+    )> {
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
         // Get the path to the current binary
@@ -679,7 +688,7 @@ impl App {
     /// Resolve the implementer model configuration to an actual model string.
     ///
     /// This method:
-    /// 1. Resolves the fallback chain to a tier using available_tiers
+    /// 1. Resolves the fallback chain to a tier using `available_tiers`
     /// 2. If the tier is Auto, resolves it based on complexity
     /// 3. Uses the backend to convert the tier to the actual model ID string
     fn resolve_implementer_model(

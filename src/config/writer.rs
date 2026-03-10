@@ -47,7 +47,7 @@ fn ensure_config_dir_at(dir: &Path) -> Result<PathBuf> {
 ///
 /// With the tier-based system, this is just the tier's string representation.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-fn tier_name(tier: ModelTier) -> &'static str {
+const fn tier_name(tier: ModelTier) -> &'static str {
     tier.as_str()
 }
 
@@ -93,7 +93,7 @@ fn save_agent_config_to_dir(config_dir: &Path, agent_type: &str, tier: ModelTier
     let family = tier_name(tier);
 
     // Generate the new content
-    let content = generate_config_content_for_dir(&config_dir, agent_type, &family)?;
+    let content = generate_config_content_for_dir(&config_dir, agent_type, family)?;
 
     // Write to temp file first (atomic write)
     let mut temp_file = fs::File::create(&temp_path)

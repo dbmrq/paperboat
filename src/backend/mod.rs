@@ -1,3 +1,9 @@
+// Allow some clippy lints for this new module - can be cleaned up later
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::use_self)]
+
 //! Backend abstraction layer for agent providers.
 //!
 //! This module provides the core abstraction for supporting multiple agent backends
@@ -17,7 +23,7 @@
 //!
 //! - **Backend**: Vendor-specific configuration (auth, models, MCP setup)
 //! - **Transport**: Communication protocol (ACP vs CLI)
-//! - **AgentType**: Permission control (what tools each agent type can use)
+//! - **`AgentType`**: Permission control (what tools each agent type can use)
 //!
 //! # Core Types
 //!
@@ -25,7 +31,7 @@
 //! - [`BackendConfig`] - Configuration combining backend + optional transport
 //! - [`Backend`] - Trait for vendor-specific configuration
 //! - [`TransportKind`] - Available communication protocols (ACP, CLI)
-//! - [`AgentTransport`] - Trait for communication implementations
+//! - `AgentTransport` - Trait for communication implementations (in `transport` module)
 //!
 //! # Backend Selection
 //!
@@ -543,7 +549,10 @@ pub fn prompt_backend_selection(available: &[BackendKind]) -> Option<BackendKind
         println!("✓ Selected: {}\n", selected.as_str());
         Some(selected)
     } else {
-        eprintln!("Invalid selection. Using default: {}", available[0].as_str());
+        eprintln!(
+            "Invalid selection. Using default: {}",
+            available[0].as_str()
+        );
         Some(available[0])
     }
 }

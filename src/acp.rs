@@ -39,11 +39,11 @@ pub enum SessionMode {
 
 impl SessionMode {
     /// Convert to the string value expected by ACP.
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            SessionMode::Agent => "agent",
-            SessionMode::Plan => "plan",
-            SessionMode::Ask => "ask",
+            Self::Agent => "agent",
+            Self::Plan => "plan",
+            Self::Ask => "ask",
         }
     }
 }

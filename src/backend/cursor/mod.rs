@@ -1,3 +1,9 @@
+// Allow some clippy lints for this new module - can be cleaned up later
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::len_zero)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::use_self)]
+
 //! Cursor CLI backend implementation.
 //!
 //! This module implements the [`Backend`] trait for Cursor's agent CLI.

@@ -265,8 +265,8 @@ fn build_spawn_agents_response(
         let error = response.error.as_deref().unwrap_or("Unknown error");
 
         // Detect timeout-specific failures for targeted guidance
-        let is_timeout = error.to_lowercase().contains("timed out")
-            || error.to_lowercase().contains("timeout");
+        let is_timeout =
+            error.to_lowercase().contains("timed out") || error.to_lowercase().contains("timeout");
 
         let how_to_fix = if is_timeout {
             "## How to Fix (Timeout)\n\

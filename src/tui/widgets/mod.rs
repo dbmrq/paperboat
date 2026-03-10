@@ -10,12 +10,14 @@
 //! - [`render_help_overlay`] - Modal help overlay with keyboard shortcuts
 //! - [`render_settings_overlay`] - Modal settings overlay for model configuration
 //! - [`render_app_logs`] - Application logs with tui-logger filtering and controls
+//! - [`render_splash_screen`] - Animated splash screen with paperboat ASCII art
 
 mod agent_output;
 mod agent_tree;
 mod app_logs;
 mod help;
 mod settings;
+mod splash;
 mod status_bar;
 mod task_detail;
 mod task_list;
@@ -28,6 +30,7 @@ pub use app_logs::{create_app_logs_state, render_app_logs};
 pub use help::render_help_overlay;
 #[allow(unused_imports)] // Part of public API for widget extensibility
 pub use settings::{render_settings_overlay, SelectedAgentType, SettingsState};
+pub use splash::render_splash_screen;
 pub use status_bar::render_status_bar;
 pub use task_detail::{handle_task_detail_key, render_task_detail};
 pub use task_list::render_task_list;

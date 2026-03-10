@@ -42,7 +42,10 @@ impl App {
     /// Spawn an orchestrator agent.
     /// Returns (`session_id`, `model`, `full_prompt`) so the model and prompt can be logged.
     #[tracing::instrument(skip(self, prompt), fields(agent_type = "orchestrator", session_id))]
-    pub(crate) async fn spawn_orchestrator(&mut self, prompt: &str) -> Result<(String, String, String)> {
+    pub(crate) async fn spawn_orchestrator(
+        &mut self,
+        prompt: &str,
+    ) -> Result<(String, String, String)> {
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
         // Get the path to the current binary
@@ -617,11 +620,11 @@ impl App {
         }
     }
 
-    /// Resolve the task_id for an agent spec, with inference support.
+    /// Resolve the `task_id` for an agent spec, with inference support.
     ///
     /// If `task_id` is provided, uses it directly (with validation).
-    /// If not, tries to infer the task_id from the task description by matching
-    /// against existing tasks in the TaskManager.
+    /// If not, tries to infer the `task_id` from the task description by matching
+    /// against existing tasks in the `TaskManager`.
     ///
     /// This mirrors the behavior in concurrent mode (`resolve_agent_spec`).
     async fn resolve_task_id_for_agent(&self, spec: &AgentSpec) -> Option<String> {

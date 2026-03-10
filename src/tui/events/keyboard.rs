@@ -51,6 +51,12 @@ pub fn handle_key_event(
 /// Returns `Some(EventResult)` if the key was handled, `None` if not a global key.
 #[allow(clippy::missing_const_for_fn)] // Uses non-const match expressions
 fn handle_global_key(state: &mut TuiState, key: &CrosstermKeyEvent) -> Option<EventResult> {
+    // Handle splash screen dismissal first (any key dismisses it)
+    if state.splash_visible {
+        state.dismiss_splash();
+        return Some(EventResult::Continue);
+    }
+
     // Handle settings overlay keys first (modal)
     if state.settings_visible {
         return handle_settings_key(state, key);

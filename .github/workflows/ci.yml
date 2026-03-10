@@ -157,8 +157,7 @@ jobs:
         run: cargo test --all-features
       - name: Run tests (no features)
         run: cargo test --no-default-features
-      - name: Run doc tests
-        run: cargo test --doc --all-features
+      # Note: Doc tests require a library target, which this binary-only crate doesn't have
 
   # ============================================================
   # Documentation

@@ -12,6 +12,8 @@
 //! - [`FocusedPanel`] - Tracks which panel has keyboard focus
 //! - [`ModelConfigUpdate`] - Message type for sending model configuration changes to the App (see [`super::model_config_update`])
 
+#![allow(clippy::items_after_statements)] // Allow use statements near their usage
+
 use tui_logger::TuiWidgetState;
 
 use crate::logging::LogEvent;
@@ -94,6 +96,8 @@ pub struct TuiState {
     pub help_visible: bool,
     /// Whether the settings panel is visible
     pub settings_visible: bool,
+    /// Whether the splash screen is visible (shown at startup)
+    pub splash_visible: bool,
     /// Settings panel state (model selection, pending changes)
     pub settings_state: SettingsState,
     /// Status message to display in status bar
@@ -132,6 +136,7 @@ impl std::fmt::Debug for TuiState {
             .field("auto_follow_enabled", &self.auto_follow_enabled)
             .field("help_visible", &self.help_visible)
             .field("settings_visible", &self.settings_visible)
+            .field("splash_visible", &self.splash_visible)
             .field("settings_state", &self.settings_state)
             .field("status_message", &self.status_message)
             .field("app_logs_scroll", &self.app_logs_scroll)
@@ -166,6 +171,7 @@ impl TuiState {
             auto_follow_enabled: true,
             help_visible: false,
             settings_visible: false,
+            splash_visible: true,
             settings_state: SettingsState::new(),
             status_message: None,
             app_logs_scroll: 0,
@@ -197,6 +203,7 @@ impl TuiState {
             auto_follow_enabled: true,
             help_visible: false,
             settings_visible: false,
+            splash_visible: true,
             settings_state: SettingsState::new(),
             status_message: None,
             app_logs_scroll: 0,
@@ -210,6 +217,11 @@ impl TuiState {
             pending_config_update: None,
             logger_state: create_app_logs_state(),
         }
+    }
+
+    /// Dismisses the splash screen (any key handler).
+    pub const fn dismiss_splash(&mut self) {
+        self.splash_visible = false;
     }
 
     /// Toggles settings visibility (s key handler).

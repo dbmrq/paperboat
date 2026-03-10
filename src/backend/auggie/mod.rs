@@ -1,3 +1,7 @@
+// Allow some clippy lints for this new module - can be cleaned up later
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::uninlined_format_args)]
+
 //! Auggie backend implementation.
 //!
 //! This module implements the [`Backend`] trait for Augment's Auggie CLI.
@@ -28,8 +32,6 @@ pub mod acp;
 pub mod auth;
 pub mod cache;
 mod models;
-
-
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;

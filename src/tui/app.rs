@@ -26,7 +26,8 @@ use super::layout::calculate_layout;
 use super::state::{FocusedPanel, ModelConfigUpdate, TuiState};
 use super::widgets::{
     render_agent_output, render_agent_tree, render_app_logs, render_help_overlay,
-    render_settings_overlay, render_status_bar, render_task_detail, render_task_list,
+    render_settings_overlay, render_splash_screen, render_status_bar, render_task_detail,
+    render_task_list,
 };
 use crate::logging::LogEvent;
 use crate::models::ModelConfig;
@@ -369,6 +370,7 @@ fn run_event_loop(
 /// Renders a complete UI frame with all widgets.
 ///
 /// This function orchestrates rendering of all panels:
+/// - Splash screen (if visible, replaces everything)
 /// - Agent tree (left)
 /// - Agent output (center)
 /// - Task list (right)
@@ -377,6 +379,17 @@ fn run_event_loop(
 /// - Help overlay (if visible)
 fn render_ui_frame(frame: &mut Frame, state: &mut TuiState) {
     let area = frame.area();
+
+    // Show splash screen if visible (replaces the entire UI)
+    // Auto-dismiss after 5 seconds (300 frames at 60fps)
+    if state.splash_visible {
+        if state.animation_frame >= 300 {
+            state.dismiss_splash();
+        } else {
+            render_splash_screen(frame, area, state.animation_frame);
+            return;
+        }
+    }
 
     // Calculate layout for all panels
     let layout = calculate_layout(area);

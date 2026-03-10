@@ -98,7 +98,10 @@ pub fn register_paperboat_mcp(socket_path: &str) -> Result<()> {
     // Register an MCP server for each agent type
     for agent_type in AGENT_TYPES {
         let mut env = HashMap::new();
-        env.insert("PAPERBOAT_AGENT_TYPE".to_string(), (*agent_type).to_string());
+        env.insert(
+            "PAPERBOAT_AGENT_TYPE".to_string(),
+            (*agent_type).to_string(),
+        );
 
         let mcp_config = McpServerConfig {
             command: binary_path.clone(),
@@ -147,7 +150,11 @@ pub fn unregister_paperboat_mcp() -> Result<()> {
     // Remove all paperboat entries
     let mut removed = false;
     for agent_type in AGENT_TYPES {
-        if config.mcp_servers.remove(&mcp_server_name(agent_type)).is_some() {
+        if config
+            .mcp_servers
+            .remove(&mcp_server_name(agent_type))
+            .is_some()
+        {
             removed = true;
         }
     }
@@ -238,7 +245,11 @@ pub fn enable_mcp_for_agent(agent_type: &str, socket_path: &str) -> Result<()> {
         tracing::warn!("Failed to enable {}: {}", server_name, stderr);
     }
 
-    tracing::debug!("✅ Configured MCP for {} agent: {}", agent_type, server_name);
+    tracing::debug!(
+        "✅ Configured MCP for {} agent: {}",
+        agent_type,
+        server_name
+    );
     Ok(())
 }
 

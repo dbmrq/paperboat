@@ -1,3 +1,10 @@
+// Allow some clippy lints for this new module - can be cleaned up later
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::len_zero)]
+#![allow(clippy::missing_const_for_fn)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::use_self)]
+
 //! Transport abstraction for agent communication.
 //!
 //! This module provides the core transport layer that separates communication

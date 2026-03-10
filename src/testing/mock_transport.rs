@@ -7,7 +7,9 @@
 //! This wraps and delegates to `MockAcpClient` to preserve backward compatibility
 //! while providing the new `AgentTransport` interface.
 
-use crate::acp::{AcpClientTrait, SessionMode};
+use crate::acp::AcpClientTrait;
+#[cfg(test)]
+use crate::acp::SessionMode;
 use crate::app::ToolMessage;
 use crate::backend::transport::{
     AgentTransport, SessionConfig, SessionInfo, SessionUpdate, ToolResult,
@@ -30,6 +32,7 @@ pub struct MockTransport {
     /// Sender for session updates
     update_tx: mpsc::Sender<SessionUpdate>,
     /// Receiver for session updates (taken once)
+    #[allow(dead_code)]
     update_rx: Option<mpsc::Receiver<SessionUpdate>>,
     /// Current session ID
     current_session_id: Option<String>,
@@ -77,7 +80,7 @@ impl MockTransport {
         self.inner.is_exhausted()
     }
 
-    /// Convert ACP notification JSON to SessionUpdate.
+    /// Convert ACP notification JSON to `SessionUpdate`.
     fn convert_to_session_update(
         notification: &Value,
         default_session_id: &str,
@@ -186,8 +189,8 @@ impl AgentTransport for MockTransport {
     /// Receive the next raw notification (legacy compatibility).
     ///
     /// This method supports the legacy polling pattern used in App code.
-    /// It gets the next notification from the inner MockAcpClient and optionally
-    /// converts it to a SessionUpdate that's sent to the update channel.
+    /// It gets the next notification from the inner `MockAcpClient` and optionally
+    /// converts it to a `SessionUpdate` that's sent to the update channel.
     async fn recv(&mut self) -> Result<Value> {
         let notification = self.inner.recv().await?;
 

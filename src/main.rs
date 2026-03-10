@@ -74,13 +74,13 @@ fn parse_args(args: &[String]) -> CliArgs {
         .iter()
         .position(|a| a == "--backend")
         .and_then(|i| args.get(i + 1))
-        .and_then(|backend_str| {
+        .map(|backend_str| {
             match BackendConfig::parse(backend_str) {
-                Ok(config) => Some(config),
+                Ok(config) => config,
                 Err(e) => {
                     // Print error and exit immediately for invalid backend config
                     eprintln!(
-                        "❌ Invalid --backend value '{}': {}\n\n\
+                        "❌ Invalid --backend value '{backend_str}': {e}\n\n\
                         Valid backends:\n  \
                           auggie        Augment's Auggie CLI (default transport: acp)\n  \
                           cursor        Cursor's agent CLI (default transport: cli)\n\n\
@@ -92,8 +92,7 @@ fn parse_args(args: &[String]) -> CliArgs {
                           --backend cursor\n  \
                           --backend cursor:cli\n  \
                           --backend cursor:acp\n  \
-                          --backend auggie",
-                        backend_str, e
+                          --backend auggie"
                     );
                     std::process::exit(1);
                 }
@@ -415,7 +414,10 @@ async fn main() -> Result<()> {
                 tracing::info!(
                     "📋 Found {} available backends: {:?}",
                     available.len(),
-                    available.iter().map(|k| k.as_str()).collect::<Vec<_>>()
+                    available
+                        .iter()
+                        .map(backend::BackendKind::as_str)
+                        .collect::<Vec<_>>()
                 );
 
                 if let Some(kind) = prompt_backend_selection(&available) {
@@ -471,7 +473,7 @@ async fn main() -> Result<()> {
         "📋 Available tiers: {:?}",
         available_tiers
             .iter()
-            .map(|t| t.as_str())
+            .map(models::ModelTier::as_str)
             .collect::<Vec<_>>()
     );
 

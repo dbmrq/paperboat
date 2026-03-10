@@ -551,6 +551,7 @@ impl App {
     ///
     /// If any tasks were suggested by agents (via `add_tasks` in their `complete()` call),
     /// they are included in the summary so the orchestrator knows to address them.
+    #[allow(clippy::items_after_statements)] // use statement close to usage
     pub(crate) async fn build_summary_with_notes_and_suggested_tasks(
         &self,
         summaries: Vec<String>,
@@ -571,16 +572,15 @@ impl App {
             combined.push_str("The following tasks were suggested by completed agents and have been added to your task list. ");
             combined.push_str("You MUST address them (execute with spawn_agents or skip with skip_tasks) before calling complete():\n\n");
 
+            use std::fmt::Write;
             for task_id in &suggested_task_ids {
                 if let Some(task) = tm.get(task_id) {
-                    use std::fmt::Write;
                     let _ = writeln!(
                         combined,
                         "- **[{task_id}] {}**: {}",
                         task.name, task.description
                     );
                 } else {
-                    use std::fmt::Write;
                     let _ = writeln!(combined, "- **[{task_id}]** (task details not found)");
                 }
             }

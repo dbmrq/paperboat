@@ -232,7 +232,7 @@ use crate::backend::BackendConfig;
 /// - `"cursor:acp"` - Cursor with ACP transport
 /// - `"auggie"` - Auggie with default transport (ACP)
 ///
-/// See [`BackendConfig`](crate::backend::BackendConfig) for the parsed runtime type.
+/// See [`BackendConfig`] for the parsed runtime type.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct FileBackendConfig {
     /// Backend to use with optional transport (e.g., "auggie", "cursor", "cursor:cli").

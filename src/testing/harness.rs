@@ -8,7 +8,7 @@ use super::interceptor::MockToolInterceptor;
 use super::{MockBackend, MockScenario, MockTransport};
 use crate::app::{App, ToolMessage};
 use crate::logging::RunLogManager;
-use crate::models::ModelConfig;
+use crate::models::{ModelConfig, ModelTier};
 use crate::tasks::Task;
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -143,7 +143,6 @@ impl TestHarness {
 
         // Create App with mock transports and injected tool channel
         // Use the mock backend's available tiers for the model config
-        use crate::models::ModelTier;
         let available_tiers = [ModelTier::Sonnet, ModelTier::Opus, ModelTier::Haiku]
             .into_iter()
             .collect();

@@ -46,7 +46,7 @@ pub struct AuggieAcpTransport {
     update_rx: Option<mpsc::Receiver<SessionUpdate>>,
     /// Background task converting notifications to session updates
     converter_task: Option<JoinHandle<()>>,
-    /// Current session ID (set after create_session)
+    /// Current session ID (set after `create_session`)
     current_session_id: Option<String>,
 }
 
@@ -74,7 +74,7 @@ impl AuggieAcpTransport {
         })
     }
 
-    /// Start the background task that converts ACP notifications to SessionUpdates.
+    /// Start the background task that converts ACP notifications to `SessionUpdate`s.
     fn start_notification_converter(&mut self) {
         // Take the notification receiver from the client
         let Some(mut notification_rx) = self.client.take_notification_rx() else {
@@ -99,7 +99,7 @@ impl AuggieAcpTransport {
     }
 }
 
-/// Convert an ACP notification to a SessionUpdate.
+/// Convert an ACP notification to a `SessionUpdate`.
 ///
 /// ACP notifications have the format:
 /// ```json
@@ -157,7 +157,7 @@ fn convert_notification_to_update(
             let content = params.get("content")?.as_str()?.to_string();
             let is_success = params
                 .get("isSuccess")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true);
             Some(SessionUpdate::ToolResult {
                 session_id,
@@ -173,7 +173,7 @@ fn convert_notification_to_update(
                 .map(String::from);
             let success = params
                 .get("success")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true);
             Some(SessionUpdate::Completion {
                 session_id,

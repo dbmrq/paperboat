@@ -43,15 +43,15 @@ pub enum ModelTier {
     Sonnet,
     /// Anthropic Haiku - fast and cheap (Auggie only)
     Haiku,
-    /// OpenAI GPT Codex - coding-optimized
+    /// GPT Codex - coding-optimized model
     Codex,
-    /// OpenAI GPT Codex Mini - cheaper coding model
+    /// GPT Codex Mini - cheaper coding model
     CodexMini,
     /// Google Gemini Pro
     Gemini,
     /// Google Gemini Flash - faster/cheaper
     GeminiFlash,
-    /// xAI Grok
+    /// Grok by xAI
     Grok,
     /// Cursor Composer - Cursor's custom model
     Composer,
@@ -103,6 +103,7 @@ impl ModelTier {
     /// - Medium → Sonnet (balanced)
     /// - Complex → Opus (most capable)
     /// - None → Sonnet (safe default)
+    #[allow(clippy::missing_const_for_fn)] // const fn not possible with `use` statement
     pub fn resolve_auto(&self, complexity: Option<crate::mcp_server::ModelComplexity>) -> Self {
         use crate::mcp_server::ModelComplexity;
 
@@ -112,9 +113,8 @@ impl ModelTier {
 
         match complexity {
             Some(ModelComplexity::Simple) => Self::Haiku,
-            Some(ModelComplexity::Medium) => Self::Sonnet,
+            Some(ModelComplexity::Medium) | None => Self::Sonnet,
             Some(ModelComplexity::Complex) => Self::Opus,
-            None => Self::Sonnet,
         }
     }
 }
@@ -155,6 +155,7 @@ pub struct ModelFallbackChain(pub Vec<ModelTier>);
 
 impl ModelFallbackChain {
     /// Create a new fallback chain from a list of tiers.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn new(tiers: Vec<ModelTier>) -> Self {
         Self(tiers)
     }
@@ -188,6 +189,7 @@ impl ModelFallbackChain {
     }
 
     /// Get the first tier in the chain (for display purposes).
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     pub fn primary(&self) -> Option<ModelTier> {
         self.0.first().copied()
     }
@@ -401,7 +403,7 @@ pub fn parse_auggie_model_list(output: &str) -> Result<HashSet<ModelTier>> {
     Ok(tiers)
 }
 
-/// Extract a ModelTier from an Auggie model ID string.
+/// Extract a `ModelTier` from an Auggie model ID string.
 ///
 /// Examples:
 /// - "haiku4.5" -> Haiku

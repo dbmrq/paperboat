@@ -64,24 +64,14 @@ use crate::testing::MockAcpClient;
 ///     .models(vec![...])
 ///     .build();
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MockBackend {
     /// Optional custom name for the backend (defaults to "mock")
     name: Option<&'static str>,
     /// Whether authentication should fail
     auth_fails: bool,
-    /// Custom tiers to return from available_tiers()
+    /// Custom tiers to return from `available_tiers()`
     custom_tiers: Option<HashSet<ModelTier>>,
-}
-
-impl Default for MockBackend {
-    fn default() -> Self {
-        Self {
-            name: None,
-            auth_fails: false,
-            custom_tiers: None,
-        }
-    }
 }
 
 impl MockBackend {
@@ -127,14 +117,14 @@ pub struct MockBackendBuilder {
 impl MockBackendBuilder {
     /// Set a custom name for the backend.
     #[must_use]
-    pub fn name(mut self, name: &'static str) -> Self {
+    pub const fn name(mut self, name: &'static str) -> Self {
         self.name = Some(name);
         self
     }
 
     /// Configure whether authentication should fail.
     #[must_use]
-    pub fn auth_fails(mut self, fails: bool) -> Self {
+    pub const fn auth_fails(mut self, fails: bool) -> Self {
         self.auth_fails = fails;
         self
     }
