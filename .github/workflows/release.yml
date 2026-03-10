@@ -37,9 +37,7 @@ jobs:
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             archive: paperboat_VERSION_Linux_arm64.tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: paperboat_VERSION_Windows_x86_64.zip
+          # Windows is not supported - paperboat uses Unix sockets for IPC
 
     steps:
       - uses: actions/checkout@v4
@@ -72,8 +70,7 @@ jobs:
           fi
           cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+      - name: Package
         shell: bash
         run: |
           cd target/${{ matrix.target }}/release
@@ -83,16 +80,6 @@ jobs:
           cd ../../..
           shasum -a 256 "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
 
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cd target/${{ matrix.target }}/release
-          $archiveName = "${{ matrix.archive }}".Replace("VERSION", "${{ steps.version.outputs.version }}")
-          Compress-Archive -Path paperboat.exe -DestinationPath "../../../$archiveName"
-          cd ../../..
-          (Get-FileHash -Algorithm SHA256 $archiveName).Hash.ToLower() + "  " + $archiveName | Out-File -Encoding ASCII "$archiveName.sha256"
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -100,8 +87,6 @@ jobs:
           path: |
             paperboat_*.tar.gz
             paperboat_*.tar.gz.sha256
-            paperboat_*.zip
-            paperboat_*.zip.sha256
           if-no-files-found: error
 
   release:
