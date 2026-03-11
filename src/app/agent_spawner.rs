@@ -79,7 +79,7 @@ impl AgentSession {
 /// initializing it, and creating a session. It tries each model in the chain,
 /// with automatic retry for transient errors.
 ///
-/// Returns (Box<dyn AgentTransport>, `SessionInfo`, `actual_model_used`) on success.
+/// Returns `(Box<dyn AgentTransport>, SessionInfo, actual_model_used)` on success.
 async fn spawn_transport_with_retry(
     backend: &dyn Backend,
     transport_kind: TransportKind,

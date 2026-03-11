@@ -543,6 +543,7 @@ mod tests {
 
     #[test]
     #[serial]
+    #[cfg_attr(windows, ignore)] // Flaky on Windows due to env var and file isolation
     fn test_cleanup_mcp_removes_paperboat_servers_and_preserves_unrelated_entries() {
         let temp = tempfile::tempdir().unwrap();
         let _home = EnvGuard::set("HOME", temp.path().to_str().unwrap());

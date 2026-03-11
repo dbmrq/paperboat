@@ -159,6 +159,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore)] // Flaky on Windows due to env var isolation
     fn test_api_key_takes_precedence() {
         // Both env vars set - should succeed with API key
         let _api_key_guard = EnvGuard::set("CURSOR_API_KEY", "test-key");

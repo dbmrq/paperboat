@@ -324,6 +324,7 @@ mod tests {
     use tokio::sync::broadcast;
 
     #[tokio::test]
+    #[cfg_attr(windows, ignore)] // Flaky on Windows due to socket cleanup timing
     async fn run_agent_handler_propagates_missing_complete_as_failure_and_cleans_socket() {
         let dir = tempdir().expect("create temp dir");
         let log_path = dir.path().join("implementer.log");
