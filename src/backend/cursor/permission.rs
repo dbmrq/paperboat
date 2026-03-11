@@ -76,7 +76,7 @@ impl PermissionPolicy {
     /// Create a policy for planner agents.
     ///
     /// Denies file editing tools but allows MCP tools for planning.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Factory method for planner policy
     pub fn for_planner() -> Self {
         Self::from_agent_config(&PLANNER_CONFIG)
     }
@@ -84,7 +84,7 @@ impl PermissionPolicy {
     /// Create a policy for orchestrator agents.
     ///
     /// Denies file editing tools but allows MCP tools for orchestration.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Factory method for orchestrator policy
     pub fn for_orchestrator() -> Self {
         Self::from_agent_config(&ORCHESTRATOR_CONFIG)
     }
@@ -92,7 +92,7 @@ impl PermissionPolicy {
     /// Create a policy for implementer agents.
     ///
     /// Allows all tools including file editing.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Factory method for implementer policy
     pub fn for_implementer() -> Self {
         Self::from_agent_config(&IMPLEMENTER_CONFIG)
     }

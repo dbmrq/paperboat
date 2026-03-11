@@ -219,8 +219,7 @@ pub async fn handle_mcp_connection(stream: IpcStream, tool_tx: ToolSender) -> Re
             e
         );
         return Err(anyhow::anyhow!(
-            "Failed to send tool request to app: {} - is tool_rx receiver alive?",
-            e
+            "Failed to send tool request to app: {e} - is tool_rx receiver alive?"
         ));
     }
     tracing::debug!(
@@ -238,8 +237,7 @@ pub async fn handle_mcp_connection(stream: IpcStream, tool_tx: ToolSender) -> Re
                 e
             );
             return Err(anyhow::anyhow!(
-                "Failed to receive response from app: {} - did the handler drop response_tx?",
-                e
+                "Failed to receive response from app: {e} - did the handler drop response_tx?"
             ));
         }
     };

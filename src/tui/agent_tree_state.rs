@@ -531,7 +531,7 @@ mod tests {
         let messages = tree.get_messages("session-1").unwrap();
 
         // Should split into two separate messages
-        assert_eq!(messages.len(), 2, "Expected 2 messages, got {:?}", messages);
+        assert_eq!(messages.len(), 2, "Expected 2 messages, got {messages:?}");
         assert_eq!(messages[0], "Line 1");
         assert_eq!(messages[1], "Line 2");
     }
@@ -552,7 +552,7 @@ mod tests {
         let messages = tree.get_messages("session-1").unwrap();
 
         // Should produce: "Hello", "" (empty for the trailing newline)
-        assert_eq!(messages.len(), 2, "Expected 2 messages, got {:?}", messages);
+        assert_eq!(messages.len(), 2, "Expected 2 messages, got {messages:?}");
         assert_eq!(messages[0], "Hello");
         assert_eq!(messages[1], ""); // Empty string for the line break
     }
@@ -598,7 +598,7 @@ mod tests {
         let messages = tree.get_messages("session-1").unwrap();
 
         // Should split into: "Line 1", "Line 2", "" (empty for trailing newline)
-        assert_eq!(messages.len(), 3, "Expected 3 messages, got {:?}", messages);
+        assert_eq!(messages.len(), 3, "Expected 3 messages, got {messages:?}");
         assert_eq!(messages[0], "Line 1");
         assert_eq!(messages[1], "Line 2");
         assert_eq!(messages[2], ""); // Trailing newline becomes empty message
@@ -1226,7 +1226,7 @@ mod tests {
         let messages = tree.get_messages("session-1").unwrap();
 
         // Should have 2 separate messages, not concatenated
-        assert_eq!(messages.len(), 2, "Expected 2 messages, got {:?}", messages);
+        assert_eq!(messages.len(), 2, "Expected 2 messages, got {messages:?}");
         assert_eq!(
             messages[0], "> Calling: Context engine: \"Help popup implementation\"",
             "First message should be the tool call"
@@ -1255,7 +1255,7 @@ mod tests {
 
         let messages = tree.get_messages("session-1").unwrap();
 
-        assert_eq!(messages.len(), 2, "Expected 2 messages, got {:?}", messages);
+        assert_eq!(messages.len(), 2, "Expected 2 messages, got {messages:?}");
         assert_eq!(messages[0], "✓ view completed");
         assert_eq!(messages[1], "Now I'll make the changes.");
     }
@@ -1278,7 +1278,7 @@ mod tests {
 
         let messages = tree.get_messages("session-1").unwrap();
 
-        assert_eq!(messages.len(), 2, "Expected 2 messages, got {:?}", messages);
+        assert_eq!(messages.len(), 2, "Expected 2 messages, got {messages:?}");
         assert_eq!(messages[0], "✗ compile completed");
         assert_eq!(messages[1], "Let me fix the error.");
     }
@@ -1301,7 +1301,7 @@ mod tests {
 
         let messages = tree.get_messages("session-1").unwrap();
 
-        assert_eq!(messages.len(), 2, "Expected 2 messages, got {:?}", messages);
+        assert_eq!(messages.len(), 2, "Expected 2 messages, got {messages:?}");
         assert_eq!(messages[0], "+ Added file.rs");
         assert_eq!(messages[1], "The file has been created.");
     }
@@ -1324,7 +1324,7 @@ mod tests {
 
         let messages = tree.get_messages("session-1").unwrap();
 
-        assert_eq!(messages.len(), 1, "Expected 1 message, got {:?}", messages);
+        assert_eq!(messages.len(), 1, "Expected 1 message, got {messages:?}");
         assert_eq!(messages[0], "Hello world!");
     }
 
@@ -1346,7 +1346,7 @@ mod tests {
 
         let messages = tree.get_messages("session-1").unwrap();
 
-        assert_eq!(messages.len(), 3, "Expected 3 messages, got {:?}", messages);
+        assert_eq!(messages.len(), 3, "Expected 3 messages, got {messages:?}");
         assert_eq!(messages[0], "> Calling: view");
         assert_eq!(messages[1], "✓ view completed");
         assert_eq!(messages[2], "I see the file contains...");
@@ -1374,7 +1374,7 @@ mod tests {
         let messages = tree.get_messages("session-1").unwrap();
 
         // Should be split into 2 messages (at the LAST closing quote before capital letter)
-        assert_eq!(messages.len(), 2, "Expected 2 messages, got {:?}", messages);
+        assert_eq!(messages.len(), 2, "Expected 2 messages, got {messages:?}");
         assert_eq!(
             messages[0],
             "Calling: Context engine: \"Help popup implementation\""
@@ -1404,7 +1404,7 @@ mod tests {
         let messages = tree.get_messages("session-1").unwrap();
 
         // Should NOT be split - no "Calling:" pattern
-        assert_eq!(messages.len(), 1, "Expected 1 message, got {:?}", messages);
+        assert_eq!(messages.len(), 1, "Expected 1 message, got {messages:?}");
         assert_eq!(messages[0], "First \"query\"Second \"query\"Third text.");
     }
 
@@ -1429,7 +1429,7 @@ mod tests {
         let messages = tree.get_messages("session-1").unwrap();
 
         // Should remain as single message
-        assert_eq!(messages.len(), 1, "Expected 1 message, got {:?}", messages);
+        assert_eq!(messages.len(), 1, "Expected 1 message, got {messages:?}");
         assert_eq!(
             messages[0],
             "I said \"hello\" to him and he replied \"hi\" back."
@@ -1457,7 +1457,7 @@ mod tests {
         let messages = tree.get_messages("session-1").unwrap();
 
         // Should be 2 separate messages since "Calling:" is standalone
-        assert_eq!(messages.len(), 2, "Expected 2 messages, got {:?}", messages);
+        assert_eq!(messages.len(), 2, "Expected 2 messages, got {messages:?}");
         assert_eq!(messages[0], "Looking at the code.");
         assert_eq!(messages[1], "Calling: codebase-retrieval");
     }

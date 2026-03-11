@@ -79,7 +79,7 @@ mod tests {
         calculate_layout(Rect::new(0, 0, 120, 40))
     }
 
-    /// Helper to create a TuiState with splash dismissed (ready for testing)
+    /// Helper to create a `TuiState` with splash dismissed (ready for testing)
     fn test_state() -> TuiState {
         let mut state = TuiState::new();
         state.splash_visible = false;
@@ -172,21 +172,21 @@ mod tests {
 
         // Add some tasks
         state.task_list_state.handle_task_created(
-            "t1".to_string(),
+            "t1",
             "Task 1".to_string(),
             "Desc".to_string(),
             vec![],
             0,
         );
         state.task_list_state.handle_task_created(
-            "t2".to_string(),
+            "t2",
             "Task 2".to_string(),
             "Desc".to_string(),
             vec![],
             0,
         );
         state.task_list_state.handle_task_created(
-            "t3".to_string(),
+            "t3",
             "Task 3".to_string(),
             "Desc".to_string(),
             vec![],
@@ -215,7 +215,7 @@ mod tests {
         // Add tasks
         for i in 0..5 {
             state.task_list_state.handle_task_created(
-                format!("t{i}"),
+                &format!("t{i}"),
                 format!("Task {i}"),
                 "Desc".to_string(),
                 vec![],
@@ -280,7 +280,7 @@ mod tests {
 
         // Add a task
         state.task_list_state.handle_task_created(
-            "t1".to_string(),
+            "t1",
             "Task 1".to_string(),
             "Desc".to_string(),
             vec![],
@@ -604,14 +604,14 @@ mod tests {
 
         // Add some tasks
         state.task_list_state.handle_task_created(
-            "t1".to_string(),
+            "t1",
             "Task 1".to_string(),
             "Desc".to_string(),
             vec![],
             0,
         );
         state.task_list_state.handle_task_created(
-            "t2".to_string(),
+            "t2",
             "Task 2".to_string(),
             "Desc".to_string(),
             vec![],
@@ -667,7 +667,7 @@ mod tests {
         // Add some tasks
         for i in 1..=5 {
             state.task_list_state.handle_task_created(
-                format!("t{i}"),
+                &format!("t{i}"),
                 format!("Task {i}"),
                 "Desc".to_string(),
                 vec![],
@@ -755,7 +755,7 @@ mod tests {
         // Add some tasks
         for i in 0..5 {
             state.task_list_state.handle_task_created(
-                format!("task-{i}"),
+                &format!("task-{i}"),
                 format!("Task {i}"),
                 "Description".to_string(),
                 vec![],
@@ -786,14 +786,14 @@ mod tests {
 
         // Add tasks
         state.task_list_state.handle_task_created(
-            "task-0".to_string(),
+            "task-0",
             "First Task".to_string(),
             "Description".to_string(),
             vec![],
             0,
         );
         state.task_list_state.handle_task_created(
-            "task-1".to_string(),
+            "task-1",
             "Second Task".to_string(),
             "Description".to_string(),
             vec![],
@@ -820,14 +820,14 @@ mod tests {
 
         // Add only 2 tasks
         state.task_list_state.handle_task_created(
-            "task-0".to_string(),
+            "task-0",
             "Task 0".to_string(),
             "Description".to_string(),
             vec![],
             0,
         );
         state.task_list_state.handle_task_created(
-            "task-1".to_string(),
+            "task-1",
             "Task 1".to_string(),
             "Description".to_string(),
             vec![],
@@ -883,7 +883,7 @@ mod tests {
 
         // Add a task
         state.task_list_state.handle_task_created(
-            "task-0".to_string(),
+            "task-0",
             "Task 0".to_string(),
             "Description".to_string(),
             vec![],

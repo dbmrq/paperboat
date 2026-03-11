@@ -214,7 +214,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn object(value: Value) -> serde_json::Map<String, Value> {
+    fn object(value: &Value) -> serde_json::Map<String, Value> {
         value.as_object().cloned().expect("expected JSON object")
     }
 
@@ -244,7 +244,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in cases {
-            let parsed = parse_decompose(&object(arguments));
+            let parsed = parse_decompose(&object(&arguments));
             match (parsed, expected) {
                 (Ok(ToolCall::Decompose { task_id, task }), Ok((expected_id, expected_task))) => {
                     assert_eq!(task_id.as_deref(), expected_id, "{name}");
@@ -322,7 +322,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in cases {
-            let parsed = parse_spawn_agents(&object(arguments));
+            let parsed = parse_spawn_agents(&object(&arguments));
             match (parsed, expected) {
                 (
                     Ok(ToolCall::SpawnAgents { agents, wait }),
@@ -391,7 +391,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in cases {
-            let parsed = parse_skip_tasks(&object(arguments));
+            let parsed = parse_skip_tasks(&object(&arguments));
             match (parsed, expected) {
                 (
                     Ok(ToolCall::SkipTasks { task_ids, reason }),
@@ -447,7 +447,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in cases {
-            let parsed = parse_complete(&object(arguments));
+            let parsed = parse_complete(&object(&arguments));
             match (parsed, expected) {
                 (
                     Ok(ToolCall::Complete {
@@ -506,7 +506,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in create_task_cases {
-            let parsed = parse_create_task(&object(arguments));
+            let parsed = parse_create_task(&object(&arguments));
             match (parsed, expected) {
                 (
                     Ok(ToolCall::CreateTask {
@@ -549,7 +549,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in set_goal_cases {
-            let parsed = parse_set_goal(&object(arguments));
+            let parsed = parse_set_goal(&object(&arguments));
             match (parsed, expected) {
                 (
                     Ok(ToolCall::SetGoal {
@@ -587,7 +587,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in report_human_action_cases {
-            let parsed = parse_report_human_action(&object(arguments));
+            let parsed = parse_report_human_action(&object(&arguments));
             match (parsed, expected) {
                 (
                     Ok(ToolCall::ReportHumanAction {
@@ -608,7 +608,7 @@ mod tests {
             }
         }
 
-        let parsed = parse_list_tasks(&object(json!({ "status_filter": "pending" })));
+        let parsed = parse_list_tasks(&object(&json!({ "status_filter": "pending" })));
         match parsed {
             Ok(ToolCall::ListTasks { status_filter }) => {
                 assert_eq!(status_filter.as_deref(), Some("pending"));
@@ -658,7 +658,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in cases {
-            let parsed = parse_decompose(&object(arguments));
+            let parsed = parse_decompose(&object(&arguments));
             match (parsed, expected) {
                 (Ok(ToolCall::Decompose { task_id, task }), Ok((expected_id, expected_task))) => {
                     assert_eq!(task_id.as_deref(), expected_id, "{name}");
@@ -737,7 +737,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in cases {
-            let parsed = parse_spawn_agents(&object(arguments));
+            let parsed = parse_spawn_agents(&object(&arguments));
             match (parsed, expected) {
                 (Ok(ToolCall::SpawnAgents { agents, wait }), Ok((count, expected_wait))) => {
                     assert_eq!(agents.len(), count, "{name}");
@@ -784,7 +784,7 @@ mod tests {
         ];
 
         for (name, arguments, (expected_task_id, expected_task)) in cases {
-            let parsed = parse_spawn_agents(&object(arguments));
+            let parsed = parse_spawn_agents(&object(&arguments));
             match parsed {
                 Ok(ToolCall::SpawnAgents { agents, .. }) => {
                     assert!(!agents.is_empty(), "{name}: expected at least one agent");
@@ -852,7 +852,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in cases {
-            let parsed = parse_complete(&object(arguments));
+            let parsed = parse_complete(&object(&arguments));
             match (parsed, expected) {
                 (
                     Ok(ToolCall::Complete {
@@ -932,7 +932,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in cases {
-            let parsed = parse_create_task(&object(arguments));
+            let parsed = parse_create_task(&object(&arguments));
             match (parsed, expected) {
                 (
                     Ok(ToolCall::CreateTask {
@@ -995,7 +995,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in cases {
-            let parsed = parse_set_goal(&object(arguments));
+            let parsed = parse_set_goal(&object(&arguments));
             match (parsed, expected) {
                 (
                     Ok(ToolCall::SetGoal {
@@ -1056,7 +1056,10 @@ mod tests {
                     "task_ids": ["task001", "task002", "task003"],
                     "reason": "All obsolete after refactor"
                 }),
-                Ok((vec!["task001", "task002", "task003"], Some("All obsolete after refactor"))),
+                Ok((
+                    vec!["task001", "task002", "task003"],
+                    Some("All obsolete after refactor"),
+                )),
             ),
             (
                 "reason is non-string (ignored)",
@@ -1066,7 +1069,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in cases {
-            let parsed = parse_skip_tasks(&object(arguments));
+            let parsed = parse_skip_tasks(&object(&arguments));
             match (parsed, expected) {
                 (
                     Ok(ToolCall::SkipTasks { task_ids, reason }),
@@ -1121,7 +1124,7 @@ mod tests {
         ];
 
         for (name, arguments, expected) in cases {
-            let parsed = parse_report_human_action(&object(arguments));
+            let parsed = parse_report_human_action(&object(&arguments));
             match (parsed, expected) {
                 (
                     Ok(ToolCall::ReportHumanAction {
@@ -1147,15 +1150,31 @@ mod tests {
     fn parse_list_tasks_accepts_all_valid_inputs() {
         let cases = [
             ("no filter", json!({}), None),
-            ("pending filter", json!({ "status_filter": "pending" }), Some("pending")),
-            ("completed filter", json!({ "status_filter": "completed" }), Some("completed")),
+            (
+                "pending filter",
+                json!({ "status_filter": "pending" }),
+                Some("pending"),
+            ),
+            (
+                "completed filter",
+                json!({ "status_filter": "completed" }),
+                Some("completed"),
+            ),
             ("all filter", json!({ "status_filter": "all" }), Some("all")),
-            ("filter is non-string (ignored)", json!({ "status_filter": 123 }), None),
-            ("filter is null (ignored)", json!({ "status_filter": null }), None),
+            (
+                "filter is non-string (ignored)",
+                json!({ "status_filter": 123 }),
+                None,
+            ),
+            (
+                "filter is null (ignored)",
+                json!({ "status_filter": null }),
+                None,
+            ),
         ];
 
         for (name, arguments, expected_filter) in cases {
-            let parsed = parse_list_tasks(&object(arguments));
+            let parsed = parse_list_tasks(&object(&arguments));
             match parsed {
                 Ok(ToolCall::ListTasks { status_filter }) => {
                     assert_eq!(status_filter.as_deref(), expected_filter, "{name}");

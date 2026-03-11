@@ -749,12 +749,13 @@ mod tests {
     fn test_all_backends_are_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
 
+        fn takes_backend(_: Box<dyn Backend>) {}
+
         // Test that the trait object returned by create() is Send + Sync
         let auggie_backend = BackendKind::Auggie.create();
         let cursor_backend = BackendKind::Cursor.create();
 
         // If these compile, the backends are Send + Sync
-        fn takes_backend(_: Box<dyn Backend>) {}
         takes_backend(auggie_backend);
         takes_backend(cursor_backend);
 

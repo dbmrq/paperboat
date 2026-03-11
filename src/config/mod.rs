@@ -9,7 +9,6 @@
 //! # Submodules
 //!
 //! - [`loader`]: Loads and merges configuration from TOML files
-//! - [`resolver`]: Resolves model aliases (e.g., "opus") to concrete model IDs
 //! - [`writer`]: Persists configuration changes to disk
 //!
 //! # Example
@@ -26,7 +25,6 @@
 //! ```
 
 pub mod loader;
-pub mod resolver;
 pub mod writer;
 
 pub use loader::{build_model_config, get_explicit_backend_config, load_agent_configs};

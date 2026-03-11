@@ -604,10 +604,12 @@ mod tests {
     fn test_get_current_model_returns_config_when_no_pending() {
         use crate::models::{ModelConfig, ModelFallbackChain};
 
-        let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Opus);
-        config.planner_model = ModelFallbackChain::single(ModelTier::Sonnet);
-        config.implementer_model = ModelFallbackChain::single(ModelTier::Haiku);
+        let config = ModelConfig {
+            orchestrator_model: ModelFallbackChain::single(ModelTier::Opus),
+            planner_model: ModelFallbackChain::single(ModelTier::Sonnet),
+            implementer_model: ModelFallbackChain::single(ModelTier::Haiku),
+            ..Default::default()
+        };
 
         let tui_state = TuiState::with_model_config(config);
 
@@ -638,8 +640,10 @@ mod tests {
     fn test_get_current_model_returns_pending_when_set() {
         use crate::models::{ModelConfig, ModelFallbackChain};
 
-        let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Haiku);
+        let config = ModelConfig {
+            orchestrator_model: ModelFallbackChain::single(ModelTier::Haiku),
+            ..Default::default()
+        };
         let tui_state = TuiState::with_model_config(config);
 
         let mut settings = SettingsState::new();
@@ -657,10 +661,12 @@ mod tests {
     fn test_get_current_model_pending_per_agent_type() {
         use crate::models::{ModelConfig, ModelFallbackChain};
 
-        let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Haiku);
-        config.planner_model = ModelFallbackChain::single(ModelTier::Haiku);
-        config.implementer_model = ModelFallbackChain::single(ModelTier::Haiku);
+        let config = ModelConfig {
+            orchestrator_model: ModelFallbackChain::single(ModelTier::Haiku),
+            planner_model: ModelFallbackChain::single(ModelTier::Haiku),
+            implementer_model: ModelFallbackChain::single(ModelTier::Haiku),
+            ..Default::default()
+        };
         let tui_state = TuiState::with_model_config(config);
 
         let mut settings = SettingsState::new();

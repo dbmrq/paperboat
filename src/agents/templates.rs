@@ -49,7 +49,7 @@ impl AgentRegistry {
     }
 
     /// Check if a role has a template.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for role validation
     pub fn has_role(&self, role: &AgentRole) -> bool {
         if matches!(role, AgentRole::Custom) {
             return false;
@@ -58,7 +58,7 @@ impl AgentRegistry {
     }
 
     /// Get all available spawnable role names.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for role discovery
     pub const fn available_roles(&self) -> &'static [&'static str] {
         SPAWNABLE_ROLES
     }

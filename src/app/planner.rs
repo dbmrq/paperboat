@@ -20,19 +20,19 @@ pub struct PlannerSession {
     pub prompt: String,
     /// Socket handle for CLI transport (must be kept alive during the session)
     socket_handle: Option<AgentSocketHandle>,
-    /// Tool receiver extracted from the socket handle (for passing to wait_for_session_output)
+    /// Tool receiver extracted from the socket handle (for passing to `wait_for_session_output`)
     tool_rx: Option<super::types::ToolReceiver>,
 }
 
 impl PlannerSession {
-    /// Take the tool receiver for use in wait_for_session_output.
+    /// Take the tool receiver for use in `wait_for_session_output`.
     /// Returns None if there's no CLI socket handle (e.g., ACP transport).
-    pub fn take_tool_rx(&mut self) -> Option<super::types::ToolReceiver> {
+    pub const fn take_tool_rx(&mut self) -> Option<super::types::ToolReceiver> {
         self.tool_rx.take()
     }
 
     /// Clean up the socket handle when done.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for explicit resource cleanup
     pub fn cleanup(self) {
         if let Some(handle) = self.socket_handle {
             handle.cleanup();
@@ -225,8 +225,7 @@ impl App {
         Err(last_error
             .unwrap_or_else(|| anyhow::anyhow!("No models in fallback chain"))
             .context(format!(
-                "All models in fallback chain failed for planner: {:?}",
-                model_chain
+                "All models in fallback chain failed for planner: {model_chain:?}"
             )))
     }
 

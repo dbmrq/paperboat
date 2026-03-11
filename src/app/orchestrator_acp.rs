@@ -204,7 +204,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::transport::{AgentTransport, SessionConfig, SessionInfo, SessionUpdate, ToolResult};
+    use crate::backend::transport::{
+        AgentTransport, SessionConfig, SessionInfo, SessionUpdate, ToolResult,
+    };
     use crate::logging::{AgentType, RunLogManager};
     use crate::models::{ModelConfig, ModelTier};
     use crate::testing::{MockBackend, MockTransport};
@@ -268,7 +270,11 @@ mod tests {
     }
 
     fn test_model_config() -> ModelConfig {
-        ModelConfig::new([ModelTier::Sonnet, ModelTier::Opus, ModelTier::Haiku].into_iter().collect())
+        ModelConfig::new(
+            [ModelTier::Sonnet, ModelTier::Opus, ModelTier::Haiku]
+                .into_iter()
+                .collect(),
+        )
     }
 
     #[tokio::test]

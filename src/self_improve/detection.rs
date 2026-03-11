@@ -123,7 +123,7 @@ fn check_cargo_toml(dir: &Path) -> Option<bool> {
 ///
 /// This function is async to allow for future enhancements that may
 /// require async operations (e.g., checking remote repository state).
-#[allow(dead_code)]
+#[allow(dead_code)] // Public async API for repository detection
 pub async fn detect_repository_async() -> RepositoryKind {
     // For now, just wrap the sync version
     // Using spawn_blocking for the git command execution
@@ -133,7 +133,7 @@ pub async fn detect_repository_async() -> RepositoryKind {
 }
 
 /// Async-compatible wrapper for repository detection at a specific path.
-#[allow(dead_code)]
+#[allow(dead_code)] // Public async API for path-based repository detection
 pub async fn detect_repository_at_async(dir: std::path::PathBuf) -> RepositoryKind {
     tokio::task::spawn_blocking(move || detect_repository_at(&dir))
         .await
@@ -167,13 +167,13 @@ pub fn is_paperboat_repository() -> bool {
 ///
 /// This is the path-parameterized version of [`is_paperboat_repository`] for testing.
 #[must_use]
-#[allow(dead_code)]
+#[allow(dead_code)] // Used in tests and for path-parameterized detection
 pub fn is_paperboat_repository_in(dir: &Path) -> bool {
     detect_repository_at(dir).is_own_repository()
 }
 
 /// Async-compatible wrapper for `is_paperboat_repository`.
-#[allow(dead_code)]
+#[allow(dead_code)] // Public async API for repository check
 pub async fn is_paperboat_repository_async() -> bool {
     detect_repository_async().await.is_own_repository()
 }
@@ -427,8 +427,7 @@ version = "0.1.0"
             let is_match = url_lower.contains("paperboat") || url_lower.contains("villalobos");
             assert_eq!(
                 is_match, expected_match,
-                "URL '{}' should match: {}",
-                url, expected_match
+                "URL '{url}' should match: {expected_match}"
             );
         }
     }

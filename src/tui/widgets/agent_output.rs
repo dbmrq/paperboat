@@ -146,31 +146,36 @@ pub fn render_agent_output(frame: &mut Frame, area: Rect, state: &mut TuiState, 
 /// 3. A status line showing "Agent working..." with elapsed time (if agent is running)
 ///
 /// The boat moves forward over ~12 seconds, then quickly washes back over ~2 seconds.
+// Wave characters that create a flowing water effect
+const WAVE_CHARS: [char; 4] = ['~', '·', '~', '·'];
+const WAVE_WIDTH: usize = 24;
+
+// Boat movement: moves forward over ~1800 frames (30s), washes back over ~300 frames (5s)
+// Total cycle: 2100 frames (~35 seconds at 60fps)
+const FORWARD_FRAMES: u32 = 1800;
+const BACKWARD_FRAMES: u32 = 300;
+const CYCLE_FRAMES: u32 = FORWARD_FRAMES + BACKWARD_FRAMES;
+
 fn render_waiting_animation(state: &TuiState, panel_width: u16) -> Text<'static> {
     let frame = state.animation_frame;
-
-    // Wave characters that create a flowing water effect
-    const WAVE_CHARS: [char; 4] = ['~', '·', '~', '·'];
-    const WAVE_WIDTH: usize = 24;
-
-    // Boat movement: moves forward over ~1800 frames (30s), washes back over ~300 frames (5s)
-    // Total cycle: 2100 frames (~35 seconds at 60fps)
-    const FORWARD_FRAMES: u32 = 1800;
-    const BACKWARD_FRAMES: u32 = 300;
-    const CYCLE_FRAMES: u32 = FORWARD_FRAMES + BACKWARD_FRAMES;
 
     let cycle_pos = frame % CYCLE_FRAMES;
     // Boat position in visual columns (0 to WAVE_WIDTH - 2, since boat takes 2 columns)
     let max_boat_pos = WAVE_WIDTH - 2;
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     let boat_pos = if cycle_pos < FORWARD_FRAMES {
         // Moving forward: ease-out for smooth deceleration
-        let progress = cycle_pos as f32 / FORWARD_FRAMES as f32;
-        let eased = 1.0 - (1.0 - progress).powi(2); // ease-out quadratic
-        (eased * max_boat_pos as f32) as usize
+        let progress = f64::from(cycle_pos) / f64::from(FORWARD_FRAMES);
+        let eased = (1.0 - progress).mul_add(-(1.0 - progress), 1.0); // ease-out quadratic
+        (eased * max_boat_pos as f64) as usize
     } else {
         // Washing back: quick linear return
-        let backward_progress = (cycle_pos - FORWARD_FRAMES) as f32 / BACKWARD_FRAMES as f32;
-        ((1.0 - backward_progress) * max_boat_pos as f32) as usize
+        let backward_progress = f64::from(cycle_pos - FORWARD_FRAMES) / f64::from(BACKWARD_FRAMES);
+        ((1.0 - backward_progress) * max_boat_pos as f64) as usize
     };
 
     // Calculate centering padding
@@ -222,9 +227,9 @@ fn render_waiting_animation(state: &TuiState, panel_width: u16) -> Text<'static>
                 let mins = secs / 60;
                 let secs = secs % 60;
                 if mins > 0 {
-                    format!("Agent working... {}m {}s", mins, secs)
+                    format!("Agent working... {mins}m {secs}s")
                 } else {
-                    format!("Agent working... {}s", secs)
+                    format!("Agent working... {secs}s")
                 }
             }
             AgentStatus::Completed => "Agent completed".to_string(),
@@ -493,7 +498,7 @@ mod tests {
     #[test]
     fn test_format_messages_double_line_break() {
         // Simulates "Line 1\n\nLine 2" which gets split into ["Line 1", "", "Line 2"]
-        let messages = vec!["Line 1".to_string(), "".to_string(), "Line 2".to_string()];
+        let messages = vec!["Line 1".to_string(), String::new(), "Line 2".to_string()];
         let lines = format_messages(&messages);
 
         // Should produce 3 lines: Line 1, blank, Line 2
@@ -505,8 +510,8 @@ mod tests {
         // Simulates "Line 1\n\n\nLine 2" which gets split into ["Line 1", "", "", "Line 2"]
         let messages = vec![
             "Line 1".to_string(),
-            "".to_string(),
-            "".to_string(),
+            String::new(),
+            String::new(),
             "Line 2".to_string(),
         ];
         let lines = format_messages(&messages);
@@ -568,7 +573,7 @@ mod tests {
     fn test_format_messages_text_followed_by_empty() {
         // Simulates streaming: "Hello" then "\n" arrives
         // handle_agent_message would produce ["Hello", ""]
-        let messages = vec!["Hello".to_string(), "".to_string()];
+        let messages = vec!["Hello".to_string(), String::new()];
         let lines = format_messages(&messages);
 
         // Should be: Hello, then a blank line = 2 lines
@@ -580,10 +585,10 @@ mod tests {
         // Mixed: text, empty (newline), text, empty, empty (collapsed), text
         let messages = vec![
             "Line 1".to_string(),
-            "".to_string(),
+            String::new(),
             "Line 2".to_string(),
-            "".to_string(),
-            "".to_string(),
+            String::new(),
+            String::new(),
             "Line 3".to_string(),
         ];
         let lines = format_messages(&messages);
@@ -597,6 +602,7 @@ mod tests {
     // ========================================================================
 
     #[test]
+    #[allow(clippy::cast_possible_truncation)]
     fn test_render_agent_output_auto_scrolls_when_new_messages_arrive() {
         let mut state = state_with_selected_agent("agent-1");
         let area = Rect::new(0, 0, 40, 6);
@@ -615,13 +621,14 @@ mod tests {
                 .expect("messages should exist")
                 .iter()
                 .cloned()
-                .map(|msg| Line::from(msg))
+                .map(Line::from)
                 .collect::<Vec<_>>(),
         ))
         .block(Block::default().borders(Borders::ALL))
         .wrap(Wrap { trim: false })
         .line_count(area.width)
-        .saturating_sub(area.height.saturating_sub(2) as usize) as u16;
+        .saturating_sub(area.height.saturating_sub(2) as usize)
+            as u16;
 
         assert_eq!(state.last_message_count, 8);
         assert_eq!(state.agent_output_scroll, expected_scroll);
@@ -654,8 +661,10 @@ mod tests {
 
         // Render again - should auto-scroll
         render_agent_output_to_string(&mut state, area);
-        assert!(state.last_message_count > initial_count,
-            "Message count should increase after new message");
+        assert!(
+            state.last_message_count > initial_count,
+            "Message count should increase after new message"
+        );
     }
 
     #[test]
@@ -827,6 +836,7 @@ mod tests {
     // ========================================================================
 
     #[test]
+    #[allow(clippy::cast_possible_truncation)]
     fn test_handle_agent_output_key_end_scrolls_to_bottom_of_wrapped_content() {
         let mut state = state_with_selected_agent("agent-1");
         state.handle_event(LogEvent::AgentMessage {
@@ -836,15 +846,12 @@ mod tests {
             content: "this is a deliberately long line that wraps multiple times".to_string(),
         });
 
-        let handled = handle_agent_output_key(
-            &mut state,
-            crossterm::event::KeyCode::End,
-            6,
-            18,
-        );
+        let handled = handle_agent_output_key(&mut state, crossterm::event::KeyCode::End, 6, 18);
 
         let total_lines = calculate_wrapped_line_count(
-            state.selected_agent_messages().expect("messages should exist"),
+            state
+                .selected_agent_messages()
+                .expect("messages should exist"),
             16,
         );
         let visible_height = 4;
@@ -868,12 +875,7 @@ mod tests {
         }
         state.agent_output_scroll = 10;
 
-        let handled = handle_agent_output_key(
-            &mut state,
-            crossterm::event::KeyCode::Home,
-            10,
-            40,
-        );
+        let handled = handle_agent_output_key(&mut state, crossterm::event::KeyCode::Home, 10, 40);
 
         assert!(handled);
         assert_eq!(state.agent_output_scroll, 0);
@@ -884,12 +886,8 @@ mod tests {
         let mut state = state_with_selected_agent("agent-1");
         state.agent_output_scroll = 15;
 
-        let handled = handle_agent_output_key(
-            &mut state,
-            crossterm::event::KeyCode::Char('g'),
-            10,
-            40,
-        );
+        let handled =
+            handle_agent_output_key(&mut state, crossterm::event::KeyCode::Char('g'), 10, 40);
 
         assert!(handled);
         assert_eq!(state.agent_output_scroll, 0);
@@ -900,12 +898,7 @@ mod tests {
         let mut state = state_with_selected_agent("agent-1");
         state.agent_output_scroll = 5;
 
-        let handled = handle_agent_output_key(
-            &mut state,
-            crossterm::event::KeyCode::Up,
-            10,
-            40,
-        );
+        let handled = handle_agent_output_key(&mut state, crossterm::event::KeyCode::Up, 10, 40);
 
         assert!(handled);
         assert_eq!(state.agent_output_scroll, 4);
@@ -916,12 +909,8 @@ mod tests {
         let mut state = state_with_selected_agent("agent-1");
         state.agent_output_scroll = 5;
 
-        let handled = handle_agent_output_key(
-            &mut state,
-            crossterm::event::KeyCode::Char('k'),
-            10,
-            40,
-        );
+        let handled =
+            handle_agent_output_key(&mut state, crossterm::event::KeyCode::Char('k'), 10, 40);
 
         assert!(handled);
         assert_eq!(state.agent_output_scroll, 4);
@@ -940,12 +929,7 @@ mod tests {
         state.agent_output_scroll = 0;
         state.last_message_count = 20;
 
-        let handled = handle_agent_output_key(
-            &mut state,
-            crossterm::event::KeyCode::Down,
-            10,
-            40,
-        );
+        let handled = handle_agent_output_key(&mut state, crossterm::event::KeyCode::Down, 10, 40);
 
         assert!(handled);
         assert_eq!(state.agent_output_scroll, 1);
@@ -964,12 +948,8 @@ mod tests {
         state.agent_output_scroll = 0;
         state.last_message_count = 20;
 
-        let handled = handle_agent_output_key(
-            &mut state,
-            crossterm::event::KeyCode::Char('j'),
-            10,
-            40,
-        );
+        let handled =
+            handle_agent_output_key(&mut state, crossterm::event::KeyCode::Char('j'), 10, 40);
 
         assert!(handled);
         assert_eq!(state.agent_output_scroll, 1);
@@ -996,12 +976,8 @@ mod tests {
     fn test_handle_unrecognized_key_returns_false() {
         let mut state = state_with_selected_agent("agent-1");
 
-        let handled = handle_agent_output_key(
-            &mut state,
-            crossterm::event::KeyCode::Char('x'),
-            10,
-            40,
-        );
+        let handled =
+            handle_agent_output_key(&mut state, crossterm::event::KeyCode::Char('x'), 10, 40);
 
         assert!(!handled);
     }

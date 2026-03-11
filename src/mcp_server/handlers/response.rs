@@ -779,10 +779,7 @@ mod tests {
         let state = TaskStateInfo {
             pending_count: 3,
             parallel_tasks: vec![],
-            blocked_tasks: vec![(
-                "task003".into(),
-                vec!["task001".into(), "task002".into()],
-            )],
+            blocked_tasks: vec![("task003".into(), vec!["task001".into(), "task002".into()])],
         };
 
         let guidance = state.format_whats_next().expect("should produce guidance");
@@ -1214,11 +1211,7 @@ mod tests {
     #[test]
     fn task_state_info_has_remaining_work() {
         let cases = [
-            (
-                "no work",
-                TaskStateInfo::default(),
-                false,
-            ),
+            ("no work", TaskStateInfo::default(), false),
             (
                 "pending tasks only",
                 TaskStateInfo {

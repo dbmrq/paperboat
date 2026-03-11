@@ -6,7 +6,7 @@ use thiserror::Error;
 
 /// Errors that can occur during task operations.
 #[derive(Debug, Error)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Error enum with variants for completeness
 pub enum TaskError {
     /// Task with the given ID was not found.
     #[error("Task not found: '{task_id}'")]

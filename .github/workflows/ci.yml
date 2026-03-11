@@ -54,6 +54,45 @@ jobs:
         run: cargo machete
 
   # ============================================================
+  # Code quality warnings - informational only
+  # ============================================================
+
+  code-quality:
+    name: Code Quality Warnings
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # This job is informational only, doesn't block CI
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for TODO/FIXME comments in production code
+        run: |
+          echo "Scanning for TODO/FIXME comments in src/..."
+          # Find TODO/FIXME comments (informational, doesn't fail CI)
+          findings=$(grep -rn --include="*.rs" "TODO\|FIXME" src/ || true)
+          if [ -n "$findings" ]; then
+            echo "::warning::Found TODO/FIXME comments in production code:"
+            echo "$findings"
+            count=$(echo "$findings" | wc -l)
+            echo "::notice::Total: $count TODO/FIXME comments found"
+          else
+            echo "✅ No TODO/FIXME comments found in production code"
+          fi
+
+      - name: Check for large files
+        run: |
+          echo "Checking for large source files (>500 lines)..."
+          # Find files with more than 500 lines
+          large_files=$(find src/ -name "*.rs" -exec wc -l {} + | awk '$1 > 500 && !/total$/ {print}' || true)
+          if [ -n "$large_files" ]; then
+            echo "::warning::Found large source files (>500 lines):"
+            echo "$large_files"
+          else
+            echo "✅ All source files are under 500 lines"
+          fi
+
+  # ============================================================
   # Security checks - important for every PR
   # ============================================================
 

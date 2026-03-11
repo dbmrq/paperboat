@@ -380,7 +380,7 @@ mod tests {
             .name("cloneable")
             .auth_fails(true)
             .build();
-        let cloned = backend.clone();
+        let cloned = backend;
 
         assert_eq!(cloned.name(), "cloneable");
         assert!(cloned.check_auth().is_err());

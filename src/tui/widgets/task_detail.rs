@@ -559,6 +559,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation)]
     fn test_render_task_detail_clamps_scroll() {
         let mut state = TuiState::new();
         state.task_detail_scroll = 999;
@@ -595,11 +596,7 @@ mod tests {
         state.task_list_state.selected_index = Some(0);
         state.task_detail_scroll = 10;
 
-        let handled = handle_task_detail_key(
-            &mut state,
-            crossterm::event::KeyCode::PageUp,
-            15,
-        );
+        let handled = handle_task_detail_key(&mut state, crossterm::event::KeyCode::PageUp, 15);
 
         assert!(handled);
         assert!(state.task_detail_scroll < 10);
@@ -621,11 +618,7 @@ mod tests {
         state.task_list_state.selected_index = Some(0);
         state.task_detail_scroll = 0;
 
-        let handled = handle_task_detail_key(
-            &mut state,
-            crossterm::event::KeyCode::PageDown,
-            10,
-        );
+        let handled = handle_task_detail_key(&mut state, crossterm::event::KeyCode::PageDown, 10);
 
         assert!(handled);
         assert!(state.task_detail_scroll > 0);
@@ -635,11 +628,7 @@ mod tests {
     fn test_handle_task_detail_key_unrecognized() {
         let mut state = TuiState::new();
 
-        let handled = handle_task_detail_key(
-            &mut state,
-            crossterm::event::KeyCode::Char('x'),
-            15,
-        );
+        let handled = handle_task_detail_key(&mut state, crossterm::event::KeyCode::Char('x'), 15);
 
         assert!(!handled);
     }
@@ -649,11 +638,7 @@ mod tests {
         let mut state = TuiState::new();
         // No task selected
 
-        let handled = handle_task_detail_key(
-            &mut state,
-            crossterm::event::KeyCode::PageDown,
-            15,
-        );
+        let handled = handle_task_detail_key(&mut state, crossterm::event::KeyCode::PageDown, 15);
 
         // Should still return true (key was handled) but no scroll change
         assert!(handled);

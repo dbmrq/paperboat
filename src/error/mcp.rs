@@ -6,7 +6,7 @@ use thiserror::Error;
 
 /// Errors that can occur during MCP operations.
 #[derive(Debug, Error)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Error enum with variants for MCP protocol errors
 pub enum McpError {
     /// Requested tool was not found.
     #[error("Tool not found: '{tool_name}'. Available tools: {}", .available_tools.join(", "))]
@@ -75,7 +75,7 @@ pub enum McpError {
 }
 
 // JSON-RPC 2.0 standard error codes (re-exported for convenience)
-#[allow(dead_code)]
+#[allow(dead_code)] // Standard JSON-RPC 2.0 error codes
 impl McpError {
     /// JSON-RPC 2.0: Parse error
     pub const CODE_PARSE_ERROR: i32 = -32700;

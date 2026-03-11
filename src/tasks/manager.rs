@@ -48,7 +48,7 @@ pub struct TaskManagerSnapshot {
     goal: Option<GoalSummary>,
     /// Notes are saved in the snapshot but not restored - we keep notes
     /// accumulated during nested orchestration for context.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Stored but not read during restore (intentional)
     notes: Vec<AgentNote>,
     /// Depth level to restore when returning from nested orchestration.
     depth: u32,
@@ -309,8 +309,8 @@ impl TaskManager {
     /// - It has status `NotStarted`
     /// - All its dependencies are either `Complete` or `Skipped`
     ///
-    /// Note: Part of the API for future orchestration, used in tests.
-    #[allow(dead_code)]
+    /// Note: Part of the public API for future orchestration patterns and tests.
+    #[allow(dead_code)] // Part of the API for future orchestration, used in tests
     pub fn get_ready_tasks(&self) -> Vec<&Task> {
         self.tasks
             .values()
@@ -495,7 +495,7 @@ impl TaskManager {
     /// // ⏳ Blocked tasks:
     /// //   - task005 (waiting on: task003, task004)"
     /// ```
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for orchestration introspection
     pub fn get_task_summary(&self) -> String {
         if self.tasks.is_empty() {
             return "📊 No tasks defined.".to_string();
@@ -596,7 +596,7 @@ impl TaskManager {
     }
 
     /// Get all reported human actions.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for external inspection of human actions
     pub fn get_human_actions(&self) -> &[HumanActionItem] {
         &self.human_actions
     }
@@ -716,7 +716,7 @@ impl TaskManager {
     /// Get a task by its exact ID.
     ///
     /// Note: For lookups that should also support task names, use `get_by_id_or_name` instead.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for exact ID lookups
     pub fn get(&self, id: &TaskId) -> Option<&Task> {
         self.tasks.get(id)
     }
@@ -1062,13 +1062,13 @@ mod tests {
         assert_eq!(
             manager
                 .find_by_name_or_description("UPDATE BUTTON CSS TO USE NEW DESIGN SYSTEM COLORS"),
-            Some(id1.clone())
+            Some(id1)
         );
 
         // 4. Partial match (description contains search text)
         assert_eq!(
             manager.find_by_name_or_description("authentication module"),
-            Some(id2.clone())
+            Some(id2)
         );
 
         // 5. Non-existent returns None
@@ -1079,12 +1079,9 @@ mod tests {
         // 6. Ambiguous partial match returns None
         // Both tasks have "t" in them, so searching for "t" would be ambiguous
         // Actually let's test with something more specific
-        let _id3 = manager.create("Refactor code", "Clean up the codebase", vec![]);
+        let id3 = manager.create("Refactor code", "Clean up the codebase", vec![]);
         // "code" appears in both id3's name and description - but only one task has it
-        assert_eq!(
-            manager.find_by_name_or_description("code"),
-            Some(_id3.clone())
-        );
+        assert_eq!(manager.find_by_name_or_description("code"), Some(id3));
     }
 
     #[test]
@@ -1464,6 +1461,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)] // task_b_entry and task_c_entry are intentionally similar
     fn test_get_blocked_tasks_with_deps() {
         let (tx, _) = broadcast::channel(10);
         let mut manager = TaskManager::new(tx);

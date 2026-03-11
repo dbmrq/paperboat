@@ -156,6 +156,7 @@ impl std::fmt::Debug for TuiState {
             .field("pending_config_update", &self.pending_config_update)
             .field("logger_state", &"<TuiWidgetState>")
             .field("backend_selection_state", &self.backend_selection_state)
+            .field("backends_received", &self.backends_received)
             .finish()
     }
 }
@@ -368,7 +369,7 @@ impl TuiState {
                 depth,
             } => {
                 self.task_list_state.handle_task_created(
-                    task_id,
+                    &task_id,
                     name,
                     description,
                     dependencies,
@@ -810,13 +811,15 @@ mod tests {
     fn test_tui_state_with_model_config() {
         use crate::models::{ModelConfig, ModelFallbackChain, ModelTier};
 
-        let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Opus);
-        config.planner_model = ModelFallbackChain::single(ModelTier::Sonnet);
-        config.implementer_model = ModelFallbackChain::single(ModelTier::Haiku);
-        config.available_tiers = [ModelTier::Opus, ModelTier::Sonnet].into_iter().collect();
+        let config = ModelConfig {
+            orchestrator_model: ModelFallbackChain::single(ModelTier::Opus),
+            planner_model: ModelFallbackChain::single(ModelTier::Sonnet),
+            implementer_model: ModelFallbackChain::single(ModelTier::Haiku),
+            available_tiers: [ModelTier::Opus, ModelTier::Sonnet].into_iter().collect(),
+            ..Default::default()
+        };
 
-        let state = TuiState::with_model_config(config.clone());
+        let state = TuiState::with_model_config(config);
 
         assert_eq!(
             state.model_config.orchestrator_model.primary(),
@@ -831,9 +834,11 @@ mod tests {
 
         let mut state = TuiState::new();
 
-        let mut new_config = ModelConfig::default();
-        new_config.orchestrator_model = ModelFallbackChain::single(ModelTier::Opus);
-        new_config.available_tiers = [ModelTier::Opus].into_iter().collect();
+        let new_config = ModelConfig {
+            orchestrator_model: ModelFallbackChain::single(ModelTier::Opus),
+            available_tiers: std::iter::once(ModelTier::Opus).collect(),
+            ..Default::default()
+        };
 
         state.update_model_config(new_config);
 
@@ -848,8 +853,10 @@ mod tests {
     fn test_tui_state_model_config_getter() {
         use crate::models::{ModelConfig, ModelFallbackChain, ModelTier};
 
-        let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Sonnet);
+        let config = ModelConfig {
+            orchestrator_model: ModelFallbackChain::single(ModelTier::Sonnet),
+            ..Default::default()
+        };
         let state = TuiState::with_model_config(config);
 
         let config_ref = state.model_config();
@@ -863,8 +870,10 @@ mod tests {
     fn test_tui_state_available_tiers_getter() {
         use crate::models::{ModelConfig, ModelTier};
 
-        let mut config = ModelConfig::default();
-        config.available_tiers = [ModelTier::Haiku].into_iter().collect();
+        let config = ModelConfig {
+            available_tiers: std::iter::once(ModelTier::Haiku).collect(),
+            ..Default::default()
+        };
         let state = TuiState::with_model_config(config);
 
         let tiers = state.available_tiers();
@@ -934,11 +943,13 @@ mod tests {
     fn test_apply_settings_changes_with_pending() {
         use crate::models::{ModelConfig, ModelFallbackChain, ModelTier};
 
-        let mut config = ModelConfig::default();
-        config.orchestrator_model = ModelFallbackChain::single(ModelTier::Haiku);
-        config.planner_model = ModelFallbackChain::single(ModelTier::Haiku);
-        config.implementer_model = ModelFallbackChain::single(ModelTier::Haiku);
-        config.available_tiers = [ModelTier::Opus].into_iter().collect();
+        let config = ModelConfig {
+            orchestrator_model: ModelFallbackChain::single(ModelTier::Haiku),
+            planner_model: ModelFallbackChain::single(ModelTier::Haiku),
+            implementer_model: ModelFallbackChain::single(ModelTier::Haiku),
+            available_tiers: std::iter::once(ModelTier::Opus).collect(),
+            ..Default::default()
+        };
 
         let mut state = TuiState::with_model_config(config);
 

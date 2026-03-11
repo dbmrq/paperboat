@@ -1,8 +1,10 @@
 # Paperboat
 
 [![CI](https://github.com/dbmrq/paperboat/actions/workflows/ci.yml/badge.svg)](https://github.com/dbmrq/paperboat/actions/workflows/ci.yml)
+[![Coverage](https://github.com/dbmrq/paperboat/actions/workflows/coverage.yml/badge.svg)](https://github.com/dbmrq/paperboat/actions/workflows/coverage.yml)
 [![Security](https://github.com/dbmrq/paperboat/actions/workflows/security.yml/badge.svg)](https://github.com/dbmrq/paperboat/actions/workflows/security.yml)
 [![codecov](https://codecov.io/gh/dbmrq/paperboat/graph/badge.svg?token=O2TCUWQVJ6)](https://codecov.io/gh/dbmrq/paperboat)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > Any abyss can be sailed using tiny paper boats.\
 > — João Guimarães Rosa
@@ -135,6 +137,10 @@ On Cursor, this resolves to model variants like `gpt-5.4-high`, `opus-4.6-high`,
 | `--validate-config` | Validate config and exit |
 
 **Environment:** `PAPERBOAT_BACKEND`, `PAPERBOAT_LOG_DIR`
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and code quality tools.
 
 ## License
 

@@ -76,7 +76,7 @@ pub fn suggest_model_alias(typo: &str) -> Option<String> {
 
 /// Errors that can occur during configuration operations.
 #[derive(Debug, Error)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Error enum with variants for completeness
 pub enum ConfigError {
     /// Configuration file was not found.
     #[error("Configuration file not found: {path}")]

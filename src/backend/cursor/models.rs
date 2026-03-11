@@ -153,11 +153,11 @@ mod tests {
 
     #[test]
     fn test_parse_cursor_tiers_basic() {
-        let output = r#"
+        let output = r"
 sonnet-4.6 - Claude 4.6 Sonnet
 opus-4.6 - Claude 4.6 Opus
 gpt-5.1-codex-mini - GPT-5.1 Codex Mini
-"#;
+";
         let tiers = parse_cursor_tiers(output).unwrap();
 
         assert!(tiers.contains(&ModelTier::Sonnet));
@@ -169,7 +169,7 @@ gpt-5.1-codex-mini - GPT-5.1 Codex Mini
 
     #[test]
     fn test_parse_cursor_tiers_all_types() {
-        let output = r#"
+        let output = r"
 sonnet-4.6 - Claude 4.6 Sonnet
 opus-4.6 - Claude 4.6 Opus
 gpt-5.3-codex - GPT-5.3 Codex
@@ -178,7 +178,7 @@ gemini-3.1-pro - Gemini 3.1 Pro
 gemini-3-flash - Gemini 3 Flash
 grok - Grok
 composer-1.5 - Composer 1.5
-"#;
+";
         let tiers = parse_cursor_tiers(output).unwrap();
 
         assert!(tiers.contains(&ModelTier::Sonnet));
@@ -198,18 +198,18 @@ composer-1.5 - Composer 1.5
     #[test]
     fn test_parse_cursor_tiers_openai_meta_tier() {
         // Test that OpenAI is added when GPT is available
-        let output_with_gpt = r#"
+        let output_with_gpt = r"
 gpt-5.4 - GPT 5.4
-"#;
+";
         let tiers = parse_cursor_tiers(output_with_gpt).unwrap();
         assert!(tiers.contains(&ModelTier::Gpt));
         assert!(tiers.contains(&ModelTier::OpenAI));
 
         // Test that OpenAI is NOT added when only Claude models are available
-        let output_without_gpt = r#"
+        let output_without_gpt = r"
 sonnet-4.6 - Claude 4.6 Sonnet
 opus-4.6 - Claude 4.6 Opus
-"#;
+";
         let tiers = parse_cursor_tiers(output_without_gpt).unwrap();
         assert!(!tiers.contains(&ModelTier::OpenAI));
     }

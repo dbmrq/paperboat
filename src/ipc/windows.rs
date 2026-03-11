@@ -67,7 +67,7 @@ pub async fn connect(address: &IpcAddress) -> Result<IpcStream, IpcError> {
         .map(|client| IpcStream {
             inner: WindowsStream::Client(client),
         })
-        .map_err(|e| IpcError::ConnectionFailed {
+        .map_err(|e| IpcError::Connection {
             address: address.to_string(),
             source: e,
         })
@@ -129,7 +129,7 @@ pub async fn bind(address: &IpcAddress) -> Result<IpcListener, IpcError> {
         .reject_remote_clients(true) // Security: only local connections
         .pipe_mode(PipeMode::Byte) // Stream mode, like Unix sockets
         .create(&*pipe_name)
-        .map_err(|e| IpcError::BindFailed {
+        .map_err(|e| IpcError::Bind {
             address: address.to_string(),
             source: e,
         })?;
@@ -166,7 +166,7 @@ pub async fn accept(listener: &WindowsListener) -> Result<IpcStream, IpcError> {
     server
         .connect()
         .await
-        .map_err(|e| IpcError::AcceptFailed { source: e })?;
+        .map_err(|e| IpcError::Accept { source: e })?;
 
     // Create a new server instance for the next connection BEFORE returning.
     // This ensures that there's always a server instance available for new
@@ -176,7 +176,7 @@ pub async fn accept(listener: &WindowsListener) -> Result<IpcStream, IpcError> {
         .reject_remote_clients(true) // Match bind() settings
         .pipe_mode(PipeMode::Byte) // Match bind() settings
         .create(&*pipe_name)
-        .map_err(|e| IpcError::BindFailed {
+        .map_err(|e| IpcError::Bind {
             address: listener.address.to_string(),
             source: e,
         })?;

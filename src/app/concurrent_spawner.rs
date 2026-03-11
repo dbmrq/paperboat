@@ -225,7 +225,11 @@ mod tests {
                     "task-success".to_string(),
                     success_rx,
                 ),
-                ("verifier".to_string(), "task-failure".to_string(), failure_rx),
+                (
+                    "verifier".to_string(),
+                    "task-failure".to_string(),
+                    failure_rx,
+                ),
             ],
             vec![spawn_error.clone()],
         )
@@ -235,10 +239,8 @@ mod tests {
         assert_eq!(results[0].task, spawn_error.task);
         assert!(!results[0].success);
 
-        let successful: Vec<_> = results.iter().filter(|result| result.success).collect();
-        let failed: Vec<_> = results.iter().filter(|result| !result.success).collect();
-        assert_eq!(successful.len(), 1);
-        assert_eq!(failed.len(), 2);
+        assert_eq!(results.iter().filter(|result| result.success).count(), 1);
+        assert_eq!(results.iter().filter(|result| !result.success).count(), 2);
         assert!(
             results
                 .iter()
@@ -291,7 +293,11 @@ mod tests {
                     "task-success".to_string(),
                     slow_success_rx,
                 ),
-                ("verifier".to_string(), "task-failure".to_string(), fast_failure_rx),
+                (
+                    "verifier".to_string(),
+                    "task-failure".to_string(),
+                    fast_failure_rx,
+                ),
             ],
             vec![spawn_error.clone()],
         )

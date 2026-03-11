@@ -77,14 +77,14 @@ impl IpcStream {
     ///
     /// # Errors
     ///
-    /// Returns `IpcError::ConnectionFailed` if the connection cannot be established.
+    /// Returns `IpcError::Connection` if the connection cannot be established.
     pub async fn connect(address: &IpcAddress) -> Result<Self, IpcError> {
         #[cfg(unix)]
         {
             tokio::net::UnixStream::connect(address.as_path())
                 .await
                 .map(|stream| Self { inner: stream })
-                .map_err(|e| IpcError::ConnectionFailed {
+                .map_err(|e| IpcError::Connection {
                     address: address.to_string(),
                     source: e,
                 })
@@ -298,7 +298,7 @@ impl IpcListener {
     ///
     /// # Errors
     ///
-    /// Returns `IpcError::BindFailed` if the listener cannot be created.
+    /// Returns `IpcError::Bind` if the listener cannot be created.
     pub async fn bind(address: &IpcAddress) -> Result<Self, IpcError> {
         #[cfg(unix)]
         {
@@ -307,7 +307,7 @@ impl IpcListener {
 
             tokio::net::UnixListener::bind(address.as_path())
                 .map(|listener| Self { inner: listener })
-                .map_err(|e| IpcError::BindFailed {
+                .map_err(|e| IpcError::Bind {
                     address: address.to_string(),
                     source: e,
                 })
@@ -326,7 +326,7 @@ impl IpcListener {
     ///
     /// # Errors
     ///
-    /// Returns `IpcError::AcceptFailed` if accepting fails. This typically
+    /// Returns `IpcError::Accept` if accepting fails. This typically
     /// indicates the listener has been closed or an OS-level error occurred.
     pub async fn accept(&self) -> Result<IpcStream, IpcError> {
         #[cfg(unix)]
@@ -335,7 +335,7 @@ impl IpcListener {
                 .accept()
                 .await
                 .map(|(stream, _addr)| IpcStream { inner: stream })
-                .map_err(|e| IpcError::AcceptFailed { source: e })
+                .map_err(|e| IpcError::Accept { source: e })
         }
 
         #[cfg(windows)]
@@ -345,7 +345,7 @@ impl IpcListener {
     }
 
     /// Get the address this listener is bound to.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::missing_const_for_fn)] // Windows path requires Clone
     pub fn address(&self) -> Option<IpcAddress> {
         #[cfg(unix)]
         {

@@ -1074,8 +1074,7 @@ print(
         let _path = EnvGuard::set("PATH", temp_dir.path().to_str().unwrap());
 
         // spawn_with_timeout should fail because agent CLI is not found
-        let result =
-            CursorAcpClient::spawn_with_timeout(None, Duration::from_millis(50)).await;
+        let result = CursorAcpClient::spawn_with_timeout(None, Duration::from_millis(50)).await;
 
         match result {
             Ok(_) => panic!("Expected error when agent CLI is not found"),

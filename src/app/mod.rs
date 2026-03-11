@@ -36,6 +36,7 @@ mod context_generator;
 mod decompose;
 mod orchestrator;
 mod orchestrator_acp;
+mod orchestrator_handlers;
 mod planner;
 pub mod retry;
 pub mod router;
@@ -90,7 +91,7 @@ pub struct App {
     /// Whether the message router is active (controls session message routing behavior)
     pub(crate) router_active: bool,
     /// Log manager for this run (kept for future use/API exposure)
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Kept for future log manager API exposure
     log_manager: Arc<RunLogManager>,
     /// Current logging scope (changes during decompose/subtasks)
     pub(crate) current_scope: LogScope,
@@ -238,7 +239,7 @@ impl App {
     /// This constructor allows injection of mock ACP clients, enabling deterministic
     /// testing without requiring live agent processes.
     #[cfg(any(test, feature = "testing"))]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Test constructor for mock transport injection
     pub fn with_mock_transports(
         backend: Box<dyn Backend>,
         orchestrator: Box<dyn AgentTransport>,
@@ -320,7 +321,7 @@ impl App {
     }
 
     /// Set up IPC socket for MCP server communication
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Internal setup method, called from run_impl
     async fn setup_socket(&mut self) -> Result<IpcAddress> {
         let (socket_address, tool_rx, listener_task) = socket::setup_socket().await?;
 
@@ -545,7 +546,7 @@ impl App {
     ///
     /// This is a helper method that consolidates the repeated pattern of joining summaries
     /// and appending agent notes from the task manager.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Helper method for summary building without suggested tasks
     pub(crate) async fn build_summary_with_notes(&self, summaries: Vec<String>) -> String {
         self.build_summary_with_notes_and_suggested_tasks(summaries, vec![])
             .await

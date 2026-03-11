@@ -604,7 +604,7 @@ mod tests {
         );
     }
 
-    /// Test that skip_tasks tool definition is available to orchestrators.
+    /// Test that `skip_tasks` tool definition is available to orchestrators.
     #[tokio::test]
     #[serial]
     async fn test_skip_tasks_tool_definition() {
@@ -651,7 +651,7 @@ mod tests {
         );
     }
 
-    /// Test that skip_tasks is not available to non-orchestrator agents.
+    /// Test that `skip_tasks` is not available to non-orchestrator agents.
     #[tokio::test]
     #[serial]
     async fn test_skip_tasks_not_available_to_planners() {
@@ -676,7 +676,7 @@ mod tests {
         );
     }
 
-    /// Test parsing of skip_tasks tool call with valid arguments.
+    /// Test parsing of `skip_tasks` tool call with valid arguments.
     #[test]
     fn test_parse_skip_tasks_valid() {
         // This test validates the parsing logic by checking the ToolCall variant construction
@@ -701,7 +701,7 @@ mod tests {
         }
     }
 
-    /// Test parsing of skip_tasks tool call without reason (optional field).
+    /// Test parsing of `skip_tasks` tool call without reason (optional field).
     #[test]
     fn test_parse_skip_tasks_without_reason() {
         let task_ids = vec!["task001".to_string()];

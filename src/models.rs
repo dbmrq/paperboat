@@ -78,7 +78,7 @@ impl EffortLevel {
     }
 
     /// Returns all known effort levels.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for iteration over effort levels
     pub const fn all() -> &'static [Self] {
         &[Self::Low, Self::Medium, Self::High, Self::XHigh]
     }
@@ -118,7 +118,7 @@ impl std::fmt::Display for EffortLevel {
 /// # Meta-Tiers
 ///
 /// Some tiers are "meta-tiers" that expand to multiple concrete tiers:
-/// - `OpenAI`: Expands to `[Gpt, Codex]` - all OpenAI models
+/// - `OpenAI`: Expands to `[Gpt, Codex]` - all `OpenAI` models
 ///
 /// # Effort Levels
 ///
@@ -139,9 +139,9 @@ pub enum ModelTier {
     Sonnet,
     /// Anthropic Haiku - fast and cheap (Auggie only)
     Haiku,
-    /// OpenAI GPT - general purpose model (meta-tier for all GPT models)
+    /// `OpenAI` GPT - general purpose model (meta-tier for all GPT models)
     Gpt,
-    /// OpenAI models - meta-tier that expands to [Gpt, Codex]
+    /// `OpenAI` models - meta-tier that expands to [Gpt, Codex]
     #[serde(rename = "openai")]
     OpenAI,
     /// GPT Codex - coding-optimized model
@@ -178,7 +178,7 @@ impl ModelTier {
     }
 
     /// Returns all known model tiers.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for iteration over model tiers
     pub const fn all() -> &'static [Self] {
         &[
             Self::Auto,
@@ -197,13 +197,13 @@ impl ModelTier {
     }
 
     /// Returns `true` if this is the `Auto` variant.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for tier introspection
     pub const fn is_auto(&self) -> bool {
         matches!(self, Self::Auto)
     }
 
     /// Returns `true` if this is a meta-tier that expands to multiple tiers.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for meta-tier detection
     pub const fn is_meta_tier(&self) -> bool {
         matches!(self, Self::OpenAI)
     }
@@ -212,7 +212,7 @@ impl ModelTier {
     ///
     /// For example, `OpenAI` expands to `[Gpt, Codex]`.
     /// Non-meta tiers return a single-element slice containing themselves.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for meta-tier expansion
     pub fn expand(&self) -> Vec<Self> {
         match self {
             Self::OpenAI => vec![Self::Gpt, Self::Codex],
@@ -308,7 +308,7 @@ impl ModelFallbackChain {
     }
 
     /// Returns `true` if the chain contains only `Auto`.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for chain introspection
     pub fn is_auto(&self) -> bool {
         self.0.len() == 1 && self.0[0].is_auto()
     }
@@ -492,19 +492,19 @@ impl ModelConfig {
     }
 
     /// Resolve the orchestrator model chain to a concrete tier.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for model resolution
     pub fn resolve_orchestrator(&self) -> Result<ModelTier> {
         self.orchestrator_model.resolve(&self.available_tiers)
     }
 
     /// Resolve the planner model chain to a concrete tier.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for model resolution
     pub fn resolve_planner(&self) -> Result<ModelTier> {
         self.planner_model.resolve(&self.available_tiers)
     }
 
     /// Resolve the implementer model chain to a concrete tier.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for model resolution
     pub fn resolve_implementer(&self) -> Result<ModelTier> {
         self.implementer_model.resolve(&self.available_tiers)
     }
@@ -785,7 +785,7 @@ mod tests {
     fn test_fallback_chain_resolve_none_available() {
         let chain = ModelFallbackChain::new(vec![ModelTier::Gemini, ModelTier::Grok]);
 
-        let available: HashSet<ModelTier> = [ModelTier::Sonnet].into_iter().collect();
+        let available: HashSet<ModelTier> = std::iter::once(ModelTier::Sonnet).collect();
 
         assert!(chain.resolve(&available).is_err());
     }
@@ -818,7 +818,7 @@ mod tests {
     #[test]
     fn test_fallback_chain_display() {
         let chain = ModelFallbackChain::new(vec![ModelTier::Sonnet, ModelTier::Opus]);
-        assert_eq!(format!("{}", chain), "[sonnet, opus]");
+        assert_eq!(format!("{chain}"), "[sonnet, opus]");
     }
 
     // ========================================================================
@@ -844,7 +844,7 @@ mod tests {
     #[test]
     fn test_model_config_validate_fails_when_no_tier_available() {
         // Config with only Gemini available, but default chains don't include it
-        let available: HashSet<ModelTier> = [ModelTier::Gemini].into_iter().collect();
+        let available: HashSet<ModelTier> = std::iter::once(ModelTier::Gemini).collect();
 
         let config = ModelConfig::new(available);
         assert!(config.validate().is_err());

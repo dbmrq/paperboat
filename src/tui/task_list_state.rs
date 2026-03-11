@@ -60,14 +60,14 @@ impl TaskListState {
     /// Handles a `TaskCreated` event.
     pub fn handle_task_created(
         &mut self,
-        task_id: String,
+        task_id: &str,
         name: String,
         description: String,
         dependencies: Vec<String>,
         depth: u32,
     ) {
         let task = TaskDisplay {
-            task_id: task_id.clone(),
+            task_id: task_id.to_string(),
             name,
             description,
             status: "pending".to_string(),
@@ -75,7 +75,7 @@ impl TaskListState {
             depth,
         };
 
-        let key = Self::task_key(&task_id, depth);
+        let key = Self::task_key(task_id, depth);
         let is_new_task = self.tasks.insert(key.clone(), task).is_none();
         if is_new_task {
             self.task_order.push(key);
@@ -185,7 +185,7 @@ mod tests {
         let mut list = TaskListState::new();
 
         list.handle_task_created(
-            "task-1".to_string(),
+            "task-1",
             "Task 1".to_string(),
             "Description".to_string(),
             vec![],
@@ -205,14 +205,14 @@ mod tests {
         let mut list = TaskListState::new();
 
         list.handle_task_created(
-            "task001".to_string(),
+            "task001",
             "Root task".to_string(),
             "Top-level work".to_string(),
             vec![],
             0,
         );
         list.handle_task_created(
-            "task001".to_string(),
+            "task001",
             "Nested task".to_string(),
             "Child work".to_string(),
             vec![],
@@ -232,14 +232,14 @@ mod tests {
         let mut list = TaskListState::new();
 
         list.handle_task_created(
-            "task001".to_string(),
+            "task001",
             "Original".to_string(),
             "First version".to_string(),
             vec![],
             1,
         );
         list.handle_task_created(
-            "task001".to_string(),
+            "task001",
             "Updated".to_string(),
             "Second version".to_string(),
             vec![],
@@ -257,7 +257,7 @@ mod tests {
         let mut list = TaskListState::new();
 
         list.handle_task_created(
-            "task-1".to_string(),
+            "task-1",
             "Task 1".to_string(),
             "Desc".to_string(),
             vec![],
@@ -275,14 +275,14 @@ mod tests {
         let mut list = TaskListState::new();
 
         list.handle_task_created(
-            "task001".to_string(),
+            "task001",
             "Root task".to_string(),
             "Top-level work".to_string(),
             vec![],
             0,
         );
         list.handle_task_created(
-            "task001".to_string(),
+            "task001",
             "Nested task".to_string(),
             "Child work".to_string(),
             vec![],
@@ -300,27 +300,9 @@ mod tests {
     fn test_task_list_state_navigation() {
         let mut list = TaskListState::new();
 
-        list.handle_task_created(
-            "t1".to_string(),
-            "T1".to_string(),
-            "D".to_string(),
-            vec![],
-            0,
-        );
-        list.handle_task_created(
-            "t2".to_string(),
-            "T2".to_string(),
-            "D".to_string(),
-            vec![],
-            0,
-        );
-        list.handle_task_created(
-            "t3".to_string(),
-            "T3".to_string(),
-            "D".to_string(),
-            vec![],
-            0,
-        );
+        list.handle_task_created("t1", "T1".to_string(), "D".to_string(), vec![], 0);
+        list.handle_task_created("t2", "T2".to_string(), "D".to_string(), vec![], 0);
+        list.handle_task_created("t3", "T3".to_string(), "D".to_string(), vec![], 0);
 
         assert!(list.selected_index.is_none());
 
@@ -340,7 +322,7 @@ mod tests {
 
         // Create a task - starts as pending
         list.handle_task_created(
-            "task-1".to_string(),
+            "task-1",
             "Test Task".to_string(),
             "Description".to_string(),
             vec![],
@@ -358,7 +340,7 @@ mod tests {
 
         // Create another task for failure scenario
         list.handle_task_created(
-            "task-2".to_string(),
+            "task-2",
             "Failing Task".to_string(),
             "Will fail".to_string(),
             vec![],
@@ -382,27 +364,9 @@ mod tests {
     fn test_select_index_within_bounds() {
         let mut list = TaskListState::new();
 
-        list.handle_task_created(
-            "t1".to_string(),
-            "T1".to_string(),
-            "D".to_string(),
-            vec![],
-            0,
-        );
-        list.handle_task_created(
-            "t2".to_string(),
-            "T2".to_string(),
-            "D".to_string(),
-            vec![],
-            0,
-        );
-        list.handle_task_created(
-            "t3".to_string(),
-            "T3".to_string(),
-            "D".to_string(),
-            vec![],
-            0,
-        );
+        list.handle_task_created("t1", "T1".to_string(), "D".to_string(), vec![], 0);
+        list.handle_task_created("t2", "T2".to_string(), "D".to_string(), vec![], 0);
+        list.handle_task_created("t3", "T3".to_string(), "D".to_string(), vec![], 0);
 
         // Select first task
         list.select_index(0);
@@ -421,20 +385,8 @@ mod tests {
     fn test_select_index_out_of_bounds_ignored() {
         let mut list = TaskListState::new();
 
-        list.handle_task_created(
-            "t1".to_string(),
-            "T1".to_string(),
-            "D".to_string(),
-            vec![],
-            0,
-        );
-        list.handle_task_created(
-            "t2".to_string(),
-            "T2".to_string(),
-            "D".to_string(),
-            vec![],
-            0,
-        );
+        list.handle_task_created("t1", "T1".to_string(), "D".to_string(), vec![], 0);
+        list.handle_task_created("t2", "T2".to_string(), "D".to_string(), vec![], 0);
 
         // Set a valid selection first
         list.select_index(0);

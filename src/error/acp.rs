@@ -8,7 +8,7 @@ use thiserror::Error;
 
 /// Errors that can occur during ACP operations.
 #[derive(Debug, Error)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Error enum with variants for ACP protocol errors
 pub enum AcpError {
     /// Failed to establish connection with the agent CLI.
     #[error("Failed to connect to agent: {message}")]
@@ -79,7 +79,7 @@ pub enum AcpError {
 /// These suggestions are backend-agnostic and can include backend-specific
 /// information via their string parameters.
 #[derive(Debug, Error)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Suggestion enum with variants for error recovery
 pub enum AcpSuggestion {
     /// The CLI is not installed or not in PATH.
     /// Parameter: backend name for context (e.g., "auggie", "cursor").

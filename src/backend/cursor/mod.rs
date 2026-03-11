@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_cursor_backend_default() {
-        let _backend: CursorBackend = Default::default();
+        let _ = CursorBackend;
     }
 
     #[test]
@@ -576,7 +576,10 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
         assert_eq!(config.mcp_servers.len(), 1);
         assert!(config.mcp_servers.contains_key("github"));
-        assert!(!config.mcp_servers.keys().any(|name| name.starts_with("paperboat-")));
+        assert!(!config
+            .mcp_servers
+            .keys()
+            .any(|name| name.starts_with("paperboat-")));
     }
 
     // ========================================================================
@@ -696,7 +699,10 @@ mod tests {
 
         // Sonnet tier should return multiple options
         let sonnet_models = backend.resolve_tier(ModelTier::Sonnet, None).unwrap();
-        assert!(sonnet_models.len() >= 2, "Sonnet should have fallback chain");
+        assert!(
+            sonnet_models.len() >= 2,
+            "Sonnet should have fallback chain"
+        );
         assert!(sonnet_models.iter().any(|m| m.contains("sonnet")));
 
         // Opus tier

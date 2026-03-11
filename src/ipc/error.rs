@@ -19,7 +19,7 @@ pub enum IpcError {
     /// - Address already in use
     /// - Permission denied
     /// - Invalid path (Unix) or pipe name (Windows)
-    BindFailed {
+    Bind {
         /// The address that failed to bind
         address: String,
         /// The underlying IO error
@@ -32,7 +32,7 @@ pub enum IpcError {
     /// - Server not listening
     /// - Connection refused
     /// - Timeout
-    ConnectionFailed {
+    Connection {
         /// The address that failed to connect
         address: String,
         /// The underlying IO error
@@ -42,7 +42,7 @@ pub enum IpcError {
     /// Failed to accept a connection (server-side).
     ///
     /// This usually indicates the listener was closed or an OS-level error.
-    AcceptFailed {
+    Accept {
         /// The underlying IO error
         source: io::Error,
     },
@@ -51,13 +51,13 @@ pub enum IpcError {
 impl fmt::Display for IpcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BindFailed { address, source } => {
+            Self::Bind { address, source } => {
                 write!(f, "Failed to bind IPC listener at '{address}': {source}")
             }
-            Self::ConnectionFailed { address, source } => {
+            Self::Connection { address, source } => {
                 write!(f, "Failed to connect to IPC endpoint '{address}': {source}")
             }
-            Self::AcceptFailed { source } => {
+            Self::Accept { source } => {
                 write!(f, "Failed to accept IPC connection: {source}")
             }
         }
@@ -67,9 +67,9 @@ impl fmt::Display for IpcError {
 impl std::error::Error for IpcError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::BindFailed { source, .. }
-            | Self::ConnectionFailed { source, .. }
-            | Self::AcceptFailed { source } => Some(source),
+            Self::Bind { source, .. }
+            | Self::Connection { source, .. }
+            | Self::Accept { source } => Some(source),
         }
     }
 }

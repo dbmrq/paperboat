@@ -67,9 +67,9 @@ pub struct Task {
     /// IDs of tasks that must complete before this task can start.
     pub dependencies: Vec<TaskId>,
     /// When this task was created (not serialized).
-    /// Note: Part of the API for future use, not yet read in production code.
+    /// Part of the API for future task timing analytics.
     #[serde(skip)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for future task timing analytics
     pub created_at: Option<Instant>,
 }
 

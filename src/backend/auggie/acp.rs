@@ -174,17 +174,19 @@ impl AuggieAcpTransport {
 
 /// Convert an ACP notification to a `SessionUpdate`.
 ///
-/// ACP notifications have the format:
-/// ```json
-/// {
-///   "method": "session/update",
-///   "params": {
-///     "sessionId": "...",
-///     "type": "text|tool_use|tool_result|completion|end",
-///     ...
-///   }
-/// }
-/// ```
+/// Supports two formats:
+///
+/// 1. **Standard ACP format** (params.update with sessionUpdate):
+///    ```json
+///    { "params": { "sessionId": "...", "update": { "sessionUpdate": "agent_message_chunk", "content": { "text": "..." } } } }
+///    ```
+///    Passed through as Raw so the session handler processes it directly.
+///
+/// 2. **Flat format** (params.type and params.content):
+///    ```json
+///    { "params": { "sessionId": "...", "type": "text", "content": "..." } }
+///    ```
+///    Converted to typed SessionUpdate for the bridge.
 fn convert_notification_to_update(
     notification: &Value,
     default_session_id: &str,
@@ -201,14 +203,36 @@ fn convert_notification_to_update(
     let params = notification.get("params")?;
     let session_id = params
         .get("sessionId")
+        .or_else(|| params.get("session_id"))
         .and_then(|v| v.as_str())
         .unwrap_or(default_session_id)
         .to_string();
+
+    // Standard ACP format: params.update with sessionUpdate/content
+    // Pass through so the session handler (which expects this shape) processes it directly
+    if params.get("update").is_some() {
+        return Some(SessionUpdate::Raw {
+            session_id: Some(session_id),
+            data: notification.clone(),
+        });
+    }
+
+    // Flat format: params.type and params.content
     let update_type = params.get("type")?.as_str()?;
 
     match update_type {
         "text" => {
-            let content = params.get("content")?.as_str()?.to_string();
+            // content can be string or object with "text" field
+            let content = params
+                .get("content")
+                .and_then(|c| c.as_str().map(String::from))
+                .or_else(|| {
+                    params
+                        .get("content")
+                        .and_then(|c| c.get("text"))
+                        .and_then(|t| t.as_str())
+                        .map(String::from)
+                })?;
             Some(SessionUpdate::Text {
                 session_id,
                 content,
@@ -549,6 +573,66 @@ mod tests {
         assert!(update.is_some());
         if let Some(SessionUpdate::Text { session_id, .. }) = update {
             assert_eq!(session_id, "default-session");
+        } else {
+            panic!("Expected Text update");
+        }
+    }
+
+    #[test]
+    fn test_convert_standard_acp_format_passed_through_as_raw() {
+        // Standard ACP format (params.update with sessionUpdate) - used by Auggie for thinking
+        let notification = json!({
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess-123",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                        "type": "text",
+                        "text": "**Planning tool usage**\n\nI need to..."
+                    }
+                }
+            }
+        });
+
+        let update = convert_notification_to_update(&notification, "default");
+        assert!(update.is_some());
+        if let Some(SessionUpdate::Raw { session_id, data }) = update {
+            assert_eq!(session_id, Some("sess-123".to_string()));
+            assert_eq!(
+                data["params"]["update"]["sessionUpdate"],
+                "agent_message_chunk"
+            );
+            assert_eq!(
+                data["params"]["update"]["content"]["text"],
+                "**Planning tool usage**\n\nI need to..."
+            );
+        } else {
+            panic!("Expected Raw update for standard format");
+        }
+    }
+
+    #[test]
+    fn test_convert_flat_format_content_object() {
+        // Flat format with content as object { "text": "..." }
+        let notification = json!({
+            "method": "session/update",
+            "params": {
+                "sessionId": "sess-456",
+                "type": "text",
+                "content": { "text": "Hello from object" }
+            }
+        });
+
+        let update = convert_notification_to_update(&notification, "default");
+        assert!(update.is_some());
+        if let Some(SessionUpdate::Text {
+            session_id,
+            content,
+        }) = update
+        {
+            assert_eq!(session_id, "sess-456");
+            assert_eq!(content, "Hello from object");
         } else {
             panic!("Expected Text update");
         }

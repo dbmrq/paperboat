@@ -56,7 +56,7 @@ impl RetryConfig {
     }
 
     /// Create a config with no retries (useful for testing).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Test utility for disabling retries
     pub const fn no_retry() -> Self {
         Self {
             max_retries: 0,

@@ -47,7 +47,7 @@ impl AgentFileConfig {
     /// # Errors
     ///
     /// Returns `ConfigError::InvalidModel` if the model alias is not recognized.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for config validation
     pub fn validate(&self) -> Result<(), ConfigError> {
         if let Some(ref model) = self.model {
             self.validate_model(model, None)?;
@@ -73,7 +73,7 @@ impl AgentFileConfig {
     /// Supports both single models ("opus") and fallback chains ("openai, opus, gemini").
     fn validate_model(&self, model: &str, file_path: Option<&Path>) -> Result<(), ConfigError> {
         // Handle fallback chains (comma-separated models)
-        let models: Vec<&str> = model.split(',').map(|s| s.trim()).collect();
+        let models: Vec<&str> = model.split(',').map(str::trim).collect();
 
         for single_model in models {
             self.validate_single_model(single_model, file_path)?;
@@ -327,7 +327,7 @@ const PAPERBOAT_BACKEND_ENV: &str = "PAPERBOAT_BACKEND";
 /// let backend = config.kind.create();
 /// let transport = config.effective_transport();
 /// ```
-#[allow(dead_code)]
+#[allow(dead_code)] // Public API for loading backend configuration
 pub fn load_backend_config() -> BackendConfig {
     // Priority 1: Environment variable
     if let Ok(backend_str) = std::env::var(PAPERBOAT_BACKEND_ENV) {
@@ -395,7 +395,7 @@ pub fn load_backend_config() -> BackendConfig {
 ///
 /// This function is kept for backwards compatibility. New code should use
 /// [`load_backend_config`] which returns the full [`BackendConfig`].
-#[allow(dead_code)]
+#[allow(dead_code)] // Backwards compatibility wrapper
 pub fn load_backend_kind() -> BackendKind {
     load_backend_config().kind
 }
@@ -568,8 +568,7 @@ mod tests {
             };
             assert!(
                 config.validate().is_ok(),
-                "Expected '{}' to be a valid alias",
-                alias
+                "Expected '{alias}' to be a valid alias"
             );
         }
     }
@@ -921,7 +920,7 @@ model = "opus"  # inline comment
             implementer: AgentFileConfig::default(),
         };
 
-        let available_tiers: HashSet<ModelTier> = [ModelTier::Opus].into_iter().collect();
+        let available_tiers: HashSet<ModelTier> = std::iter::once(ModelTier::Opus).collect();
 
         let config = build_model_config(&loaded, available_tiers).unwrap();
 

@@ -38,19 +38,16 @@ fn strip_mcp_prefix(title: &str) -> &str {
 /// `add_tasks` parameter in `complete()`.
 fn build_tool_rejection_message(tool_type: &str) -> String {
     match tool_type {
-        "create_task" => {
-            "Tool 'create_task' is not available to worker agents. \
+        "create_task" => "Tool 'create_task' is not available to worker agents. \
              To suggest new tasks, use the 'add_tasks' parameter when calling \
              complete(success=..., message=..., add_tasks=[...]). \
              The add_tasks array accepts objects with 'name' and 'description' fields."
-                .to_string()
-        }
+            .to_string(),
         _ => {
             format!(
                 "Worker agents can only call complete(). \
-                 Tool '{}' is not available. \
-                 Call complete(success=true/false, message=\"...\") when done.",
-                tool_type
+                 Tool '{tool_type}' is not available. \
+                 Call complete(success=true/false, message=\"...\") when done."
             )
         }
     }
@@ -287,7 +284,7 @@ pub async fn run_agent_handler(
 ///
 /// This is a simplified version that just waits for the session to finish.
 /// Used by the old sequential mode - kept for fallback compatibility.
-#[allow(dead_code)]
+#[allow(dead_code)] // Kept for fallback compatibility with sequential mode
 pub async fn wait_for_agent_completion(
     mut session_rx: tokio::sync::mpsc::Receiver<serde_json::Value>,
     timeout: std::time::Duration,
@@ -331,14 +328,10 @@ mod tests {
         let dir = tempdir().expect("create temp dir");
         let log_path = dir.path().join("implementer.log");
         let (event_tx, _) = broadcast::channel(8);
-        let mut writer = AgentWriter::new(
-            log_path,
-            AgentType::Implementer { index: 1 },
-            event_tx,
-            0,
-        )
-        .await
-        .expect("create writer");
+        let mut writer =
+            AgentWriter::new(log_path, AgentType::Implementer { index: 1 }, event_tx, 0)
+                .await
+                .expect("create writer");
 
         let socket_handle = setup_agent_socket("handler-missing-complete")
             .await
@@ -406,10 +399,7 @@ mod tests {
     fn build_tool_rejection_message_other_tools_uses_generic_message() {
         let msg = super::build_tool_rejection_message("spawn_agents");
 
-        assert!(
-            msg.contains("spawn_agents"),
-            "Should include the tool name"
-        );
+        assert!(msg.contains("spawn_agents"), "Should include the tool name");
         assert!(
             msg.contains("is not available"),
             "Should use generic rejection"

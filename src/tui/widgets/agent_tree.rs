@@ -174,7 +174,7 @@ fn update_selected_agent(state: &mut TuiState) {
 }
 
 /// Checks if the agent tree panel is currently focused.
-#[allow(dead_code)]
+#[allow(dead_code)] // Utility for focus-dependent rendering
 fn is_agent_tree_focused(state: &TuiState) -> bool {
     state.current_focus == FocusedPanel::AgentTree
 }

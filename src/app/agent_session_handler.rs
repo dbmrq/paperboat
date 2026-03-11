@@ -222,6 +222,7 @@ mod tests {
     use tokio::sync::{broadcast, oneshot};
 
     #[tokio::test]
+    #[allow(clippy::similar_names)] // router vs routed are intentionally similar
     async fn spawn_agent_handler_task_marks_task_failed_and_unregisters_session() {
         let dir = tempdir().expect("create temp dir");
         let log_path = dir.path().join("implementer-001.log");
@@ -299,13 +300,11 @@ mod tests {
 
         let result = result_rx.await.expect("receive handler result");
         assert!(!result.success);
-        assert!(
-            result
-                .message
-                .as_deref()
-                .unwrap_or_default()
-                .contains("without calling complete()")
-        );
+        assert!(result
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("without calling complete()"));
 
         let task = task_manager
             .read()

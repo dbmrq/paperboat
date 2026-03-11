@@ -169,7 +169,9 @@ struct AssistantMessage {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ContentBlock {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     // Tool use blocks are handled separately via ToolUse type
     #[serde(other)]
     Other,
@@ -258,13 +260,13 @@ impl CursorCliTransport {
                     .collect::<Vec<_>>()
                     .join("");
 
-                if !text.is_empty() {
+                if text.is_empty() {
+                    None
+                } else {
                     Some(SessionUpdate::Text {
                         session_id: session_id.to_string(),
-                        content: format!("\n\n**Response:**\n{}", text),
+                        content: format!("\n\n**Response:**\n{text}"),
                     })
-                } else {
-                    None
                 }
             }
             Ok(CliOutputLine::ToolUse {
@@ -310,7 +312,7 @@ impl CursorCliTransport {
                 })
             }
             // Ignore system and user message echoes
-            Ok(CliOutputLine::System { .. }) | Ok(CliOutputLine::User { .. }) => None,
+            Ok(CliOutputLine::System { .. } | CliOutputLine::User { .. }) => None,
             Err(e) => {
                 // Log parse errors for debugging but don't fail
                 tracing::trace!("Failed to parse CLI output line: {} - {}", line, e);
@@ -1267,10 +1269,15 @@ mod tests {
     #[test]
     fn test_parse_thinking_delta_output() {
         let transport = CursorCliTransport::for_implementer();
-        let line = r#"{"type":"thinking","subtype":"delta","text":"reasoning...","session_id":"abc"}"#;
+        let line =
+            r#"{"type":"thinking","subtype":"delta","text":"reasoning...","session_id":"abc"}"#;
         let update = transport.parse_output_line(line, "test-session");
 
-        if let Some(SessionUpdate::Text { session_id, content }) = update {
+        if let Some(SessionUpdate::Text {
+            session_id,
+            content,
+        }) = update
+        {
             assert_eq!(session_id, "test-session");
             assert_eq!(content, "reasoning...");
         } else {
@@ -1294,7 +1301,11 @@ mod tests {
         let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello!"}]},"session_id":"abc"}"#;
         let update = transport.parse_output_line(line, "test-session");
 
-        if let Some(SessionUpdate::Text { session_id, content }) = update {
+        if let Some(SessionUpdate::Text {
+            session_id,
+            content,
+        }) = update
+        {
             assert_eq!(session_id, "test-session");
             assert!(content.contains("Hello!"));
         } else {
@@ -1524,7 +1535,7 @@ mod tests {
     fn test_multiple_outputs_parsed_correctly() {
         let transport = CursorCliTransport::for_implementer();
 
-        let lines = vec![
+        let lines = [
             r#"{"type":"text","content":"Starting..."}"#,
             r#"{"type":"tool_use","id":"call_1","name":"view","input":{"path":"test.rs"}}"#,
             r#"{"type":"tool_result","tool_use_id":"call_1","content":"file content"}"#,

@@ -48,7 +48,7 @@ use thiserror::Error;
 /// This enum encompasses all error types in the Paperboat system,
 /// allowing for unified error handling at the application level.
 #[derive(Debug, Error)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Top-level error enum for unified error handling
 pub enum PaperboatError {
     /// ACP (Agent Communication Protocol) errors
     #[error(transparent)]

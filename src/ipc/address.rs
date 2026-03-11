@@ -30,8 +30,8 @@ use std::path::PathBuf;
 pub struct IpcAddress {
     /// The underlying path/name representation.
     ///
-    /// - Unix: PathBuf pointing to socket file
-    /// - Windows: PathBuf containing the pipe name (\\.\pipe\...)
+    /// - Unix: `PathBuf` pointing to socket file
+    /// - Windows: `PathBuf` containing the pipe name (\\.\pipe\...)
     inner: PathBuf,
 }
 
@@ -100,7 +100,7 @@ impl IpcAddress {
     /// On Unix, this is the socket file path.
     /// On Windows, this is the named pipe path.
     #[must_use]
-    pub fn as_path(&self) -> &PathBuf {
+    pub const fn as_path(&self) -> &PathBuf {
         &self.inner
     }
 

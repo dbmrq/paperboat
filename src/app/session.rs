@@ -93,7 +93,7 @@ impl App {
     ///
     /// Note: Currently unused as callers use `wait_for_session_output_with_tool_rx` directly,
     /// but kept for API completeness as a simpler entry point.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // API completeness - simpler entry point for session output
     #[tracing::instrument(skip(self, writer), fields(session_id = %session_id))]
     pub(crate) async fn wait_for_session_output(
         &mut self,
@@ -104,10 +104,10 @@ impl App {
             .await
     }
 
-    /// Wait for a session to complete with an optional custom tool_rx.
+    /// Wait for a session to complete with an optional custom `tool_rx`.
     ///
-    /// For CLI planner sessions, a separate socket is created with its own tool_rx.
-    /// Pass that tool_rx here to ensure MCP tool calls are received from the correct socket.
+    /// For CLI planner sessions, a separate socket is created with its own `tool_rx`.
+    /// Pass that `tool_rx` here to ensure MCP tool calls are received from the correct socket.
     #[tracing::instrument(skip(self, writer, tool_rx_override), fields(session_id = %session_id))]
     pub(crate) async fn wait_for_session_output_with_tool_rx(
         &mut self,
@@ -588,7 +588,9 @@ mod tests {
             Ok(())
         }
 
-        fn take_notifications(&mut self) -> Option<mpsc::Receiver<crate::backend::transport::SessionUpdate>> {
+        fn take_notifications(
+            &mut self,
+        ) -> Option<mpsc::Receiver<crate::backend::transport::SessionUpdate>> {
             None
         }
 
@@ -618,7 +620,7 @@ mod tests {
     }
 
     fn make_model_config() -> ModelConfig {
-        let available = [ModelTier::Sonnet].into_iter().collect();
+        let available = std::iter::once(ModelTier::Sonnet).collect();
         ModelConfig::new(available)
     }
 
@@ -683,12 +685,17 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::similar_names)] // router vs routed are intentionally similar
     async fn test_wait_for_session_output_routed_drains_target_messages_and_unregisters_session() {
         let (tool_tx, tool_rx) = mpsc::channel(8);
         let (mut app, _temp_dir) = make_test_app(tool_rx, Box::new(MockTransport::empty()));
         app.router_active = true;
 
-        let mut writer = app.current_scope.planner_writer().await.expect("planner writer");
+        let mut writer = app
+            .current_scope
+            .planner_writer()
+            .await
+            .expect("planner writer");
         let log_path = writer.path().clone();
 
         let create_task_response = send_tool_request(
@@ -713,8 +720,16 @@ mod tests {
 
         let session_router = Arc::clone(&app.session_router);
         let notifier = tokio::spawn(async move {
-            let target_msg = session_update("session-routed", "agent_message_chunk", Some("drained target"));
-            let other_msg = session_update("session-other", "agent_message_chunk", Some("ignored other"));
+            let target_msg = session_update(
+                "session-routed",
+                "agent_message_chunk",
+                Some("drained target"),
+            );
+            let other_msg = session_update(
+                "session-other",
+                "agent_message_chunk",
+                Some("ignored other"),
+            );
             let finished_msg = session_update("session-routed", "session_finished", None);
 
             let mut routed = false;
@@ -755,9 +770,13 @@ mod tests {
             output.text.is_empty(),
             "messages drained after complete() should not be appended to SessionOutput"
         );
-        assert!(app.tool_rx.is_some(), "tool receiver should be restored after routed wait");
+        assert!(
+            app.tool_rx.is_some(),
+            "tool receiver should be restored after routed wait"
+        );
 
-        let log_contents = std::fs::read_to_string(&log_path).expect("writer log should be readable");
+        let log_contents =
+            std::fs::read_to_string(&log_path).expect("writer log should be readable");
         assert!(log_contents.contains("drained target"));
         assert!(!log_contents.contains("ignored other"));
 
@@ -780,7 +799,8 @@ mod tests {
     async fn test_wait_for_session_output_direct_keeps_pre_complete_output_and_drains_tail() {
         let (tool_tx, tool_rx) = mpsc::channel(8);
         let (worker_tx, worker_rx) = mpsc::channel(8);
-        let (mut app, _temp_dir) = make_test_app(tool_rx, Box::new(ChannelTransport::new(worker_rx)));
+        let (mut app, _temp_dir) =
+            make_test_app(tool_rx, Box::new(ChannelTransport::new(worker_rx)));
 
         let mut writer = app
             .current_scope
@@ -844,9 +864,13 @@ mod tests {
         assert_eq!(complete_response.summary, "done");
 
         assert_eq!(output.text, "before complete");
-        assert!(app.tool_rx.is_some(), "tool receiver should be restored after direct wait");
+        assert!(
+            app.tool_rx.is_some(),
+            "tool receiver should be restored after direct wait"
+        );
 
-        let log_contents = std::fs::read_to_string(&log_path).expect("writer log should be readable");
+        let log_contents =
+            std::fs::read_to_string(&log_path).expect("writer log should be readable");
         assert!(log_contents.contains("before complete"));
         assert!(
             log_contents.contains("drained tail"),

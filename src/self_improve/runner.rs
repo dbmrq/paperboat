@@ -41,7 +41,7 @@ pub struct SelfImprovementOutcome {
     /// Message from the self-improver agent.
     pub message: Option<String>,
     /// Number of changes made (if any).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reserved for future change tracking metrics
     pub changes_made: usize,
 }
 
@@ -644,7 +644,7 @@ mod tests {
             request_timeout: Duration::from_secs(60),
             model: "test-model".to_string(),
         };
-        let cloned = config.clone();
+        let cloned = config;
         assert_eq!(cloned.session_timeout, Duration::from_secs(600));
         assert_eq!(cloned.request_timeout, Duration::from_secs(60));
         assert_eq!(cloned.model, "test-model");
@@ -737,7 +737,7 @@ mod tests {
         assert!(debug_str.contains("SelfImprovementOutcome"));
         assert!(debug_str.contains("success: true"));
         assert!(debug_str.contains("Test message"));
-        assert!(debug_str.contains("5"));
+        assert!(debug_str.contains('5'));
     }
 
     // ========================================================================
@@ -758,7 +758,9 @@ mod tests {
             // On Unix, should be a .sock file in temp directory
             let addr_str = addr1.to_string();
             assert!(addr_str.contains("vl-"));
-            assert!(addr_str.ends_with(".sock"));
+            assert!(std::path::Path::new(&addr_str)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("sock")));
         }
 
         #[cfg(windows)]
@@ -1015,16 +1017,16 @@ mod tests {
         // Verify response format
         assert_eq!(response["request_id"], "req-001");
         assert!(response["success"].as_bool().unwrap());
-        assert_eq!(
-            response["summary"],
-            "Self-improvement analysis complete."
-        );
+        assert_eq!(response["summary"], "Self-improvement analysis complete.");
         assert!(response["files_modified"].as_array().unwrap().is_empty());
 
         // Verify completion signal was sent
         let signal = rx.recv().await.unwrap();
         assert!(signal.success);
-        assert_eq!(signal.message, Some("Self-improvement complete".to_string()));
+        assert_eq!(
+            signal.message,
+            Some("Self-improvement complete".to_string())
+        );
     }
 
     #[tokio::test]
@@ -1081,7 +1083,8 @@ mod tests {
 
         let arguments = json!({});
 
-        let response = handle_selfimprover_request("req-005", "unknown_tool", &arguments, &tx).await;
+        let response =
+            handle_selfimprover_request("req-005", "unknown_tool", &arguments, &tx).await;
 
         // Verify error response
         assert_eq!(response["request_id"], "req-005");
@@ -1264,6 +1267,7 @@ mod tests {
     // ========================================================================
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_skip_when_disabled_via_env() {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
 
@@ -1288,6 +1292,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_skip_when_primary_run_failed() {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
 
@@ -1313,6 +1318,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    #[allow(clippy::await_holding_lock)]
     async fn test_skip_when_not_paperboat_repo() {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
 
@@ -1371,9 +1377,8 @@ version = "0.1.0"
         assert!(success.is_ok());
 
         // Skipped self-improvement (not in paperboat repo, etc.)
-        let skipped: Result<Option<SelfImprovementOutcome>> = Ok(None);
-        assert!(skipped.is_ok());
-        assert!(skipped.unwrap().is_none());
+        let skipped: Option<SelfImprovementOutcome> = None;
+        assert!(skipped.is_none());
 
         // Failed self-improvement (error that can be logged but doesn't crash main run)
         let failed: Result<Option<SelfImprovementOutcome>> =
@@ -1466,6 +1471,7 @@ version = "0.1.0"
     // ========================================================================
 
     #[test]
+    #[allow(clippy::needless_pass_by_value, clippy::let_underscore_future)]
     fn test_socket_handle_has_cleanup() {
         // This is a compile-time test - verifying the cleanup method exists
         // and the struct has the expected fields

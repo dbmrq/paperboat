@@ -401,7 +401,10 @@ mod tests {
 
         let server_name = "paperboat-implementer-session123";
         let server = config.mcp_servers.get(server_name).unwrap();
-        assert_eq!(server.command, std::env::current_exe().unwrap().to_string_lossy());
+        assert_eq!(
+            server.command,
+            std::env::current_exe().unwrap().to_string_lossy()
+        );
         assert_eq!(
             server.args,
             vec![
@@ -464,7 +467,9 @@ mod tests {
 
         assert!(config.mcp_servers.contains_key("github"));
         assert!(
-            config.mcp_servers.contains_key("paperboat-implementer-old123"),
+            config
+                .mcp_servers
+                .contains_key("paperboat-implementer-old123"),
             "existing concurrent Paperboat entry should be preserved"
         );
         assert_eq!(config.mcp_servers.len(), 3);
@@ -486,6 +491,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::permissions_set_readonly_false)] // Test cleanup needs to restore permissions
     fn test_configure_mcp_propagates_write_failures() {
         let temp = tempdir().unwrap();
         let cursor_dir = temp.path().join(".cursor");
@@ -604,7 +610,10 @@ mod tests {
         let config: CursorMcpConfig = serde_json::from_str(&content).unwrap();
 
         // Verify paperboat entries removed
-        assert!(!config.mcp_servers.keys().any(|k| k.starts_with("paperboat-")));
+        assert!(!config
+            .mcp_servers
+            .keys()
+            .any(|k| k.starts_with("paperboat-")));
         // Verify unrelated entries preserved
         assert!(config.mcp_servers.contains_key("github"));
         assert!(config.mcp_servers.contains_key("another-tool"));

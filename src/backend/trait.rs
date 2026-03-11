@@ -43,7 +43,7 @@ pub enum AgentCacheType {
     /// The planner agent that decomposes tasks
     Planner,
     /// The worker agent that implements tasks
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Part of the cache type enum
     Worker,
 }
 
@@ -92,7 +92,7 @@ impl std::fmt::Display for AgentCacheType {
 ///     config,
 /// ).await?;
 /// ```
-#[allow(dead_code)]
+#[allow(dead_code)] // Public type for transport configuration
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
     /// Working directory for the agent session.
@@ -138,7 +138,7 @@ impl TransportConfig {
 
     /// Set the model identifier.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Builder method
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
         self
@@ -146,7 +146,7 @@ impl TransportConfig {
 
     /// Set the request timeout.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Builder method
     pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
         self
@@ -154,7 +154,7 @@ impl TransportConfig {
 
     /// Set the MCP server configurations.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Builder method
     pub fn with_mcp_servers(mut self, servers: Vec<Value>) -> Self {
         self.mcp_servers = servers;
         self
@@ -162,7 +162,7 @@ impl TransportConfig {
 
     /// Add a single MCP server configuration.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Builder method
     pub fn with_mcp_server(mut self, server: Value) -> Self {
         self.mcp_servers.push(server);
         self
@@ -290,7 +290,7 @@ pub trait Backend: Send + Sync {
     /// For Cursor backend, the agent_type determines tool permissions:
     /// - `Orchestrator`/`Planner`: File editing tools are denied
     /// - `Worker`: All tools are allowed
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Part of Backend trait
     async fn create_client(
         &self,
         agent_type: AgentCacheType,
@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn test_transport_config_with_mcp_servers() {
         let servers = vec![serde_json::json!({"name": "test"})];
-        let config = TransportConfig::new("/workspace").with_mcp_servers(servers.clone());
+        let config = TransportConfig::new("/workspace").with_mcp_servers(servers);
         assert_eq!(config.mcp_servers.len(), 1);
     }
 

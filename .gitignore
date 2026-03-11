@@ -46,10 +46,16 @@ Thumbs.db
 *.profraw
 *.profdata
 coverage/
+coverage.txt
+coverage*.json
+lcov.info
 tarpaulin-report.html
 
 # Test output
 test-output/
+
+# Temporary files
+tmp/
 
 # Benchmark outputs
 target/criterion/

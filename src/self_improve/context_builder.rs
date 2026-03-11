@@ -216,7 +216,7 @@ fn count_implementer_logs(dir: &Path) -> usize {
 ///
 /// This function counts actual error/warning patterns while filtering out
 /// false positives that come from code documentation or discussions about
-/// error types (e.g., "Implements std::error::Error").
+/// error types (e.g., "Implements `std::error::Error`").
 async fn count_log_patterns(dir: &Path) -> (usize, usize) {
     let mut errors = 0;
     let mut warnings = 0;

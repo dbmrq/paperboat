@@ -134,6 +134,7 @@ mod tests {
     use crate::mcp_server::handlers::handle_request;
     use crate::mcp_server::types::ToolCall;
     use serde_json::json;
+    use serial_test::serial;
 
     // ========================================================================
     // ToolCall Serialization Tests
@@ -357,6 +358,7 @@ mod tests {
     // ========================================================================
 
     #[tokio::test]
+    #[serial]
     async fn test_tools_list_returns_all_orchestrator_tools() {
         // Explicitly set agent type to orchestrator for this test
         std::env::set_var("PAPERBOAT_AGENT_TYPE", "orchestrator");
@@ -392,6 +394,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_tools_list_has_correct_schemas() {
         // Explicitly set agent type to orchestrator for this test
         std::env::set_var("PAPERBOAT_AGENT_TYPE", "orchestrator");

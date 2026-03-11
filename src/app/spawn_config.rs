@@ -12,13 +12,13 @@ pub struct AgentResult {
     pub role: String,
     /// The task that was assigned to the agent.
     /// Note: This is part of the public API but may not be read directly in all cases.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for agent result inspection
     pub task: String,
     /// Whether the agent completed successfully
     pub success: bool,
     /// Optional message from the agent.
     /// Note: Part of the API, may not be read directly in all cases.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Public API for agent result inspection
     pub message: Option<String>,
     /// Task IDs that were suggested by this agent via `add_tasks`.
     /// These tasks have been created in the `TaskManager` with `NotStarted` status

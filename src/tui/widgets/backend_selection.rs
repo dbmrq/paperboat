@@ -36,6 +36,7 @@ impl BackendSelectionState {
     ///
     /// The popup is automatically made visible if there are multiple backends.
     #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Vec operations can't be const
     pub fn with_backends(backends: Vec<BackendKind>) -> Self {
         let visible = backends.len() > 1;
         Self {
@@ -46,6 +47,7 @@ impl BackendSelectionState {
     }
 
     /// Selects the next backend in the list.
+    #[allow(clippy::missing_const_for_fn)] // Vec operations can't be const
     pub fn select_next(&mut self) {
         if !self.available_backends.is_empty() {
             self.selected_index = (self.selected_index + 1) % self.available_backends.len();
@@ -248,10 +250,8 @@ mod tests {
         assert_eq!(one.available_backends.len(), 1);
 
         // Two backends: visible
-        let two = BackendSelectionState::with_backends(vec![
-            BackendKind::Auggie,
-            BackendKind::Cursor,
-        ]);
+        let two =
+            BackendSelectionState::with_backends(vec![BackendKind::Auggie, BackendKind::Cursor]);
         assert!(two.visible, "Multiple backends should show popup");
         assert_eq!(two.available_backends.len(), 2);
     }
@@ -307,10 +307,8 @@ mod tests {
 
     #[test]
     fn test_navigation_cycle_through_all_backends() {
-        let mut state = BackendSelectionState::with_backends(vec![
-            BackendKind::Auggie,
-            BackendKind::Cursor,
-        ]);
+        let mut state =
+            BackendSelectionState::with_backends(vec![BackendKind::Auggie, BackendKind::Cursor]);
 
         // Start at index 0
         assert_eq!(state.selected_index, 0);
@@ -355,10 +353,8 @@ mod tests {
 
     #[test]
     fn test_selected_backend_returns_correct_backend_after_navigation() {
-        let mut state = BackendSelectionState::with_backends(vec![
-            BackendKind::Auggie,
-            BackendKind::Cursor,
-        ]);
+        let mut state =
+            BackendSelectionState::with_backends(vec![BackendKind::Auggie, BackendKind::Cursor]);
 
         // Initially at index 0
         assert_eq!(state.selected_backend(), Some(BackendKind::Auggie));
@@ -401,10 +397,8 @@ mod tests {
 
     #[test]
     fn test_confirm_selection_returns_first_backend_by_default() {
-        let mut state = BackendSelectionState::with_backends(vec![
-            BackendKind::Cursor,
-            BackendKind::Auggie,
-        ]);
+        let mut state =
+            BackendSelectionState::with_backends(vec![BackendKind::Cursor, BackendKind::Auggie]);
 
         let selected = state.confirm_selection();
 
@@ -442,10 +436,8 @@ mod tests {
 
     #[test]
     fn test_render_popup_shows_selection_indicator() {
-        let mut state = BackendSelectionState::with_backends(vec![
-            BackendKind::Auggie,
-            BackendKind::Cursor,
-        ]);
+        let mut state =
+            BackendSelectionState::with_backends(vec![BackendKind::Auggie, BackendKind::Cursor]);
 
         // First backend selected - should show cursor indicator (▶)
         let rendered = render_popup_to_string(&state);
@@ -459,10 +451,8 @@ mod tests {
 
     #[test]
     fn test_render_popup_shows_numbered_options() {
-        let state = BackendSelectionState::with_backends(vec![
-            BackendKind::Auggie,
-            BackendKind::Cursor,
-        ]);
+        let state =
+            BackendSelectionState::with_backends(vec![BackendKind::Auggie, BackendKind::Cursor]);
 
         let rendered = render_popup_to_string(&state);
 
@@ -473,10 +463,8 @@ mod tests {
 
     #[test]
     fn test_render_popup_centered_in_area() {
-        let state = BackendSelectionState::with_backends(vec![
-            BackendKind::Auggie,
-            BackendKind::Cursor,
-        ]);
+        let state =
+            BackendSelectionState::with_backends(vec![BackendKind::Auggie, BackendKind::Cursor]);
 
         // Render to a larger area
         let backend = TestBackend::new(120, 40);
@@ -509,10 +497,8 @@ mod tests {
     #[test]
     fn test_full_selection_flow() {
         // User opens backend selection with multiple backends
-        let mut state = BackendSelectionState::with_backends(vec![
-            BackendKind::Auggie,
-            BackendKind::Cursor,
-        ]);
+        let mut state =
+            BackendSelectionState::with_backends(vec![BackendKind::Auggie, BackendKind::Cursor]);
         assert!(state.visible);
         assert_eq!(state.selected_index, 0);
 
@@ -538,13 +524,11 @@ mod tests {
     fn test_build_backend_line_selected_vs_unselected() {
         // Test selected line
         let selected_line = build_backend_line(BackendKind::Auggie, true, 0);
-        let selected_spans: Vec<_> = selected_line.spans.iter().collect();
-        assert!(!selected_spans.is_empty());
+        assert!(!selected_line.spans.is_empty());
 
         // Test unselected line
         let unselected_line = build_backend_line(BackendKind::Cursor, false, 1);
-        let unselected_spans: Vec<_> = unselected_line.spans.iter().collect();
-        assert!(!unselected_spans.is_empty());
+        assert!(!unselected_line.spans.is_empty());
 
         // Selected line should have cursor indicator
         let has_cursor = selected_line.spans.iter().any(|s| s.content.contains('▶'));
@@ -562,14 +546,13 @@ mod tests {
 
     #[test]
     fn test_build_selection_content_includes_all_backends() {
-        let state = BackendSelectionState::with_backends(vec![
-            BackendKind::Auggie,
-            BackendKind::Cursor,
-        ]);
+        let state =
+            BackendSelectionState::with_backends(vec![BackendKind::Auggie, BackendKind::Cursor]);
         let lines = build_selection_content(&state);
 
         // Convert lines to string for easier assertion
-        let content: String = lines.iter()
+        let content: String = lines
+            .iter()
             .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
             .collect();
 

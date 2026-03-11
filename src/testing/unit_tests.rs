@@ -198,12 +198,7 @@ fn test_mock_session_builder_with_skip_tasks_no_reason() {
 fn test_mock_session_builder_with_create_task_dependencies() {
     let session = MockSessionBuilder::new("planner-deps-001")
         .with_create_task("Task A", "Primary work", 0)
-        .with_create_task_dependencies(
-            "Task B",
-            "Follow-up work",
-            vec!["Task A".to_string()],
-            0,
-        )
+        .with_create_task_dependencies("Task B", "Follow-up work", vec!["Task A".to_string()], 0)
         .build();
 
     let create_updates: Vec<_> = session

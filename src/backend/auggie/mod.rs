@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_auggie_backend_default() {
-        let _backend: AuggieBackend = Default::default();
+        let _ = AuggieBackend;
     }
 
     // ========================================================================

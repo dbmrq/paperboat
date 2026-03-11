@@ -1408,7 +1408,10 @@ async fn test_harness_captures_actual_completion_rejection_and_reconciliation() 
 
     assert_eq!(
         result.app_spawn_agents_batches(),
-        vec![(crate::mcp_server::WaitMode::All, vec!["task001".to_string()])],
+        vec![(
+            crate::mcp_server::WaitMode::All,
+            vec!["task001".to_string()]
+        )],
         "Orchestrator should route the primary task via task_id with wait=all"
     );
 
@@ -1467,11 +1470,17 @@ async fn test_harness_captures_actual_completion_rejection_and_reconciliation() 
         rejected.response
     );
     assert!(
-        rejected.response.summary.contains("- task002: Follow-up task"),
+        rejected
+            .response
+            .summary
+            .contains("- task002: Follow-up task"),
         "Rejection should list the ready follow-up task"
     );
     assert!(
-        rejected.response.summary.contains("- task003: Verification task"),
+        rejected
+            .response
+            .summary
+            .contains("- task003: Verification task"),
         "Rejection should list the blocked verification task"
     );
     assert!(
@@ -2531,11 +2540,11 @@ async fn test_self_improvement_context_with_errors() {
     // Create log with error pattern
     std::fs::write(
         run_dir.path().join("implementer-001.log"),
-        r#"Starting task
+        r"Starting task
 ❌ Tool failed: file not found
 Retrying operation
 ✅ Task completed
-"#,
+",
     )
     .unwrap();
 

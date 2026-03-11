@@ -402,11 +402,7 @@ mod tests {
     #[test]
     fn test_session_finished_types_recognized() {
         // These are the update types that should signal session completion
-        let finish_types = vec![
-            "agent_turn_finished",
-            "session_finished",
-            "complete",
-        ];
+        let finish_types = vec!["agent_turn_finished", "session_finished", "complete"];
 
         for update_type in finish_types {
             let msg = json!({
@@ -561,10 +557,7 @@ mod tests {
             }
         });
 
-        let update = msg
-            .get("params")
-            .and_then(|p| p.get("update"))
-            .unwrap();
+        let update = msg.get("params").and_then(|p| p.get("update")).unwrap();
 
         let title = update.get("title").and_then(|t| t.as_str());
         let is_error = update

@@ -898,7 +898,7 @@ mod tests {
         // Text
         let text = SessionUpdate::Text {
             session_id: "s1".into(),
-            content: "".into(),
+            content: String::new(),
         };
         assert_eq!(text.session_id(), Some("s1"));
 
@@ -915,7 +915,7 @@ mod tests {
         let tool_result = SessionUpdate::ToolResult {
             session_id: "s3".into(),
             tool_use_id: "t1".into(),
-            content: "".into(),
+            content: String::new(),
             is_success: true,
         };
         assert_eq!(tool_result.session_id(), Some("s3"));
@@ -973,30 +973,30 @@ mod tests {
     fn test_session_update_is_completion_all_variants() {
         // Only Completion should return true
         let completion = SessionUpdate::Completion {
-            session_id: "".into(),
+            session_id: String::new(),
             result: None,
             success: true,
         };
         assert!(completion.is_completion());
 
         let text = SessionUpdate::Text {
-            session_id: "".into(),
-            content: "".into(),
+            session_id: String::new(),
+            content: String::new(),
         };
         assert!(!text.is_completion());
 
         let tool_use = SessionUpdate::ToolUse {
-            session_id: "".into(),
-            tool_use_id: "".into(),
-            tool_name: "".into(),
+            session_id: String::new(),
+            tool_use_id: String::new(),
+            tool_name: String::new(),
             input: json!({}),
         };
         assert!(!tool_use.is_completion());
 
         let tool_result = SessionUpdate::ToolResult {
-            session_id: "".into(),
-            tool_use_id: "".into(),
-            content: "".into(),
+            session_id: String::new(),
+            tool_use_id: String::new(),
+            content: String::new(),
             is_success: true,
         };
         assert!(!tool_result.is_completion());
@@ -1012,30 +1012,30 @@ mod tests {
     fn test_session_update_is_tool_use_all_variants() {
         // Only ToolUse should return true
         let tool_use = SessionUpdate::ToolUse {
-            session_id: "".into(),
-            tool_use_id: "".into(),
-            tool_name: "".into(),
+            session_id: String::new(),
+            tool_use_id: String::new(),
+            tool_name: String::new(),
             input: json!({}),
         };
         assert!(tool_use.is_tool_use());
 
         let text = SessionUpdate::Text {
-            session_id: "".into(),
-            content: "".into(),
+            session_id: String::new(),
+            content: String::new(),
         };
         assert!(!text.is_tool_use());
 
         let completion = SessionUpdate::Completion {
-            session_id: "".into(),
+            session_id: String::new(),
             result: None,
             success: true,
         };
         assert!(!completion.is_tool_use());
 
         let tool_result = SessionUpdate::ToolResult {
-            session_id: "".into(),
-            tool_use_id: "".into(),
-            content: "".into(),
+            session_id: String::new(),
+            tool_use_id: String::new(),
+            content: String::new(),
             is_success: true,
         };
         assert!(!tool_result.is_tool_use());

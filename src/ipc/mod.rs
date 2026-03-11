@@ -98,10 +98,10 @@ mod stream;
 
 // Platform-specific implementations
 #[cfg(unix)]
-pub(crate) mod unix;
+pub mod unix;
 
 #[cfg(windows)]
-pub(crate) mod windows;
+pub mod windows;
 
 // Re-export public API
 pub use address::IpcAddress;

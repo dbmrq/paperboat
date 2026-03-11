@@ -61,12 +61,12 @@ pub struct CursorAcpTransport {
     /// Model to use (stored for session creation)
     model: Option<String>,
     /// MCP servers to configure
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reserved for MCP server configuration
     mcp_servers: Vec<Value>,
     /// Sender for converted session updates
     notification_tx: mpsc::Sender<SessionUpdate>,
     /// Receiver for converted session updates (taken once by caller)
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Taken by caller via take_notification_rx
     notification_rx: Option<mpsc::Receiver<SessionUpdate>>,
 }
 
@@ -92,21 +92,21 @@ impl CursorAcpTransport {
 
     /// Create a transport for orchestrator agents.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Factory method for orchestrator transport
     pub fn for_orchestrator(timeout: Duration) -> Self {
         Self::new(PermissionPolicy::for_orchestrator(), timeout)
     }
 
     /// Create a transport for planner agents.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Factory method for planner transport
     pub fn for_planner(timeout: Duration) -> Self {
         Self::new(PermissionPolicy::for_planner(), timeout)
     }
 
     /// Create a transport for implementer agents.
     #[must_use]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Factory method for implementer transport
     pub fn for_implementer(timeout: Duration) -> Self {
         Self::new(PermissionPolicy::for_implementer(), timeout)
     }

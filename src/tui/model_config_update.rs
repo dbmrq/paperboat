@@ -26,7 +26,7 @@ pub struct ModelConfigUpdate {
 
 impl ModelConfigUpdate {
     /// Creates a new update with only the orchestrator model changed.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Builder method for partial updates
     pub const fn orchestrator(model: ModelTier) -> Self {
         Self {
             orchestrator_model: Some(model),
@@ -36,7 +36,7 @@ impl ModelConfigUpdate {
     }
 
     /// Creates a new update with only the planner model changed.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Builder method for partial updates
     pub const fn planner(model: ModelTier) -> Self {
         Self {
             orchestrator_model: None,
@@ -46,7 +46,7 @@ impl ModelConfigUpdate {
     }
 
     /// Creates a new update with only the implementer model changed.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Builder method for partial updates
     pub const fn implementer(model: ModelTier) -> Self {
         Self {
             orchestrator_model: None,
@@ -56,7 +56,7 @@ impl ModelConfigUpdate {
     }
 
     /// Creates a new update with all models changed.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Builder method for full updates
     pub const fn all(orchestrator: ModelTier, planner: ModelTier, implementer: ModelTier) -> Self {
         Self {
             orchestrator_model: Some(orchestrator),
@@ -114,7 +114,7 @@ mod tests {
     fn test_model_config_update_debug() {
         // Test Debug implementation
         let update = ModelConfigUpdate::orchestrator(ModelTier::Opus);
-        let debug_str = format!("{:?}", update);
+        let debug_str = format!("{update:?}");
         assert!(debug_str.contains("Opus"));
     }
 
