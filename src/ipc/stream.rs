@@ -57,10 +57,10 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// ```
 pub struct IpcStream {
     #[cfg(unix)]
-    inner: tokio::net::UnixStream,
+    pub(crate) inner: tokio::net::UnixStream,
 
     #[cfg(windows)]
-    inner: WindowsStream,
+    pub(crate) inner: WindowsStream,
 }
 
 /// Windows stream type - either client or server half of a named pipe.
@@ -279,10 +279,10 @@ impl AsyncWrite for IpcStream {
 /// ```
 pub struct IpcListener {
     #[cfg(unix)]
-    inner: tokio::net::UnixListener,
+    pub(crate) inner: tokio::net::UnixListener,
 
     #[cfg(windows)]
-    inner: WindowsListener,
+    pub(crate) inner: WindowsListener,
 }
 
 /// Windows listener state - manages named pipe server instances.
