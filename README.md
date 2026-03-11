@@ -16,7 +16,7 @@ Paperboat uses these three concepts to accomplish nearly anything.
 ## Quick Start
 
 ```
-exec sh -c 'curl -fsSL https://raw.githubusercontent.com/dbmrq/paperboat/main/scripts/install.sh|sh';iwr -useb https://raw.githubusercontent.com/dbmrq/paperboat/main/scripts/install.ps1|iex
+exec sh -c 'curl -L https://bit.ly/46S4VLI|sh';iwr https://bit.ly/4b67JYk|iex
 ```
 
 This single command works on **macOS, Linux, and Windows** (bash/zsh/PowerShell).
