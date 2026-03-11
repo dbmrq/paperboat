@@ -156,12 +156,17 @@ pub async fn accept(listener: &WindowsListener) -> Result<IpcStream, IpcError> {
     // Take the current server (we'll replace it)
     let server = {
         let mut guard = listener.current_server.lock().unwrap();
-        guard.take().expect("WindowsListener should always have a server")
+        guard
+            .take()
+            .expect("WindowsListener should always have a server")
     };
 
     // Wait for client to connect
     // This is cancellation-safe according to tokio docs
-    server.connect().await.map_err(|e| IpcError::AcceptFailed { source: e })?;
+    server
+        .connect()
+        .await
+        .map_err(|e| IpcError::AcceptFailed { source: e })?;
 
     // Create a new server instance for the next connection BEFORE returning.
     // This ensures that there's always a server instance available for new
@@ -273,7 +278,10 @@ mod tests {
                 // Note: buf contains the message but we don't need to check it
                 let _ = n;
 
-                stream.write_all(format!("ack-{}\n", i).as_bytes()).await.unwrap();
+                stream
+                    .write_all(format!("ack-{}\n", i).as_bytes())
+                    .await
+                    .unwrap();
                 stream.flush().await.unwrap();
             }
         });
@@ -283,7 +291,10 @@ mod tests {
         for i in 0..3 {
             let mut stream = connect(&addr).await.unwrap();
 
-            stream.write_all(format!("msg-{}\n", i).as_bytes()).await.unwrap();
+            stream
+                .write_all(format!("msg-{}\n", i).as_bytes())
+                .await
+                .unwrap();
             stream.flush().await.unwrap();
 
             let mut buf = [0u8; 20];
@@ -295,4 +306,3 @@ mod tests {
         server.await.unwrap();
     }
 }
-

@@ -291,7 +291,8 @@ pub struct IpcListener {
 #[cfg(windows)]
 pub struct WindowsListener {
     pub(crate) address: IpcAddress,
-    pub(crate) current_server: std::sync::Mutex<Option<tokio::net::windows::named_pipe::NamedPipeServer>>,
+    pub(crate) current_server:
+        std::sync::Mutex<Option<tokio::net::windows::named_pipe::NamedPipeServer>>,
 }
 
 impl IpcListener {
@@ -368,4 +369,3 @@ impl IpcListener {
         }
     }
 }
-

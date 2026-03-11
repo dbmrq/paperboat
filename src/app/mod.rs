@@ -169,8 +169,7 @@ impl App {
             .setup_agent_cache(AgentCacheType::Planner, PLANNER_CONFIG.removed_auggie_tools)?;
 
         // Get current working directory for transport workspace
-        let workspace =
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
         // Orchestrator uses a custom cache directory with editing tools removed
         let orchestrator_config = TransportConfig::new(&orchestrator_cache)

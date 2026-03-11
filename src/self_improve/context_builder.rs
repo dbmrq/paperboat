@@ -526,15 +526,15 @@ async fn extract_error_patterns(log_dir: &Path) -> Option<String> {
     // Patterns to exclude (false positives from code documentation/discussion)
     // These appear in agent logs when discussing code, not actual errors
     let false_positive_patterns = [
-        "std::error::Error",        // Rust trait documentation
-        "impl.*Error",              // Implementing Error trait discussions
-        "anyhow::Error",            // Anyhow error type mentions
-        "Result<.*Error",           // Result type discussions
-        "error::.*Error",           // Error module paths
-        "error handling",           // Documentation about error handling
-        "error message",            // Documentation about error messages
-        "ErrorKind",                // std::io::ErrorKind discussions
-        "ERROR_PIPE_BUSY",          // Windows error constant
+        "std::error::Error", // Rust trait documentation
+        "impl.*Error",       // Implementing Error trait discussions
+        "anyhow::Error",     // Anyhow error type mentions
+        "Result<.*Error",    // Result type discussions
+        "error::.*Error",    // Error module paths
+        "error handling",    // Documentation about error handling
+        "error message",     // Documentation about error messages
+        "ErrorKind",         // std::io::ErrorKind discussions
+        "ERROR_PIPE_BUSY",   // Windows error constant
     ];
 
     // Read each log file and extract error lines

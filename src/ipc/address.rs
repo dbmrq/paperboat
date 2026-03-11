@@ -157,4 +157,3 @@ impl From<&str> for IpcAddress {
         Self::from_string(s)
     }
 }
-

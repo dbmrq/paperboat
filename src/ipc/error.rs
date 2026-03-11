@@ -109,4 +109,3 @@ impl std::error::Error for IpcError {
 // Note: IpcError automatically converts to anyhow::Error via the blanket
 // impl<E: std::error::Error + Send + Sync + 'static> From<E> for anyhow::Error.
 // Use `?` operator or `anyhow::Error::from(ipc_error)` for conversion.
-

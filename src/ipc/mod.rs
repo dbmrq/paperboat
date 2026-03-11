@@ -114,4 +114,3 @@ pub use unix::connect_with_retry;
 
 #[cfg(windows)]
 pub use windows::connect_with_retry;
-
