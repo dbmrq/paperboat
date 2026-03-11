@@ -46,7 +46,7 @@ jobs:
         
       - name: Verify binary runs
         run: |
-          .\target\release\paperboat.exe --help
+          .\target\x86_64-pc-windows-msvc\release\paperboat.exe --help
           Write-Host "✅ Binary runs successfully"
 
   # ============================================================
@@ -71,18 +71,18 @@ jobs:
           
       - name: Build binary
         run: cargo build --release --target x86_64-pc-windows-msvc
-        
+
       - name: Test one-liner install
         shell: pwsh
         run: |
-          $env:PAPERBOAT_BINARY_PATH = "$PWD\target\release\paperboat.exe"
+          $env:PAPERBOAT_BINARY_PATH = "$PWD\target\x86_64-pc-windows-msvc\release\paperboat.exe"
           $env:PAPERBOAT_INSTALL_DIR = "$PWD\test-install"
           $env:PAPERBOAT_VERSION = "0.0.0-test"
           New-Item -ItemType Directory -Path $env:PAPERBOAT_INSTALL_DIR -Force | Out-Null
 
-          # Test the actual one-liner syntax
-          # 'exec' fails (not a PS command), then ';' separates, then PS1 runs
-          exec sh -c 'curl -fsSL https://example.com|sh';& "$PWD\scripts\install.ps1"
+          # Test the one-liner in a subprocess to simulate interactive shell behavior
+          # (interactive PowerShell has $ErrorActionPreference = 'Continue' by default)
+          pwsh -NoProfile -Command "exec sh -c 'curl -fsSL https://example.com|sh';& '$PWD\scripts\install.ps1'"
 
           # Verify installation
           & "$env:PAPERBOAT_INSTALL_DIR\paperboat.exe" --help

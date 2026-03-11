@@ -293,9 +293,8 @@ jobs:
           $env:PAPERBOAT_VERSION = "0.0.0-test"
           New-Item -ItemType Directory -Path $env:PAPERBOAT_INSTALL_DIR -Force | Out-Null
 
-          # Test the actual one-liner syntax
-          # 'exec' fails (not a PS command), then ';' separates, then PS1 runs
-          exec sh -c 'curl -fsSL https://example.com|sh';& "$PWD\scripts\install.ps1"
+          # Test the one-liner in a subprocess to simulate interactive shell behavior
+          pwsh -NoProfile -Command "exec sh -c 'curl -fsSL https://example.com|sh';& '$PWD\scripts\install.ps1'"
 
           # Verify installation
           & "$env:PAPERBOAT_INSTALL_DIR\paperboat.exe" --help
