@@ -33,7 +33,9 @@ fn main() {
                         continue;
                     }
 
-                    roles.push((role_name, path.display().to_string()));
+                    // Use forward slashes for cross-platform compatibility in include_str!
+                    let prompt_path = path.display().to_string().replace('\\', "/");
+                    roles.push((role_name, prompt_path));
                 }
             }
         }
