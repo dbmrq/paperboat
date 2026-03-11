@@ -26,7 +26,10 @@ paperboat "Fix all TODO comments in src/"
 # Or:
 paperboat path/to/plan.txt
 ```
+
 See `paperboat --help` for all options.
+
+To understand how this works, check the [planner](https://github.com/dbmrq/paperboat/blob/main/prompts/planner.txt) and [orchestrator](https://github.com/dbmrq/paperboat/blob/main/prompts/orchestrator.txt) prompts.
 
 ## TUI
 
