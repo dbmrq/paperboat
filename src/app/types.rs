@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 /// Message sent from tool handlers back to the orchestrator loop.
 ///
 /// This is public to allow test harnesses to inject tool calls directly
-/// without going through Unix sockets.
+/// without going through IPC (Unix sockets on macOS/Linux, named pipes on Windows).
 #[derive(Debug)]
 pub enum ToolMessage {
     /// A tool request that needs processing

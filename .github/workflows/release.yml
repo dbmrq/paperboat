@@ -37,7 +37,9 @@ jobs:
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             archive: paperboat_VERSION_Linux_arm64.tar.gz
-          # Windows is not supported - paperboat uses Unix sockets for IPC
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: paperboat_VERSION_Windows_x86_64.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +72,8 @@ jobs:
           fi
           cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           cd target/${{ matrix.target }}/release
@@ -80,6 +83,17 @@ jobs:
           cd ../../..
           shasum -a 256 "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
 
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          $ARCHIVE_NAME = "${{ matrix.archive }}" -replace "VERSION", "${{ steps.version.outputs.version }}"
+          Compress-Archive -Path paperboat.exe -DestinationPath "../../../$ARCHIVE_NAME"
+          cd ../../..
+          $hash = (Get-FileHash -Algorithm SHA256 "$ARCHIVE_NAME").Hash.ToLower()
+          "$hash  $ARCHIVE_NAME" | Out-File -FilePath "$ARCHIVE_NAME.sha256" -Encoding ASCII -NoNewline
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -87,6 +101,8 @@ jobs:
           path: |
             paperboat_*.tar.gz
             paperboat_*.tar.gz.sha256
+            paperboat_*.zip
+            paperboat_*.zip.sha256
           if-no-files-found: error
 
   release:

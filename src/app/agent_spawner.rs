@@ -115,14 +115,14 @@ impl App {
     ) -> Result<(String, String, String)> {
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
-        // Get the path to the current binary and socket
+        // Get the path to the current binary and socket address
         let binary_path =
             std::env::current_exe().context("Failed to get current executable path")?;
-        let socket_path = self
-            .socket_path
+        let socket_address_str = self
+            .socket_address
             .as_ref()
             .context("Socket not set up")?
-            .to_string_lossy()
+            .as_str()
             .to_string();
 
         // Determine prompt and removed_tools based on role
@@ -133,8 +133,13 @@ impl App {
         validate_no_unreplaced_placeholders(&prompt, &spec.role)?;
 
         // Configure MCP server with agent type
-        let mcp_server =
-            build_mcp_server_config(&binary_path, &socket_path, &spec.role, &removed_tools, None);
+        let mcp_server = build_mcp_server_config(
+            &binary_path,
+            &socket_address_str,
+            &spec.role,
+            &removed_tools,
+            None,
+        );
         let mcp_servers = vec![mcp_server];
 
         // Resolve model: fallback chain -> tier -> auto resolution -> backend model string
@@ -228,10 +233,10 @@ impl App {
         }
     }
 
-    /// Spawn an agent with its own dedicated Unix socket.
+    /// Spawn an agent with its own dedicated IPC endpoint.
     ///
     /// This is used for concurrent agent execution where each agent needs
-    /// its own socket to receive tool call responses.
+    /// its own IPC endpoint to receive tool call responses.
     ///
     /// Returns (`session_id`, `model`, prompt, `AgentSocketHandle`, `AcpClient`) so the caller can:
     /// - Log the model and prompt
@@ -270,7 +275,7 @@ impl App {
             &agent_id[..8]
         );
 
-        let socket_path_str = socket_handle.socket_path.to_string_lossy().to_string();
+        let socket_address_str = socket_handle.socket_address.as_str().to_string();
 
         // Determine prompt and removed_tools based on role
         let (prompt, removed_tools) = self.resolve_prompt_and_tools(spec, context)?;
@@ -278,12 +283,12 @@ impl App {
         // Validate that all placeholders have been replaced
         validate_no_unreplaced_placeholders(&prompt, &spec.role)?;
 
-        // Verify socket file still exists before configuring MCP server
-        if !socket_handle.socket_path.exists() {
+        // Verify socket endpoint exists before configuring MCP server (on Unix)
+        if !socket_handle.socket_address.exists() {
             anyhow::bail!(
-                "Socket file {:?} does not exist before MCP server config (agent_id={}). \
+                "Socket {} does not exist before MCP server config (agent_id={}). \
                 This may indicate a race condition or premature cleanup.",
-                socket_handle.socket_path,
+                socket_handle.socket_address,
                 &agent_id[..8]
             );
         }
@@ -291,7 +296,7 @@ impl App {
         // Configure MCP server with unique suffix for concurrent agents
         let mcp_server = build_mcp_server_config(
             &binary_path,
-            &socket_path_str,
+            &socket_address_str,
             &spec.role,
             &removed_tools,
             Some(&agent_id[..8]),
@@ -302,7 +307,7 @@ impl App {
             "🔧 MCP server config for agent_id={}: name={}, socket={}, socket_exists=true",
             &agent_id[..8],
             mcp_server["name"],
-            socket_path_str
+            socket_address_str
         );
 
         // Resolve model: fallback chain -> tier -> auto resolution -> backend model string
@@ -488,7 +493,7 @@ impl App {
 
     /// Spawn an agent asynchronously with its own dedicated socket and context.
     ///
-    /// Each agent gets its own Unix socket and tool handler task, enabling
+    /// Each agent gets its own IPC endpoint and tool handler task, enabling
     /// concurrent execution of multiple agents without routing conflicts.
     ///
     /// # Arguments
@@ -630,7 +635,7 @@ impl App {
 
     /// Spawn multiple agents concurrently with the specified wait mode.
     ///
-    /// Each agent gets its own dedicated Unix socket for tool call handling,
+    /// Each agent gets its own dedicated IPC endpoint for tool call handling,
     /// enabling true concurrent execution without routing conflicts.
     ///
     /// # Arguments

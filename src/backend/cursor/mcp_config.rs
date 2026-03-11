@@ -70,7 +70,7 @@ pub struct McpServerConfig {
 ///
 /// # Arguments
 ///
-/// * `socket_path` - Path to the Unix socket for MCP communication
+/// * `socket_path` - IPC address for MCP communication
 #[allow(dead_code)]
 pub fn register_paperboat_mcp(socket_path: &str) -> Result<()> {
     let config_path = cursor_mcp_config_path()?;
@@ -183,7 +183,7 @@ pub fn unregister_paperboat_mcp() -> Result<()> {
 /// # Arguments
 ///
 /// * `agent_type` - The agent type ("planner", "orchestrator", "implementer")
-/// * `socket_path` - Path to the Unix socket for MCP communication
+/// * `socket_path` - IPC address for MCP communication
 pub fn enable_mcp_for_agent(agent_type: &str, socket_path: &str) -> Result<()> {
     let config_path = cursor_mcp_config_path()?;
 

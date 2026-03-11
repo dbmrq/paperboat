@@ -245,7 +245,7 @@ pub trait Backend: Send + Sync {
     ///
     /// # Arguments
     ///
-    /// * `socket_path` - Path to the Unix socket for MCP communication
+    /// * `socket_path` - IPC address for MCP communication (socket path on Unix, pipe name on Windows)
     ///
     /// # Backend-specific behavior
     ///

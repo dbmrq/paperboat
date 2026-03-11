@@ -213,6 +213,10 @@ fn count_implementer_logs(dir: &Path) -> usize {
 }
 
 /// Count error and warning patterns in log files.
+///
+/// This function counts actual error/warning patterns while filtering out
+/// false positives that come from code documentation or discussions about
+/// error types (e.g., "Implements std::error::Error").
 async fn count_log_patterns(dir: &Path) -> (usize, usize) {
     let mut errors = 0;
     let mut warnings = 0;
@@ -220,6 +224,19 @@ async fn count_log_patterns(dir: &Path) -> (usize, usize) {
     // Patterns that indicate errors or warnings in our logs
     let error_patterns = ["❌", "ERROR", "error:", "Failed:", "Tool failed:"];
     let warning_patterns = ["⚠", "WARN", "warning:"];
+
+    // Patterns to exclude (false positives from code documentation/discussion)
+    let false_positive_patterns = [
+        "std::error::Error",
+        "impl.*Error",
+        "anyhow::Error",
+        "Result<.*Error",
+        "error::.*Error",
+        "error handling",
+        "error message",
+        "ErrorKind",
+        "ERROR_PIPE_BUSY",
+    ];
 
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -230,11 +247,28 @@ async fn count_log_patterns(dir: &Path) -> (usize, usize) {
                     .is_some_and(|e| e.eq_ignore_ascii_case("log"))
             {
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    for pattern in &error_patterns {
-                        errors += content.matches(pattern).count();
-                    }
-                    for pattern in &warning_patterns {
-                        warnings += content.matches(pattern).count();
+                    // Count line by line to enable false positive filtering
+                    for line in content.lines() {
+                        // Skip lines with false positive patterns
+                        let is_false_positive = false_positive_patterns
+                            .iter()
+                            .any(|pattern| line.contains(pattern));
+                        if is_false_positive {
+                            continue;
+                        }
+
+                        for pattern in &error_patterns {
+                            if line.contains(pattern) {
+                                errors += 1;
+                                break; // Count each line only once
+                            }
+                        }
+                        for pattern in &warning_patterns {
+                            if line.contains(pattern) {
+                                warnings += 1;
+                                break; // Count each line only once
+                            }
+                        }
                     }
                 }
             } else if path.is_dir() {
@@ -489,6 +523,20 @@ async fn extract_error_patterns(log_dir: &Path) -> Option<String> {
     // Patterns that indicate errors worth highlighting
     let error_markers = ["❌", "ERROR", "error:", "Tool failed:", "Failed:", "panic"];
 
+    // Patterns to exclude (false positives from code documentation/discussion)
+    // These appear in agent logs when discussing code, not actual errors
+    let false_positive_patterns = [
+        "std::error::Error",        // Rust trait documentation
+        "impl.*Error",              // Implementing Error trait discussions
+        "anyhow::Error",            // Anyhow error type mentions
+        "Result<.*Error",           // Result type discussions
+        "error::.*Error",           // Error module paths
+        "error handling",           // Documentation about error handling
+        "error message",            // Documentation about error messages
+        "ErrorKind",                // std::io::ErrorKind discussions
+        "ERROR_PIPE_BUSY",          // Windows error constant
+    ];
+
     // Read each log file and extract error lines
     if let Ok(entries) = std::fs::read_dir(log_dir) {
         for entry in entries.flatten() {
@@ -510,19 +558,29 @@ async fn extract_error_patterns(log_dir: &Path) -> Option<String> {
                 for line in content.lines() {
                     // Check for error indicators
                     let is_error = error_markers.iter().any(|marker| line.contains(marker));
-                    if is_error {
-                        // Truncate long lines
-                        let display_line = if line.len() > 120 {
-                            format!("{}...", &line[..117])
-                        } else {
-                            line.to_string()
-                        };
+                    if !is_error {
+                        continue;
+                    }
 
-                        error_lines.push(format!("[{file_name}] {display_line}"));
+                    // Filter out false positives (code documentation mentioning error types)
+                    let is_false_positive = false_positive_patterns
+                        .iter()
+                        .any(|pattern| line.contains(pattern));
+                    if is_false_positive {
+                        continue;
+                    }
 
-                        if error_lines.len() >= MAX_ERRORS {
-                            break;
-                        }
+                    // Truncate long lines
+                    let display_line = if line.len() > 120 {
+                        format!("{}...", &line[..117])
+                    } else {
+                        line.to_string()
+                    };
+
+                    error_lines.push(format!("[{file_name}] {display_line}"));
+
+                    if error_lines.len() >= MAX_ERRORS {
+                        break;
                     }
                 }
             }

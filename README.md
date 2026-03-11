@@ -15,19 +15,27 @@ Paperboat uses these three concepts to accomplish nearly anything.
 
 ## Quick Start
 
-```bash
-# Install (macOS)
-brew install dbmrq/tap/paperboat
+```
+exec sh -c 'curl -fsSL https://raw.githubusercontent.com/dbmrq/paperboat/main/scripts/install.sh|sh';iwr -useb https://raw.githubusercontent.com/dbmrq/paperboat/main/scripts/install.ps1|iex
+```
 
-# Run
+This single command works on **macOS, Linux, and Windows** (bash/zsh/PowerShell).
+
+```bash
 paperboat "Fix all TODO comments in src/"
 ```
 
 That's it. Paperboat spawns AI agents to plan, implement, and verify your task.
 
-### Other Platforms
+### Other Installation Methods
 
-**Linux/Windows:** Download from [Releases](https://github.com/dbmrq/paperboat/releases) or `cargo install --git https://github.com/dbmrq/paperboat`
+**macOS (Homebrew):** `brew install dbmrq/tap/paperboat`
+
+**From source:** `cargo install --git https://github.com/dbmrq/paperboat`
+
+**Manual download:** See [Releases](https://github.com/dbmrq/paperboat/releases)
+
+> **Note:** Windows support is experimental. Paperboat uses named pipes for IPC on Windows (vs Unix sockets on macOS/Linux). Please report any issues.
 
 ## Usage
 

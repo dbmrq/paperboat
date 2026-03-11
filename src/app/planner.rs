@@ -16,14 +16,14 @@ impl App {
     pub(crate) async fn spawn_planner(&mut self, task: &str) -> Result<(String, String, String)> {
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
-        // Get the path to the current binary and socket
+        // Get the path to the current binary and socket address
         let binary_path =
             std::env::current_exe().context("Failed to get current executable path")?;
-        let socket_path = self
-            .socket_path
+        let socket_address = self
+            .socket_address
             .as_ref()
             .context("Socket not set up")?
-            .to_string_lossy()
+            .as_str()
             .to_string();
 
         // Configure MCP server with planner agent type (only gets create_task and complete tools)
@@ -32,7 +32,7 @@ impl App {
         let mcp_servers = vec![json!({
             "name": "paperboat-planner",
             "command": binary_path.to_string_lossy(),
-            "args": ["--mcp-server", "--socket", &socket_path],
+            "args": ["--mcp-server", "--socket", &socket_address],
             "env": [{
                 "name": "PAPERBOAT_AGENT_TYPE",
                 "value": "planner"

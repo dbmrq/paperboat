@@ -138,6 +138,33 @@ jobs:
         run: cargo build --no-default-features ${{ matrix.cargo-flags }}
 
   # ============================================================
+  # Windows build verification
+  # ============================================================
+
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    needs: [fmt, lockfile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          shared-key: ${{ env.CACHE_PREFIX }}-windows
+      - name: Build (default features)
+        run: cargo build --target x86_64-pc-windows-msvc
+      - name: Build (all features)
+        run: cargo build --all-features --target x86_64-pc-windows-msvc
+      - name: Build (no features)
+        run: cargo build --no-default-features --target x86_64-pc-windows-msvc
+      - name: Check for warnings
+        run: cargo check --target x86_64-pc-windows-msvc 2>&1
+
+  # ============================================================
   # Test execution
   # ============================================================
 
@@ -181,13 +208,107 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
   # ============================================================
+  # Windows tests - run tests on Windows
+  # ============================================================
+
+  test-windows:
+    name: Tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    needs: [fmt, lockfile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          shared-key: ${{ env.CACHE_PREFIX }}-windows-test
+      - name: Run tests (all features)
+        run: cargo test --all-features --target x86_64-pc-windows-msvc
+
+  # ============================================================
+  # Install script tests - verify installers work
+  # ============================================================
+
+  test-install-script:
+    name: Install Script (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    needs: [fmt, lockfile]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell: bash
+          - os: windows-latest
+            shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'windows-latest' && 'x86_64-pc-windows-msvc' || 'x86_64-unknown-linux-gnu' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          shared-key: ${{ env.CACHE_PREFIX }}-install-${{ matrix.os }}
+
+      - name: Build binary
+        shell: bash
+        run: cargo build --release
+
+      - name: Test one-liner install (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          export PAPERBOAT_BINARY_PATH="${PWD}/target/release/paperboat"
+          export PAPERBOAT_INSTALL_DIR="${PWD}/test-install"
+          export PAPERBOAT_VERSION="0.0.0-test"
+          export PAPERBOAT_NO_HOMEBREW=1
+          mkdir -p "$PAPERBOAT_INSTALL_DIR"
+
+          # Test the actual one-liner syntax (using local file instead of curl)
+          # This verifies: exec trick works, sh runs, and iwr part is never reached
+          exec sh -c 'sh scripts/install.sh';iwr -useb https://example.com|iex
+
+          # Note: if exec works correctly, we never reach here in this shell
+          # The install script runs and exits, then this shell is replaced
+
+      - name: Verify Unix installation
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          # Verify installation worked (run in new shell since exec replaced the previous one)
+          ./test-install/paperboat --help
+          echo "✅ Unix install test passed!"
+
+      - name: Test one-liner install (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PAPERBOAT_BINARY_PATH = "$PWD\target\release\paperboat.exe"
+          $env:PAPERBOAT_INSTALL_DIR = "$PWD\test-install"
+          $env:PAPERBOAT_VERSION = "0.0.0-test"
+          New-Item -ItemType Directory -Path $env:PAPERBOAT_INSTALL_DIR -Force | Out-Null
+
+          # Test the actual one-liner syntax
+          # 'exec' fails (not a PS command), then ';' separates, then PS1 runs
+          exec sh -c 'curl -fsSL https://example.com|sh';& "$PWD\scripts\install.ps1"
+
+          # Verify installation
+          & "$env:PAPERBOAT_INSTALL_DIR\paperboat.exe" --help
+          Write-Host "✅ Windows install test passed!"
+
+  # ============================================================
   # Final status check - required for branch protection
   # ============================================================
 
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [fmt, lockfile, unused-deps, security-audit, deny, clippy, build, test, docs]
+    needs: [fmt, lockfile, unused-deps, security-audit, deny, clippy, build, build-windows, test, test-windows, test-install-script, docs]
     if: always()
     steps:
       - name: Check all jobs passed
@@ -200,7 +321,10 @@ jobs:
             "${{ needs.deny.result }}"
             "${{ needs.clippy.result }}"
             "${{ needs.build.result }}"
+            "${{ needs.build-windows.result }}"
             "${{ needs.test.result }}"
+            "${{ needs.test-windows.result }}"
+            "${{ needs.test-install-script.result }}"
             "${{ needs.docs.result }}"
           )
           for result in "${results[@]}"; do

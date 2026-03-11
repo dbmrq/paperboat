@@ -17,15 +17,15 @@
 use crate::acp::{AcpClient, AcpClientTrait, SessionMode};
 use crate::agents::{get_prompt, get_tool_config};
 use crate::app::retry::{retry_async, RetryConfig};
+use crate::ipc::{IpcAddress, IpcListener, IpcStream};
 use crate::logging::{AgentWriter, LogScope};
 use crate::tasks::TaskManager;
 use crate::types::TaskResult;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixListener;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
@@ -231,19 +231,19 @@ async fn spawn_and_run_agent(
     // Get the path to the current binary for MCP server
     let binary_path = std::env::current_exe().context("Failed to get current executable path")?;
 
-    // Create a temporary socket path for the self-improver
-    let socket_path = create_temp_socket_path();
+    // Create a unique IPC address for the self-improver
+    let socket_address = IpcAddress::generate("selfimprove");
 
     // Set up socket listener BEFORE spawning MCP server
     // The MCP server will connect to this socket to send tool calls
     let (completion_tx, completion_rx) = mpsc::channel::<CompletionSignal>(1);
-    let socket_handle = setup_selfimprover_socket(&socket_path, completion_tx).await?;
+    let socket_handle = setup_selfimprover_socket(&socket_address, completion_tx).await?;
 
     // Configure MCP server with the appropriate agent type
     let mcp_servers = vec![json!({
         "name": format!("paperboat-selfimprover-{agent_type}"),
         "command": binary_path.to_string_lossy(),
-        "args": ["--mcp-server", "--socket", socket_path.to_string_lossy()],
+        "args": ["--mcp-server", "--socket", socket_address.as_str()],
         "env": [{
             "name": "PAPERBOAT_AGENT_TYPE",
             "value": agent_type
@@ -300,27 +300,20 @@ async fn spawn_and_run_agent(
     // Clean up socket resources
     socket_handle.cleanup();
     let _ = acp.shutdown().await;
-    let _ = std::fs::remove_file(&socket_path);
 
     outcome
 }
 
-/// Create a temporary socket path for the self-improver.
-fn create_temp_socket_path() -> PathBuf {
-    let short_uuid = &uuid::Uuid::new_v4().to_string()[..8];
-    std::env::temp_dir().join(format!("paperboat-selfimprove-{short_uuid}.sock"))
-}
-
 /// Handle for the self-improver socket, for cleanup.
 struct SelfImproverSocketHandle {
-    socket_path: PathBuf,
+    socket_address: IpcAddress,
     listener_task: JoinHandle<()>,
 }
 
 impl SelfImproverSocketHandle {
     fn cleanup(self) {
         self.listener_task.abort();
-        let _ = std::fs::remove_file(&self.socket_path);
+        self.socket_address.cleanup();
     }
 }
 
@@ -329,23 +322,21 @@ impl SelfImproverSocketHandle {
 /// This handles MCP tool calls from the self-improver agent.
 /// The main tool we care about is `complete`, which signals the agent is done.
 async fn setup_selfimprover_socket(
-    socket_path: &PathBuf,
+    socket_address: &IpcAddress,
     completion_tx: mpsc::Sender<CompletionSignal>,
 ) -> Result<SelfImproverSocketHandle> {
-    // Remove socket file if it exists
-    let _ = std::fs::remove_file(socket_path);
+    let listener = IpcListener::bind(socket_address)
+        .await
+        .with_context(|| format!("Failed to bind self-improver socket at {socket_address}"))?;
 
-    let listener = UnixListener::bind(socket_path)
-        .with_context(|| format!("Failed to bind self-improver socket at {socket_path:?}"))?;
+    tracing::debug!("Self-improver socket listening at: {}", socket_address);
 
-    tracing::debug!("Self-improver socket listening at: {:?}", socket_path);
-
-    let socket_path_for_handle = socket_path.clone();
+    let socket_address_for_handle = socket_address.clone();
 
     let listener_task = tokio::spawn(async move {
         loop {
             match listener.accept().await {
-                Ok((stream, _)) => {
+                Ok(stream) => {
                     let completion_tx = completion_tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_selfimprover_tool_call(stream, completion_tx).await {
@@ -365,7 +356,7 @@ async fn setup_selfimprover_socket(
     tokio::task::yield_now().await;
 
     Ok(SelfImproverSocketHandle {
-        socket_path: socket_path_for_handle,
+        socket_address: socket_address_for_handle,
         listener_task,
     })
 }
@@ -375,7 +366,7 @@ async fn setup_selfimprover_socket(
 /// This parses the MCP tool request (in JSON-RPC format), handles it,
 /// and sends the response back. The main tool we care about is `complete`.
 async fn handle_selfimprover_tool_call(
-    stream: tokio::net::UnixStream,
+    stream: IpcStream,
     completion_tx: mpsc::Sender<CompletionSignal>,
 ) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
@@ -638,7 +629,7 @@ mod tests {
 
     #[test]
     fn test_build_self_improvement_task_contains_run_dir() {
-        let run_dir = PathBuf::from("/tmp/test-run");
+        let run_dir = std::path::PathBuf::from("/tmp/test-run");
         let task = build_self_improvement_task(&run_dir);
 
         assert!(task.contains("/tmp/test-run"));
@@ -681,13 +672,28 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_create_temp_socket_path_unique() {
-        let path1 = create_temp_socket_path();
-        let path2 = create_temp_socket_path();
+    fn test_ipc_address_generate_unique() {
+        let addr1 = IpcAddress::generate("selfimprove");
+        let addr2 = IpcAddress::generate("selfimprove");
 
-        assert_ne!(path1, path2);
-        assert!(path1.to_string_lossy().contains("paperboat-selfimprove"));
-        assert!(path1.to_string_lossy().ends_with(".sock"));
+        // Each generated address should be unique
+        assert_ne!(addr1.to_string(), addr2.to_string());
+
+        // Platform-specific format checks
+        #[cfg(unix)]
+        {
+            // On Unix, should be a .sock file in temp directory
+            let addr_str = addr1.to_string();
+            assert!(addr_str.contains("vl-"));
+            assert!(addr_str.ends_with(".sock"));
+        }
+
+        #[cfg(windows)]
+        {
+            // On Windows, should be a named pipe path
+            let addr_str = addr1.to_string();
+            assert!(addr_str.starts_with(r"\\.\pipe\vl-"));
+        }
     }
 
     #[test]

@@ -151,7 +151,7 @@ pub enum WaitMode {
     None,
 }
 
-/// Request sent from MCP server to the app via Unix socket.
+/// Request sent from MCP server to the app via IPC.
 ///
 /// Wraps a tool call with a unique request ID for response correlation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -187,7 +187,7 @@ pub struct TaskStateInfo {
     pub blocked_tasks: Vec<(String, Vec<String>)>,
 }
 
-/// Response sent from the app back to the MCP server via Unix socket.
+/// Response sent from the app back to the MCP server via IPC.
 ///
 /// Contains the result of executing a tool call, correlated by request ID.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -281,7 +281,7 @@ pub struct SuggestedTask {
 ///
 /// Represents the different operations that can be requested by agents
 /// via the MCP protocol. These calls are sent from the MCP server to the main
-/// application via a Unix socket.
+/// application via IPC (Unix sockets on macOS/Linux, named pipes on Windows).
 ///
 /// # Variants
 ///

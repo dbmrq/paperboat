@@ -4,6 +4,7 @@ mod app;
 mod backend;
 mod config;
 mod error;
+mod ipc;
 mod logging;
 mod mcp_server;
 mod metrics;
@@ -305,17 +306,18 @@ async fn main() -> Result<()> {
             .with_env_filter("paperboat=info,info")
             .init();
 
-        // Get socket path from --socket argument (preferred) or PAPERBOAT_SOCKET env var (fallback)
-        let socket_path = args
+        // Get socket address from --socket argument (preferred) or PAPERBOAT_SOCKET env var (fallback)
+        let socket_address_str = args
             .iter()
             .position(|a| a == "--socket")
             .and_then(|i| args.get(i + 1))
             .cloned()
             .or_else(|| std::env::var("PAPERBOAT_SOCKET").ok())
-            .expect("Socket path required: use --socket <path> or set PAPERBOAT_SOCKET");
+            .expect("Socket address required: use --socket <address> or set PAPERBOAT_SOCKET");
 
-        tracing::info!("Running in MCP server mode (socket={})", socket_path);
-        return mcp_server::run_stdio_server(PathBuf::from(socket_path)).await;
+        tracing::info!("Running in MCP server mode (socket={})", socket_address_str);
+        let socket_address = ipc::IpcAddress::from_string(&socket_address_str);
+        return mcp_server::run_stdio_server(socket_address).await;
     }
 
     // Extract values for use later
@@ -688,6 +690,22 @@ async fn main() -> Result<()> {
                     tracing::info!("📴 Received SIGHUP (terminal closed), initiating shutdown...");
                 }
             }
+
+            // Signal main task to shutdown
+            let tx_opt = signal_shutdown_tx.lock().unwrap().take();
+            if let Some(tx) = tx_opt {
+                let _ = tx.send(());
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            // On Windows, we use Ctrl+C handler which is cross-platform in tokio
+            if let Err(e) = tokio::signal::ctrl_c().await {
+                tracing::error!("Failed to listen for Ctrl+C: {}", e);
+                return;
+            }
+            tracing::info!("📴 Received Ctrl+C, initiating shutdown...");
 
             // Signal main task to shutdown
             let tx_opt = signal_shutdown_tx.lock().unwrap().take();

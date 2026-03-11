@@ -1,19 +1,21 @@
-//! Unix socket handling for MCP server communication.
+//! IPC socket handling for MCP server communication.
+//!
+//! This module provides cross-platform IPC communication between the main app
+//! and MCP server processes using the IPC abstraction layer.
 
 use super::types::{ToolMessage, ToolReceiver, ToolSender};
 use anyhow::{Context, Result};
-use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use crate::ipc::{IpcAddress, IpcListener, IpcStream};
 use crate::mcp_server::{ToolRequest, ToolResponse};
 
 /// Handle for a per-agent socket, including cleanup resources.
 pub struct AgentSocketHandle {
-    /// Path to the Unix socket
-    pub socket_path: PathBuf,
+    /// The IPC address for this agent's socket
+    pub socket_address: IpcAddress,
     /// Receiver for tool messages from this agent
     pub tool_rx: ToolReceiver,
     /// Handle to the listener task (for cleanup)
@@ -21,21 +23,13 @@ pub struct AgentSocketHandle {
 }
 
 impl AgentSocketHandle {
-    /// Clean up the socket, removing the file and aborting the listener task.
+    /// Clean up the socket, removing the endpoint and aborting the listener task.
     pub fn cleanup(self) {
         // Abort the listener task
         self.listener_task.abort();
 
-        // Remove the socket file
-        if let Err(e) = std::fs::remove_file(&self.socket_path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(
-                    "Failed to remove agent socket file {:?}: {}",
-                    self.socket_path,
-                    e
-                );
-            }
-        }
+        // Clean up the socket endpoint (removes file on Unix, no-op on Windows)
+        self.socket_address.cleanup();
     }
 }
 
@@ -44,52 +38,40 @@ impl Drop for AgentSocketHandle {
         // Abort the listener task on drop
         self.listener_task.abort();
 
-        // Try to remove the socket file
-        let _ = std::fs::remove_file(&self.socket_path);
+        // Clean up the socket endpoint
+        self.socket_address.cleanup();
     }
 }
 
-/// Set up a Unix socket for a single agent.
+/// Set up an IPC socket for a single agent.
 ///
-/// Creates a unique socket path for the agent and starts a listener task.
+/// Creates a unique socket address for the agent and starts a listener task.
 /// Returns an `AgentSocketHandle` that can be used to receive tool messages
 /// and clean up resources when done.
 ///
 /// # Arguments
 ///
-/// * `agent_id` - A unique identifier for the agent (used in socket path).
+/// * `agent_id` - A unique identifier for the agent (used in socket address).
 pub async fn setup_agent_socket(agent_id: &str) -> Result<AgentSocketHandle> {
-    // Use only first 8 chars of agent_id to keep socket path short
-    // macOS has a ~104 byte limit on Unix socket paths (SUN_LEN)
-    let short_id = &agent_id[..8.min(agent_id.len())];
-    let socket_path = std::env::temp_dir().join(format!("vl-{short_id}.sock"));
+    // Generate a unique IPC address for this agent
+    // The IpcAddress::generate handles platform-specific addressing and path length limits
+    let socket_address = IpcAddress::generate(agent_id);
 
-    // Remove socket file if it exists
-    if let Err(e) = std::fs::remove_file(&socket_path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(
-                "Failed to remove existing socket file {:?}: {}",
-                socket_path,
-                e
-            );
-        }
-    }
-
-    let listener = UnixListener::bind(&socket_path).with_context(|| {
-        format!("Failed to bind agent socket at {socket_path:?} (agent_id={agent_id})")
+    let listener = IpcListener::bind(&socket_address).await.with_context(|| {
+        format!("Failed to bind agent socket at {socket_address} (agent_id={agent_id})")
     })?;
 
-    // Verify the socket file exists before proceeding
+    // Verify the socket endpoint exists before proceeding (on Unix)
     // This ensures the socket is ready for MCP server connections
-    if !socket_path.exists() {
+    if !socket_address.exists() {
         anyhow::bail!(
-            "Socket file was not created at {socket_path:?} after bind (agent_id={agent_id})"
+            "Socket was not created at {socket_address} after bind (agent_id={agent_id})"
         );
     }
 
     tracing::debug!(
-        "Agent socket listening at: {:?} (agent_id={})",
-        socket_path,
+        "Agent socket listening at: {} (agent_id={})",
+        socket_address,
         agent_id
     );
 
@@ -99,7 +81,7 @@ pub async fn setup_agent_socket(agent_id: &str) -> Result<AgentSocketHandle> {
     let listener_task = tokio::spawn(async move {
         loop {
             match listener.accept().await {
-                Ok((stream, _)) => {
+                Ok(stream) => {
                     let tool_tx = tool_tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_mcp_connection(stream, tool_tx).await {
@@ -122,27 +104,25 @@ pub async fn setup_agent_socket(agent_id: &str) -> Result<AgentSocketHandle> {
     tokio::task::yield_now().await;
 
     Ok(AgentSocketHandle {
-        socket_path,
+        socket_address,
         tool_rx,
         listener_task,
     })
 }
 
-/// Set up a Unix socket for MCP server communication.
+/// Set up an IPC socket for MCP server communication.
 ///
-/// Returns the socket path and tool receiver channel.
-pub async fn setup_socket() -> Result<(PathBuf, ToolReceiver, JoinHandle<()>)> {
-    // Use shortened socket name to avoid exceeding macOS SUN_LEN limit (~104 bytes)
-    let uuid = uuid::Uuid::new_v4();
-    let short_id = &uuid.to_string()[..8];
-    let socket_path = std::env::temp_dir().join(format!("vl-{short_id}.sock"));
+/// Returns the socket address and tool receiver channel.
+pub async fn setup_socket() -> Result<(IpcAddress, ToolReceiver, JoinHandle<()>)> {
+    // Generate a unique IPC address
+    // IpcAddress::generate handles platform-specific addressing and path length limits
+    let socket_address = IpcAddress::generate("main");
 
-    // Remove socket file if it exists
-    let _ = std::fs::remove_file(&socket_path);
+    let listener = IpcListener::bind(&socket_address)
+        .await
+        .context("Failed to bind IPC socket")?;
 
-    let listener = UnixListener::bind(&socket_path).context("Failed to bind Unix socket")?;
-
-    tracing::info!("Unix socket listening at: {:?}", socket_path);
+    tracing::info!("IPC socket listening at: {}", socket_address);
 
     // Spawn task to accept connections and forward tool requests
     let (tool_tx, tool_rx) = mpsc::channel::<ToolMessage>(100);
@@ -150,7 +130,7 @@ pub async fn setup_socket() -> Result<(PathBuf, ToolReceiver, JoinHandle<()>)> {
     let listener_task = tokio::spawn(async move {
         loop {
             match listener.accept().await {
-                Ok((stream, _)) => {
+                Ok(stream) => {
                     let tool_tx = tool_tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_mcp_connection(stream, tool_tx).await {
@@ -167,29 +147,25 @@ pub async fn setup_socket() -> Result<(PathBuf, ToolReceiver, JoinHandle<()>)> {
         }
     });
 
-    Ok((socket_path, tool_rx, listener_task))
+    Ok((socket_address, tool_rx, listener_task))
 }
 
-/// Clean up a socket file and abort the listener task.
-pub fn cleanup_socket(socket_path: &PathBuf, listener_task: Option<JoinHandle<()>>) {
+/// Clean up an IPC socket endpoint and abort the listener task.
+pub fn cleanup_socket(socket_address: &IpcAddress, listener_task: Option<JoinHandle<()>>) {
     // Abort the socket listener task
     if let Some(task) = listener_task {
         task.abort();
     }
 
-    // Remove socket file (ignore NotFound - socket may already be cleaned up)
-    if let Err(e) = std::fs::remove_file(socket_path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!("Failed to remove socket file {:?}: {}", socket_path, e);
-        }
-    }
+    // Clean up the socket endpoint (removes file on Unix, no-op on Windows)
+    socket_address.cleanup();
 }
 
 /// Handle an MCP connection from the MCP server.
 ///
 /// Each connection represents a single tool call. The connection stays open
 /// until the tool call completes, allowing the response to be sent back.
-pub async fn handle_mcp_connection(stream: UnixStream, tool_tx: ToolSender) -> Result<()> {
+pub async fn handle_mcp_connection(stream: IpcStream, tool_tx: ToolSender) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let mut line = String::new();

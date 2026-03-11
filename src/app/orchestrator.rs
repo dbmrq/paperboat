@@ -52,12 +52,12 @@ impl App {
         let binary_path =
             std::env::current_exe().context("Failed to get current executable path")?;
 
-        // Get socket path
-        let socket_path = self
-            .socket_path
+        // Get socket address
+        let socket_address = self
+            .socket_address
             .as_ref()
             .context("Socket not set up")?
-            .to_string_lossy()
+            .as_str()
             .to_string();
 
         // Configure MCP server
@@ -67,7 +67,7 @@ impl App {
         let mcp_servers = vec![json!({
             "name": "paperboat-orchestrator",
             "command": binary_path.to_string_lossy(),
-            "args": ["--mcp-server", "--socket", &socket_path],
+            "args": ["--mcp-server", "--socket", &socket_address],
             "env": [{
                 "name": "PAPERBOAT_AGENT_TYPE",
                 "value": "orchestrator"

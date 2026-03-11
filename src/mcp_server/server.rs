@@ -1,18 +1,18 @@
 //! Stdio MCP server for orchestrator tools.
 //!
 //! Provides decompose, implement, and complete tools via JSON-RPC over stdin/stdout.
-//! Communicates tool calls back to the main app via a Unix socket.
+//! Communicates tool calls back to the main app via IPC (Unix sockets or Windows named pipes).
 //!
-//! The server supports concurrent tool calls: each tool call opens its own socket
+//! The server supports concurrent tool calls: each tool call opens its own IPC
 //! connection to the app, sends the request, and waits for a response. This allows
 //! the orchestrator to make multiple parallel tool calls.
 
 use super::error::{internal_error, parse_error};
 use super::handlers::handle_request;
 use super::socket::send_response;
+use crate::ipc::IpcAddress;
 use anyhow::Result;
 use serde_json::Value;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
@@ -21,24 +21,24 @@ use tokio::sync::Mutex;
 ///
 /// This is called when the binary is invoked with --mcp-server flag.
 /// It reads JSON-RPC requests from stdin, writes responses to stdout,
-/// and sends tool calls to the app via a Unix socket.
+/// and sends tool calls to the app via IPC.
 ///
 /// Tool calls are handled concurrently - each spawns a task that opens its own
-/// socket connection, sends the request, waits for the response, and sends
+/// IPC connection, sends the request, waits for the response, and sends
 /// the MCP response back to stdout.
-pub async fn run_stdio_server(socket_path: PathBuf) -> Result<()> {
+pub async fn run_stdio_server(socket_address: IpcAddress) -> Result<()> {
     // Log to stderr which auggie captures
     eprintln!(
-        "🔌 MCP server PID={} starting with socket path: {socket_path:?}",
+        "🔌 MCP server PID={} starting with socket address: {socket_address}",
         std::process::id()
     );
 
-    // Log whether socket file exists at startup (for debugging connection issues)
-    if socket_path.exists() {
-        eprintln!("✅ Socket file exists at startup: {socket_path:?}");
+    // Log whether socket endpoint exists at startup (for debugging connection issues)
+    if socket_address.exists() {
+        eprintln!("✅ Socket endpoint exists at startup: {socket_address}");
     } else {
         eprintln!(
-            "⚠️  Socket file does NOT exist at startup: {socket_path:?}. \
+            "⚠️  Socket endpoint does NOT exist at startup: {socket_address}. \
             Will retry connections when making tool calls."
         );
     }
@@ -47,7 +47,7 @@ pub async fn run_stdio_server(socket_path: PathBuf) -> Result<()> {
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
     let reader = BufReader::new(stdin);
     let mut lines = reader.lines();
-    let socket_path = Arc::new(socket_path);
+    let socket_address = Arc::new(socket_address);
 
     eprintln!("✅ MCP server started (waiting for JSON-RPC messages)");
 
@@ -94,10 +94,10 @@ pub async fn run_stdio_server(socket_path: PathBuf) -> Result<()> {
         // Spawn a task to handle the request concurrently
         // This allows multiple tool calls to be processed in parallel
         let stdout_clone = Arc::clone(&stdout);
-        let socket_path_clone = Arc::clone(&socket_path);
+        let socket_address_clone = Arc::clone(&socket_address);
         tokio::spawn(async move {
             // Handle the request, catching any errors
-            let response = match handle_request(&request, &socket_path_clone).await {
+            let response = match handle_request(&request, &socket_address_clone).await {
                 Ok(resp) => resp,
                 Err(e) => {
                     let id = request.get("id");
@@ -335,11 +335,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_initialize_returns_correct_protocol_version() {
-        // For non-tool-call methods, we don't need a real socket - just a dummy path
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        // For non-tool-call methods, we don't need a real socket - just a dummy address
+        let socket_address = IpcAddress::generate("test");
 
         let request = make_json_rpc_request(1, "initialize", &json!({}));
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["jsonrpc"], "2.0");
@@ -361,10 +361,10 @@ mod tests {
         // Explicitly set agent type to orchestrator for this test
         std::env::set_var("PAPERBOAT_AGENT_TYPE", "orchestrator");
 
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         let request = make_json_rpc_request(2, "tools/list", &json!({}));
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         let tools = resp["result"]["tools"].as_array().unwrap();
@@ -396,10 +396,10 @@ mod tests {
         // Explicitly set agent type to orchestrator for this test
         std::env::set_var("PAPERBOAT_AGENT_TYPE", "orchestrator");
 
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         let request = make_json_rpc_request(3, "tools/list", &json!({}));
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         let tools = resp["result"]["tools"].as_array().unwrap();
@@ -429,10 +429,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_method_with_id_returns_error() {
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         let request = make_json_rpc_request(4, "nonexistent/method", &json!({}));
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], METHOD_NOT_FOUND);
@@ -444,7 +444,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_notification_without_id_is_ignored() {
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         // Notification (no id field)
         let request = json!({
@@ -452,7 +452,7 @@ mod tests {
             "method": "some/notification",
             "params": {}
         });
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         // Notifications should return None
         assert!(response.is_none());
@@ -460,14 +460,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_missing_method_returns_error() {
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         let request = json!({
             "jsonrpc": "2.0",
             "id": 5,
             "params": {}
         });
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_REQUEST);
@@ -485,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_call_missing_params_returns_error() {
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         // tools/call without params
         let request = json!({
@@ -493,7 +493,7 @@ mod tests {
             "id": 10,
             "method": "tools/call"
         });
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_REQUEST);
@@ -501,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_call_missing_name_returns_error() {
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         let request = make_json_rpc_request(
             11,
@@ -510,7 +510,7 @@ mod tests {
                 "arguments": {"task": "test"}
             }),
         );
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_PARAMS);
@@ -518,7 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_call_missing_arguments_returns_error() {
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         let request = make_json_rpc_request(
             12,
@@ -527,7 +527,7 @@ mod tests {
                 "name": "decompose"
             }),
         );
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_PARAMS);
@@ -535,10 +535,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_decompose_missing_task_returns_error() {
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         let request = make_tool_call_request(13, "decompose", &json!({}));
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_PARAMS);
@@ -547,10 +547,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_agents_missing_agents_returns_error() {
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         let request = make_tool_call_request(14, "spawn_agents", &json!({}));
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_PARAMS);
@@ -559,7 +559,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_complete_missing_success_returns_error() {
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         let request = make_tool_call_request(
             15,
@@ -568,7 +568,7 @@ mod tests {
                 "message": "done"
             }),
         );
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], INVALID_PARAMS);
@@ -577,7 +577,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_tool_returns_error() {
-        let socket_path = std::env::temp_dir().join(format!("test-{}.sock", uuid::Uuid::new_v4()));
+        let socket_address = IpcAddress::generate("test");
 
         let request = make_tool_call_request(
             16,
@@ -586,7 +586,7 @@ mod tests {
                 "arg": "value"
             }),
         );
-        let response = handle_request(&request, &socket_path).await.unwrap();
+        let response = handle_request(&request, &socket_address).await.unwrap();
 
         let resp = response.unwrap();
         assert_eq!(resp["error"]["code"], METHOD_NOT_FOUND);

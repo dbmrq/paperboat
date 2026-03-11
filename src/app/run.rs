@@ -42,8 +42,8 @@ impl App {
     /// Clean up resources (socket and MCP configuration).
     fn cleanup(&mut self) {
         // Clean up socket - take ownership to avoid borrow issues
-        if let Some(path) = self.socket_path.take() {
-            self.cleanup_socket(&path);
+        if let Some(address) = self.socket_address.take() {
+            self.cleanup_socket(&address);
         }
         // Clean up MCP configuration
         if let Err(e) = self.backend.cleanup_mcp() {

@@ -21,7 +21,7 @@
 //! - [`decompose`]: Decomposition logic for subtasks
 //!
 //! ## Communication
-//! - [`socket`]: Unix socket setup and MCP connection handling
+//! - [`socket`]: IPC socket setup and MCP connection handling
 //! - [`session`]: Session waiting and output collection
 //! - [`session_drain`]: Message draining after session completion
 //!
@@ -54,12 +54,12 @@ use crate::agents::{AgentRegistry, ORCHESTRATOR_CONFIG, PLANNER_CONFIG};
 use crate::backend::transport::{AgentTransport, AgentType, TransportKind};
 use crate::backend::{AgentCacheType, Backend, TransportConfig};
 use crate::error::TimeoutConfig;
+use crate::ipc::IpcAddress;
 use crate::logging::{LogScope, RunLogManager};
 use crate::models::ModelConfig;
 use crate::tasks::TaskManager;
 use anyhow::Result;
 use router::SessionRouter;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
@@ -74,7 +74,7 @@ pub struct App {
     pub(crate) acp_planner: Box<dyn AgentTransport>,
     /// Transport for worker agents (implements tasks)
     pub(crate) acp_worker: Box<dyn AgentTransport>,
-    pub(crate) socket_path: Option<PathBuf>,
+    pub(crate) socket_address: Option<IpcAddress>,
     /// Channel for receiving tool messages from socket handlers
     pub(crate) tool_rx: Option<mpsc::Receiver<ToolMessage>>,
     pub(crate) model_config: ModelConfig,
@@ -149,14 +149,14 @@ impl App {
             transport_kind
         );
 
-        // Set up Unix socket FIRST - we need this for MCP setup
-        let (socket_path, tool_rx, listener_task) = socket::setup_socket().await?;
-        let socket_path_str = socket_path.to_string_lossy();
+        // Set up IPC socket FIRST - we need this for MCP setup
+        let (socket_address, tool_rx, listener_task) = socket::setup_socket().await?;
+        let socket_address_str = socket_address.as_str();
 
         // Set up MCP server configuration for this backend
         // For Cursor, this writes to ~/.cursor/mcp.json and enables the MCP
         // This MUST happen before creating transports
-        backend.setup_mcp(&socket_path_str).await?;
+        backend.setup_mcp(&socket_address_str).await?;
 
         // Set up orchestrator cache directory with removed tools via backend
         let orchestrator_cache = backend.setup_agent_cache(
@@ -169,7 +169,8 @@ impl App {
             .setup_agent_cache(AgentCacheType::Planner, PLANNER_CONFIG.removed_auggie_tools)?;
 
         // Get current working directory for transport workspace
-        let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let workspace =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
         // Orchestrator uses a custom cache directory with editing tools removed
         let orchestrator_config = TransportConfig::new(&orchestrator_cache)
@@ -213,7 +214,7 @@ impl App {
             acp_orchestrator,
             acp_planner,
             acp_worker,
-            socket_path: Some(socket_path),
+            socket_address: Some(socket_address),
             tool_rx: Some(tool_rx),
             model_config,
             timeout_config,
@@ -252,8 +253,8 @@ impl App {
             acp_orchestrator: orchestrator,
             acp_planner: planner,
             acp_worker: worker,
-            // Use a placeholder socket path for tests
-            socket_path: Some(std::path::PathBuf::from(
+            // Use a placeholder IPC address for tests (not actually connected)
+            socket_address: Some(IpcAddress::from_string(
                 "/tmp/paperboat-test-placeholder.sock",
             )),
             tool_rx: None,
@@ -276,7 +277,7 @@ impl App {
     /// Create a new App with mock transports and an injected tool channel for testing.
     ///
     /// This constructor enables full test control over tool call handling by injecting
-    /// the `tool_rx` channel directly, bypassing Unix socket setup.
+    /// the `tool_rx` channel directly, bypassing IPC socket setup.
     #[cfg(any(test, feature = "testing"))]
     pub fn with_mock_transports_and_tool_rx(
         backend: Box<dyn Backend>,
@@ -294,8 +295,8 @@ impl App {
             acp_orchestrator: orchestrator,
             acp_planner: planner,
             acp_worker: worker,
-            // Use a placeholder socket path for tests - it won't be used since tool_rx is injected
-            socket_path: Some(std::path::PathBuf::from(
+            // Use a placeholder IPC address for tests - not used since tool_rx is injected
+            socket_address: Some(IpcAddress::from_string(
                 "/tmp/paperboat-test-placeholder.sock",
             )),
             tool_rx: Some(tool_rx),
@@ -315,19 +316,19 @@ impl App {
         }
     }
 
-    /// Set up Unix socket for MCP server communication
+    /// Set up IPC socket for MCP server communication
     #[allow(dead_code)]
-    async fn setup_socket(&mut self) -> Result<PathBuf> {
-        let (socket_path, tool_rx, listener_task) = socket::setup_socket().await?;
+    async fn setup_socket(&mut self) -> Result<IpcAddress> {
+        let (socket_address, tool_rx, listener_task) = socket::setup_socket().await?;
 
-        self.socket_path = Some(socket_path.clone());
+        self.socket_address = Some(socket_address.clone());
         self.tool_rx = Some(tool_rx);
         self.socket_listener_task = Some(listener_task);
 
         // Start the message routing task for worker sessions
         self.start_worker_router();
 
-        Ok(socket_path)
+        Ok(socket_address)
     }
 
     /// Start the background message routing tasks for agent sessions.
@@ -403,10 +404,10 @@ impl App {
         self.router_active = any_router_started;
     }
 
-    /// Clean up the socket file and listener task
-    fn cleanup_socket(&mut self, socket_path: &PathBuf) {
+    /// Clean up the socket endpoint and listener task
+    fn cleanup_socket(&mut self, socket_address: &IpcAddress) {
         let listener_task = self.socket_listener_task.take();
-        socket::cleanup_socket(socket_path, listener_task);
+        socket::cleanup_socket(socket_address, listener_task);
     }
 
     /// Returns a clone of the current model configuration.
@@ -505,8 +506,8 @@ impl App {
         tracing::info!("🛑 Shutting down application...");
 
         // Clean up socket if it exists
-        if let Some(socket_path) = self.socket_path.take() {
-            self.cleanup_socket(&socket_path);
+        if let Some(socket_address) = self.socket_address.take() {
+            self.cleanup_socket(&socket_address);
         }
 
         // Abort the router task if running

@@ -16,12 +16,12 @@ use super::error::{
 };
 use super::socket::send_request_and_wait;
 use super::types::ToolRequest;
+use crate::ipc::IpcAddress;
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::path::PathBuf;
 
 /// Handle a JSON-RPC request
-pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Option<Value>> {
+pub async fn handle_request(request: &Value, socket_address: &IpcAddress) -> Result<Option<Value>> {
     let id = request.get("id");
 
     // Extract method, returning error response if missing
@@ -35,7 +35,7 @@ pub async fn handle_request(request: &Value, socket_path: &PathBuf) -> Result<Op
     match method {
         "initialize" => Ok(Some(handle_initialize(id))),
         "tools/list" => Ok(Some(handle_tools_list(id))),
-        "tools/call" => handle_tool_call(request, id.cloned(), socket_path).await,
+        "tools/call" => handle_tool_call(request, id.cloned(), socket_address).await,
         // Handle notifications (no id) - just log and ignore
         _ if id.is_none() => {
             tracing::debug!("Ignoring notification with method: {}", method);
@@ -128,7 +128,7 @@ fn handle_tools_list(id: Option<&Value>) -> Value {
 async fn handle_tool_call(
     request: &Value,
     id: Option<Value>,
-    socket_path: &PathBuf,
+    socket_address: &IpcAddress,
 ) -> Result<Option<Value>> {
     // Validate params structure
     let params = if let Some(p) = request["params"].as_object() {
@@ -237,7 +237,7 @@ async fn handle_tool_call(
     };
 
     // Send request and wait for response from the app
-    let tool_response = match send_request_and_wait(socket_path, &tool_request).await {
+    let tool_response = match send_request_and_wait(socket_address, &tool_request).await {
         Ok(resp) => resp,
         Err(e) => {
             tracing::error!("Failed to get response from app: {}", e);
@@ -311,8 +311,8 @@ mod tests {
             "method": "tools/list"
         });
 
-        let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path)
+        let socket_address = IpcAddress::from_string("/tmp/test-socket");
+        let response = handle_request(&request, &socket_address)
             .await
             .unwrap()
             .unwrap();
@@ -370,8 +370,8 @@ mod tests {
             "method": "tools/list"
         });
 
-        let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path)
+        let socket_address = IpcAddress::from_string("/tmp/test-socket");
+        let response = handle_request(&request, &socket_address)
             .await
             .unwrap()
             .unwrap();
@@ -429,8 +429,8 @@ mod tests {
             "method": "tools/list"
         });
 
-        let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path)
+        let socket_address = IpcAddress::from_string("/tmp/test-socket");
+        let response = handle_request(&request, &socket_address)
             .await
             .unwrap()
             .unwrap();
@@ -482,8 +482,8 @@ mod tests {
             "method": "tools/list"
         });
 
-        let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path)
+        let socket_address = IpcAddress::from_string("/tmp/test-socket");
+        let response = handle_request(&request, &socket_address)
             .await
             .unwrap()
             .unwrap();
@@ -518,8 +518,8 @@ mod tests {
             "method": "tools/list"
         });
 
-        let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path)
+        let socket_address = IpcAddress::from_string("/tmp/test-socket");
+        let response = handle_request(&request, &socket_address)
             .await
             .unwrap()
             .unwrap();
@@ -540,12 +540,12 @@ mod tests {
     async fn test_mcp_tools_match_centralized_config() {
         use crate::agents::{IMPLEMENTER_CONFIG, ORCHESTRATOR_CONFIG, PLANNER_CONFIG};
 
-        let socket_path = PathBuf::from("/tmp/test-socket");
+        let socket_address = IpcAddress::from_string("/tmp/test-socket");
 
         // Test planner
         std::env::set_var("PAPERBOAT_AGENT_TYPE", "planner");
         let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
-        let response = handle_request(&request, &socket_path)
+        let response = handle_request(&request, &socket_address)
             .await
             .unwrap()
             .unwrap();
@@ -565,7 +565,7 @@ mod tests {
 
         // Test orchestrator
         std::env::set_var("PAPERBOAT_AGENT_TYPE", "orchestrator");
-        let response = handle_request(&request, &socket_path)
+        let response = handle_request(&request, &socket_address)
             .await
             .unwrap()
             .unwrap();
@@ -585,7 +585,7 @@ mod tests {
 
         // Test implementer
         std::env::set_var("PAPERBOAT_AGENT_TYPE", "implementer");
-        let response = handle_request(&request, &socket_path)
+        let response = handle_request(&request, &socket_address)
             .await
             .unwrap()
             .unwrap();
@@ -616,8 +616,8 @@ mod tests {
             "method": "tools/list"
         });
 
-        let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path)
+        let socket_address = IpcAddress::from_string("/tmp/test-socket");
+        let response = handle_request(&request, &socket_address)
             .await
             .unwrap()
             .unwrap();
@@ -663,8 +663,8 @@ mod tests {
             "method": "tools/list"
         });
 
-        let socket_path = PathBuf::from("/tmp/test-socket");
-        let response = handle_request(&request, &socket_path)
+        let socket_address = IpcAddress::from_string("/tmp/test-socket");
+        let response = handle_request(&request, &socket_address)
             .await
             .unwrap()
             .unwrap();
