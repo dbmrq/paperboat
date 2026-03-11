@@ -14,8 +14,6 @@
 # 1. On macOS with Homebrew: use `brew install` for automatic updates
 # 2. Otherwise: download the appropriate binary from GitHub releases
 
-set -e
-
 REPO="dbmrq/paperboat"
 BINARY_NAME="paperboat"
 
@@ -36,8 +34,33 @@ fi
 
 info() { printf "${BLUE}info:${NC} %s\n" "$1"; }
 warn() { printf "${YELLOW}warn:${NC} %s\n" "$1"; }
-error() { printf "${RED}error:${NC} %s\n" "$1" >&2; exit 1; }
 success() { printf "${GREEN}✓${NC} %s\n" "$1"; }
+
+# Error handler that waits for user input before exiting
+error() {
+    printf "${RED}error:${NC} %s\n" "$1" >&2
+    printf "\n"
+    printf "${YELLOW}Installation failed. Press Enter to exit...${NC}"
+    read -r _
+    exit 1
+}
+
+# Trap to handle unexpected errors and show output before terminal closes
+# Note: ERR trap is not POSIX but is supported by bash/zsh which is what macOS uses
+handle_error() {
+    _exit_code=$1
+    _line_number=$2
+    printf "\n${RED}error:${NC} Installation failed at line %s with exit code %s\n" "$_line_number" "$_exit_code" >&2
+    printf "\n"
+    printf "${YELLOW}Press Enter to exit...${NC}"
+    read -r _
+    exit "$_exit_code"
+}
+
+# Set up error trap (works in bash/zsh, ignored in pure POSIX sh)
+trap 'handle_error $? $LINENO' ERR 2>/dev/null || true
+
+set -e
 
 # Detect OS
 detect_os() {
@@ -111,19 +134,42 @@ should_use_homebrew() {
 install_with_homebrew() {
     info "Using Homebrew for installation (enables automatic updates)"
 
+    # Temporarily disable set -e so we can capture brew output
+    set +e
+
     # Add tap if not already added
     if ! brew tap | grep -q "dbmrq/tap"; then
         info "Adding tap dbmrq/tap..."
-        brew tap dbmrq/tap
+        BREW_OUTPUT=$(brew tap dbmrq/tap 2>&1)
+        BREW_EXIT_CODE=$?
+        if [ $BREW_EXIT_CODE -ne 0 ]; then
+            printf "\n%s\n" "$BREW_OUTPUT"
+            error "Failed to add Homebrew tap (exit code $BREW_EXIT_CODE)"
+        fi
     fi
 
     # Install or upgrade
     if brew list paperboat >/dev/null 2>&1; then
         info "Upgrading paperboat..."
-        brew upgrade paperboat
+        BREW_OUTPUT=$(brew upgrade paperboat 2>&1)
+        BREW_EXIT_CODE=$?
     else
         info "Installing paperboat..."
-        brew install dbmrq/tap/paperboat
+        BREW_OUTPUT=$(brew install dbmrq/tap/paperboat 2>&1)
+        BREW_EXIT_CODE=$?
+    fi
+
+    # Re-enable set -e
+    set -e
+
+    if [ $BREW_EXIT_CODE -ne 0 ]; then
+        printf "\n%s\n" "$BREW_OUTPUT"
+        error "Homebrew command failed (exit code $BREW_EXIT_CODE)"
+    fi
+
+    # Show brew output on success too (in case of warnings)
+    if [ -n "$BREW_OUTPUT" ]; then
+        printf "%s\n" "$BREW_OUTPUT"
     fi
 
     success "Paperboat installed successfully via Homebrew!"

@@ -12,15 +12,38 @@
 # 1. Download the Windows binary from GitHub releases
 # 2. Install it to a directory and add to PATH
 
-$ErrorActionPreference = "Stop"
-
 $Repo = "dbmrq/paperboat"
 $BinaryName = "paperboat"
 
 function Write-Info { param($Message) Write-Host "info: " -ForegroundColor Blue -NoNewline; Write-Host $Message }
 function Write-Warn { param($Message) Write-Host "warn: " -ForegroundColor Yellow -NoNewline; Write-Host $Message }
-function Write-Error { param($Message) Write-Host "error: " -ForegroundColor Red -NoNewline; Write-Host $Message; exit 1 }
 function Write-Success { param($Message) Write-Host "✓ " -ForegroundColor Green -NoNewline; Write-Host $Message }
+
+function Write-ErrorAndWait {
+    param($Message)
+    Write-Host "error: " -ForegroundColor Red -NoNewline
+    Write-Host $Message
+    Write-Host ""
+    Write-Host "Installation failed. Press Enter to exit..." -ForegroundColor Yellow
+    Read-Host
+    exit 1
+}
+
+# Global error handler to catch unexpected errors
+trap {
+    Write-Host ""
+    Write-Host "error: " -ForegroundColor Red -NoNewline
+    Write-Host $_.Exception.Message
+    Write-Host ""
+    Write-Host "Stack trace:" -ForegroundColor Yellow
+    Write-Host $_.ScriptStackTrace
+    Write-Host ""
+    Write-Host "Installation failed. Press Enter to exit..." -ForegroundColor Yellow
+    Read-Host
+    exit 1
+}
+
+$ErrorActionPreference = "Stop"
 
 function Get-LatestVersion {
     $response = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "paperboat-installer" }
@@ -51,13 +74,13 @@ function Main {
     Write-Info "Installing Paperboat..."
 
     # Detect architecture
-    $arch = if ([Environment]::Is64BitOperatingSystem) { "x86_64" } else { Write-Error "32-bit Windows is not supported" }
+    $arch = if ([Environment]::Is64BitOperatingSystem) { "x86_64" } else { Write-ErrorAndWait "32-bit Windows is not supported" }
     Write-Info "Detected: Windows $arch"
 
     # Get version
     $version = if ($env:PAPERBOAT_VERSION) { $env:PAPERBOAT_VERSION } else { Get-LatestVersion }
     if (-not $version) {
-        Write-Error "Could not determine latest version"
+        Write-ErrorAndWait "Could not determine latest version"
     }
     Write-Info "Version: $version"
 
