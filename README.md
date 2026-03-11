@@ -29,13 +29,15 @@ paperboat path/to/plan.txt
 
 See `paperboat --help` for all options.
 
-To understand how this works, check the [planner](https://github.com/dbmrq/paperboat/blob/main/prompts/planner.txt) and [orchestrator](https://github.com/dbmrq/paperboat/blob/main/prompts/orchestrator.txt) prompts.
+## How Does It Work?
 
-## TUI
+Paperboat is based on two "loops":
+- decompose -> orchestrate
+- implement
 
-TUI mode is used by default and looks like the image below. To disable it, use the `--headless` flag.
+Paperboat orchestrators can use custom MCP tools to spawn new implementer agents, but they can also spawn whole new orchestrator loops. When you give Paperboat a prompt, a planner agent is called to break it down into tasks, and then an orchestrator agent is called to handle the task list. As the orchestrator finds tasks that are small enough to implement, it spawns implementer agents to work on them sequentially or concurrently. If the orchestrator runs into a task that is too large for a single implementer, it spawns a new orchestrator loop for that task. This happens recursively until all the work is done.
 
-<img width="1219" height="765" alt="Screenshot 2026-03-11 at 14 59 24" src="https://github.com/user-attachments/assets/605c9272-8b2d-4072-b7b9-651d945d7d07" />
+The [planner](https://github.com/dbmrq/paperboat/blob/main/prompts/planner.txt) and [orchestrator](https://github.com/dbmrq/paperboat/blob/main/prompts/orchestrator.txt) prompts are good entry points to understand how this works.
 
 ## Other Installation Methods
 
@@ -48,6 +50,12 @@ TUI mode is used by default and looks like the image below. To disable it, use t
 **Note:** Windows support is experimental. Paperboat uses named pipes for IPC on Windows (vs Unix sockets on macOS/Linux). Create PRs for any issues!
 
 ## Configuration
+
+### TUI
+
+TUI mode is used by default and looks like the image below. To disable it, use the `--headless` flag.
+
+<img width="1219" height="765" alt="Screenshot 2026-03-11 at 14 59 24" src="https://github.com/user-attachments/assets/605c9272-8b2d-4072-b7b9-651d945d7d07" />
 
 ### Backends
 
