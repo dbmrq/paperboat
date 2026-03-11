@@ -394,7 +394,7 @@ impl App {
     /// This is used for concurrent agent execution where each agent needs
     /// its own IPC endpoint to receive tool call responses.
     ///
-    /// Returns (`session_id`, `model`, prompt, `AgentSocketHandle`, `Box<dyn AgentTransport>`) so the caller can:
+    /// Returns `(session_id, model, prompt, AgentSocketHandle, Box<dyn AgentTransport>)` so the caller can:
     /// - Log the model and prompt
     /// - Receive tool calls on the agent's dedicated socket
     /// - Clean up the socket when done
