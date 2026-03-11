@@ -84,7 +84,7 @@ impl SessionRouter {
 
     /// Extract the session ID from an ACP message.
     ///
-    /// ACP messages typically have the session ID in `params.sessionId`.
+    /// Supports both ACP format (`params.sessionId`) and CLI format (`params.session_id`).
     ///
     /// # Arguments
     ///
@@ -94,9 +94,13 @@ impl SessionRouter {
     ///
     /// The session ID if present, or `None` if not found.
     pub fn extract_session_id(msg: &Value) -> Option<&str> {
-        msg.get("params")
-            .and_then(|params| params.get("sessionId"))
-            .and_then(|id| id.as_str())
+        msg.get("params").and_then(|params| {
+            // Support both ACP format (sessionId) and CLI format (session_id)
+            params
+                .get("sessionId")
+                .or_else(|| params.get("session_id"))
+                .and_then(|id| id.as_str())
+        })
     }
 }
 

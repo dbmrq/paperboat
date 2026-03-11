@@ -169,3 +169,191 @@ fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
     let [area] = horizontal.areas(area);
     area
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn render_help_to_string(area: Rect) -> String {
+        let backend = TestBackend::new(area.width, area.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| render_help_overlay(frame, area))
+            .expect("help overlay should render");
+        format!("{}", terminal.backend())
+    }
+
+    // ========================================================================
+    // Render Tests
+    // ========================================================================
+
+    #[test]
+    fn test_render_help_overlay_shows_title() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("Keyboard Shortcuts"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_global_section() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("Global"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_tab_shortcut() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("Tab"));
+        assert!(rendered.contains("Cycle focus"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_quit_shortcut() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("Quit"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_help_shortcut() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("Toggle this help"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_agent_tree_section() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("Agent Tree"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_agent_output_section() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("Agent Output"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_task_list_section() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("Task List"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_app_logs_section() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("App Logs"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_model_settings_section() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("Model Settings"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_dismissal_hint() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("close"));
+        assert!(rendered.contains("Esc"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_navigation_keys() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("Navigate"));
+    }
+
+    #[test]
+    fn test_render_help_overlay_shows_scroll_keys() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 80, 40));
+        assert!(rendered.contains("PgUp"));
+        assert!(rendered.contains("PgDn"));
+    }
+
+    // ========================================================================
+    // Centered Rect Tests
+    // ========================================================================
+
+    #[test]
+    fn test_centered_rect_smaller_than_parent() {
+        let area = Rect::new(0, 0, 100, 50);
+        let popup = centered_rect(area, 60, 80);
+
+        assert!(popup.width < area.width);
+        assert!(popup.height < area.height);
+    }
+
+    #[test]
+    fn test_centered_rect_centered_position() {
+        let area = Rect::new(0, 0, 100, 50);
+        let popup = centered_rect(area, 50, 50);
+
+        // Should be approximately centered (allowing for rounding)
+        let expected_x = (area.width - popup.width) / 2;
+        let expected_y = (area.height - popup.height) / 2;
+
+        // Check within 1 pixel tolerance for rounding
+        assert!(popup.x.abs_diff(expected_x) <= 1);
+        assert!(popup.y.abs_diff(expected_y) <= 1);
+    }
+
+    #[test]
+    fn test_centered_rect_valid_dimensions() {
+        let area = Rect::new(0, 0, 80, 24);
+        let popup = centered_rect(area, 60, 80);
+
+        assert!(popup.width > 0);
+        assert!(popup.height > 0);
+        assert!(popup.x + popup.width <= area.width);
+        assert!(popup.y + popup.height <= area.height);
+    }
+
+    // ========================================================================
+    // Help Sections Structure Tests
+    // ========================================================================
+
+    #[test]
+    fn test_help_sections_not_empty() {
+        assert!(!HELP_SECTIONS.is_empty());
+    }
+
+    #[test]
+    fn test_help_sections_have_titles() {
+        for section in HELP_SECTIONS {
+            assert!(!section.title.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_help_sections_have_shortcuts() {
+        for section in HELP_SECTIONS {
+            assert!(!section.shortcuts.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_help_shortcuts_have_key_and_description() {
+        for section in HELP_SECTIONS {
+            for (key, description) in section.shortcuts {
+                assert!(!key.is_empty());
+                assert!(!description.is_empty());
+            }
+        }
+    }
+
+    // ========================================================================
+    // Overlay Precedence Tests
+    // ========================================================================
+
+    #[test]
+    fn test_help_overlay_renders_on_small_terminal() {
+        // Should not panic on small terminal
+        let rendered = render_help_to_string(Rect::new(0, 0, 40, 15));
+        assert!(rendered.contains("Keyboard"));
+    }
+
+    #[test]
+    fn test_help_overlay_renders_on_large_terminal() {
+        let rendered = render_help_to_string(Rect::new(0, 0, 200, 60));
+        assert!(rendered.contains("Keyboard Shortcuts"));
+    }
+}

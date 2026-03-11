@@ -1,3 +1,4 @@
 # Orchestrator agent configuration
-model = "opus"
+model = "sonnet, composer, gemini"
+effort = "medium"
 

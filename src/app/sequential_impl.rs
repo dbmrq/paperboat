@@ -44,7 +44,7 @@ impl App {
         );
 
         // Spawn implementer
-        let (impl_session, impl_model, impl_prompt) = match self.spawn_implementer(task).await {
+        let mut impl_spawn_result = match self.spawn_implementer(task).await {
             Ok(result) => result,
             Err(e) => {
                 // Write error to implementer log so it's not empty
@@ -69,6 +69,17 @@ impl App {
                 return Err(e);
             }
         };
+
+        // Extract session info and tool_rx from the spawn result
+        let impl_session = impl_spawn_result.session_id.clone();
+        let impl_model = impl_spawn_result.model.clone();
+        let impl_prompt = impl_spawn_result.prompt.clone();
+        let impl_tool_rx = impl_spawn_result.take_tool_rx();
+
+        // IMPORTANT: Keep impl_spawn_result alive until wait completes!
+        // The socket_handle inside it contains the listener task for MCP connections.
+        let _keep_impl_alive = impl_spawn_result;
+
         impl_writer.set_session_id(impl_session.clone());
         impl_writer.set_model(impl_model);
         if let Err(e) = impl_writer
@@ -81,8 +92,9 @@ impl App {
         impl_writer.emit_agent_started(task);
 
         // Wait for implementer to finish (with timeout)
+        // Pass the implementer's tool_rx so MCP tool calls are received from the correct socket
         let result = self
-            .wait_for_session_output(&impl_session, &mut impl_writer)
+            .wait_for_session_output_with_tool_rx(&impl_session, &mut impl_writer, impl_tool_rx)
             .await;
 
         let success = result.is_ok();

@@ -23,6 +23,7 @@ use crate::acp::{AcpClient, AcpClientTrait};
 use crate::backend::transport::{
     AgentTransport, SessionConfig, SessionInfo, SessionUpdate, ToolResult,
 };
+use serde_json::json;
 
 /// Auggie ACP transport wrapping the existing `AcpClient`.
 ///
@@ -96,6 +97,78 @@ impl AuggieAcpTransport {
             }
             tracing::debug!("Notification converter task completed");
         }));
+    }
+
+    /// Convert a typed `SessionUpdate` into the legacy raw JSON format expected
+    /// by the existing session router and handler code.
+    fn session_update_to_json(update: SessionUpdate) -> Value {
+        match update {
+            SessionUpdate::Text {
+                session_id,
+                content,
+            } => json!({
+                "method": "session/update",
+                "params": {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {
+                            "text": content
+                        }
+                    }
+                }
+            }),
+            SessionUpdate::ToolUse {
+                session_id,
+                tool_use_id,
+                tool_name,
+                input,
+            } => json!({
+                "method": "session/update",
+                "params": {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "tool_call",
+                        "title": tool_name,
+                        "toolUseId": tool_use_id,
+                        "input": input
+                    }
+                }
+            }),
+            SessionUpdate::ToolResult {
+                session_id,
+                tool_use_id,
+                content,
+                is_success,
+            } => json!({
+                "method": "session/update",
+                "params": {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "tool_result",
+                        "toolUseId": tool_use_id,
+                        "isSuccess": is_success,
+                        "content": content
+                    }
+                }
+            }),
+            SessionUpdate::Completion {
+                session_id,
+                result,
+                success,
+            } => json!({
+                "method": "session/update",
+                "params": {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "session_finished",
+                        "result": result,
+                        "success": success
+                    }
+                }
+            }),
+            SessionUpdate::Raw { data, .. } => data,
+        }
     }
 }
 
@@ -278,10 +351,26 @@ impl AgentTransport for AuggieAcpTransport {
 
     /// Take the raw notification receiver (legacy compatibility).
     ///
-    /// This delegates to `AcpClient::take_notification_rx()` for backward
-    /// compatibility with the existing notification routing pattern.
+    /// This bridges the typed `SessionUpdate` channel into the legacy JSON
+    /// notification format used by the existing session router. We must not
+    /// delegate directly to the wrapped ACP client here because the converter
+    /// task takes that receiver when a session starts.
     fn take_notification_rx(&mut self) -> Option<mpsc::Receiver<Value>> {
-        self.client.take_notification_rx()
+        let typed_rx = self.update_rx.take()?;
+        let (tx, rx) = mpsc::channel::<Value>(100);
+
+        tokio::spawn(async move {
+            let mut typed_rx = typed_rx;
+            while let Some(update) = typed_rx.recv().await {
+                let json = Self::session_update_to_json(update);
+                if tx.send(json).await.is_err() {
+                    break;
+                }
+            }
+            tracing::debug!("Auggie ACP notification bridge task ended");
+        });
+
+        Some(rx)
     }
 }
 
@@ -357,6 +446,22 @@ mod tests {
         } else {
             panic!("Expected ToolUse update");
         }
+    }
+
+    #[test]
+    fn test_session_update_to_json_uses_legacy_router_shape() {
+        let bridged = AuggieAcpTransport::session_update_to_json(SessionUpdate::Text {
+            session_id: "sess-1".to_string(),
+            content: "hello".to_string(),
+        });
+
+        assert_eq!(bridged["method"], "session/update");
+        assert_eq!(bridged["params"]["sessionId"], "sess-1");
+        assert_eq!(
+            bridged["params"]["update"]["sessionUpdate"],
+            "agent_message_chunk"
+        );
+        assert_eq!(bridged["params"]["update"]["content"]["text"], "hello");
     }
 
     #[test]

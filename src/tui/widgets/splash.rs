@@ -33,21 +33,16 @@ const PAPERBOAT_ART: &str = r"
                                         ---             ---------
 ";
 
-/// Warm color palette for the ripple animation using ANSI 256-color palette.
-/// These medium-toned colors are chosen to have good contrast on both
-/// light and dark terminal backgrounds.
-const WARM_COLORS: [Color; 6] = [
-    Color::Indexed(178), // Goldenrod yellow
-    Color::Indexed(172), // Orange
-    Color::Indexed(166), // Dark orange
-    Color::Indexed(130), // Brown-orange
-    Color::Indexed(136), // Dark goldenrod
-    Color::Indexed(172), // Orange (cycle back)
+/// Soft warm color palette for the ripple animation using ANSI 256-color palette.
+/// These muted, closely-spaced tones create a subtle gradient effect that flows
+/// smoothly without harsh transitions.
+const WARM_COLORS: [Color; 5] = [
+    Color::Indexed(137), // Light khaki/tan
+    Color::Indexed(173), // Soft salmon
+    Color::Indexed(180), // Light peach
+    Color::Indexed(144), // Light olive/sage
+    Color::Indexed(137), // Back to khaki for smooth cycle
 ];
-
-/// Base color for non-highlighted characters.
-/// Using a neutral gray that's visible on both light and dark backgrounds.
-const BASE_COLOR: Color = Color::DarkGray;
 
 /// Renders the splash screen with animated warm color ripple.
 ///
@@ -112,33 +107,28 @@ pub fn render_splash_screen(frame: &mut Frame, area: Rect, animation_frame: u32)
 
 /// Calculates the color for a character based on ripple animation.
 ///
-/// Creates a diagonal wave pattern that moves across the art,
-/// with smooth color transitions between warm tones.
+/// Creates a gentle, flowing wave pattern that drifts across the art,
+/// with very smooth color transitions between soft warm tones.
 #[allow(clippy::cast_precision_loss)] // Precision loss acceptable for animation math
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Palette index always in range
 #[allow(clippy::suboptimal_flops, clippy::manual_midpoint)] // Readable animation math preferred
 fn calculate_ripple_color(row: usize, col: usize, animation_frame: u32) -> Color {
-    // Create diagonal wave pattern
-    // The wave moves diagonally from top-left to bottom-right
+    // Create gentle diagonal wave pattern
     let wave_position = (row + col) as f32;
 
-    // Animation speed: complete cycle every ~120 frames (2 seconds at 60fps)
-    let time = animation_frame as f32 / 15.0;
+    // Slower animation: complete cycle every ~240 frames (4 seconds at 60fps)
+    let time = animation_frame as f32 / 30.0;
 
-    // Calculate wave intensity using sine for smooth transitions
-    // Multiple waves with different frequencies for a mesh-like effect
-    let wave1 = ((wave_position * 0.15 - time).sin() + 1.0) / 2.0;
-    let wave2 = ((wave_position * 0.08 + time * 0.7).sin() + 1.0) / 2.0;
+    // Single smooth wave with very gentle frequency for a calm, flowing effect
+    let wave = ((wave_position * 0.06 - time).sin() + 1.0) / 2.0;
 
-    // Combine waves for mesh effect
-    let intensity = (wave1 * 0.6 + wave2 * 0.4).clamp(0.0, 1.0);
+    // Apply easing for even smoother transitions (ease-in-out curve)
+    let eased = wave * wave * (3.0 - 2.0 * wave);
 
-    // Only color characters above a threshold for subtle effect
-    if intensity > 0.3 {
-        // Map intensity to color palette index
-        let palette_position = ((intensity - 0.3) / 0.7 * (WARM_COLORS.len() - 1) as f32) as usize;
-        WARM_COLORS[palette_position.min(WARM_COLORS.len() - 1)]
-    } else {
-        BASE_COLOR
-    }
+    // Map to palette with smooth interpolation
+    // Scale to palette range (0 to len-1)
+    let palette_pos = eased * (WARM_COLORS.len() - 1) as f32;
+    let index = (palette_pos as usize).min(WARM_COLORS.len() - 1);
+
+    WARM_COLORS[index]
 }

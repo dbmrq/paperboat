@@ -18,8 +18,11 @@ impl App {
             if method == "session/update" {
                 if let Some(params) = msg.get("params") {
                     if let Some(update) = params.get("update") {
-                        if let Some(session_update) =
-                            update.get("sessionUpdate").and_then(|v| v.as_str())
+                        // Support both ACP format (sessionUpdate) and CLI format (type)
+                        if let Some(session_update) = update
+                            .get("sessionUpdate")
+                            .or_else(|| update.get("type"))
+                            .and_then(|v| v.as_str())
                         {
                             match session_update {
                                 "tool_call" => {
@@ -85,11 +88,32 @@ impl App {
 
     /// Wait for a session to complete, collecting all message output.
     /// This is the unified wait function for all agent types (planner, implementer, etc.)
+    ///
+    /// Uses the default `self.tool_rx` for receiving MCP tool calls.
+    ///
+    /// Note: Currently unused as callers use `wait_for_session_output_with_tool_rx` directly,
+    /// but kept for API completeness as a simpler entry point.
+    #[allow(dead_code)]
     #[tracing::instrument(skip(self, writer), fields(session_id = %session_id))]
     pub(crate) async fn wait_for_session_output(
         &mut self,
         session_id: &str,
         writer: &mut AgentWriter,
+    ) -> Result<SessionOutput, OrchestratorError> {
+        self.wait_for_session_output_with_tool_rx(session_id, writer, None)
+            .await
+    }
+
+    /// Wait for a session to complete with an optional custom tool_rx.
+    ///
+    /// For CLI planner sessions, a separate socket is created with its own tool_rx.
+    /// Pass that tool_rx here to ensure MCP tool calls are received from the correct socket.
+    #[tracing::instrument(skip(self, writer, tool_rx_override), fields(session_id = %session_id))]
+    pub(crate) async fn wait_for_session_output_with_tool_rx(
+        &mut self,
+        session_id: &str,
+        writer: &mut AgentWriter,
+        tool_rx_override: Option<super::types::ToolReceiver>,
     ) -> Result<SessionOutput, OrchestratorError> {
         let timeout_duration = self.timeout_config.session_timeout;
 
@@ -101,7 +125,12 @@ impl App {
 
             let result = tokio::time::timeout(
                 timeout_duration,
-                self.wait_for_session_output_routed(session_id, writer, session_rx),
+                self.wait_for_session_output_routed(
+                    session_id,
+                    writer,
+                    session_rx,
+                    tool_rx_override,
+                ),
             )
             .await;
 
@@ -127,7 +156,7 @@ impl App {
             // Direct mode: call acp_worker.recv() directly (for tests)
             match tokio::time::timeout(
                 timeout_duration,
-                self.wait_for_session_output_direct(session_id, writer),
+                self.wait_for_session_output_direct(session_id, writer, tool_rx_override),
             )
             .await
             {
@@ -150,19 +179,29 @@ impl App {
 
     /// Wait for session output using routed mode (per-session receiver from router).
     #[allow(clippy::ignored_unit_patterns)] // `update` pattern is () when tui feature disabled
-    #[tracing::instrument(skip(self, writer, session_rx), fields(session_id = %session_id, mode = "routed"))]
+    #[tracing::instrument(skip(self, writer, session_rx, tool_rx_override), fields(session_id = %session_id, mode = "routed"))]
     async fn wait_for_session_output_routed(
         &mut self,
         session_id: &str,
         writer: &mut AgentWriter,
         mut session_rx: mpsc::Receiver<Value>,
+        tool_rx_override: Option<super::types::ToolReceiver>,
     ) -> Result<SessionOutput> {
         tracing::debug!("⏳ Waiting for session (routed): {}", session_id);
         let mut output = SessionOutput::new();
         let mut seen_unhandled: std::collections::HashSet<String> =
             std::collections::HashSet::new();
 
-        let mut tool_rx = self.tool_rx.take().context("Tool receiver not set up")?;
+        // Track whether we're using an override tool_rx (from a dedicated socket)
+        // vs the main self.tool_rx. We only restore self.tool_rx when we took it.
+        let using_override = tool_rx_override.is_some();
+
+        // Use the override tool_rx if provided (for CLI planner with separate socket),
+        // otherwise use self.tool_rx
+        let mut tool_rx = match tool_rx_override {
+            Some(rx) => rx,
+            None => self.tool_rx.take().context("Tool receiver not set up")?,
+        };
 
         // Take the config update receiver out of self so we don't hold a mutable borrow
         #[cfg(feature = "tui")]
@@ -225,7 +264,12 @@ impl App {
                                 tracing::trace!("Drain timeout, proceeding");
                             }
 
-                            self.tool_rx = Some(tool_rx);
+                            // Only restore tool_rx to self if we took it (not using override).
+                            // When using override (e.g., implementer's socket), we let the
+                            // implementer's tool_rx drop here, preserving the caller's tool_rx.
+                            if !using_override {
+                                self.tool_rx = Some(tool_rx);
+                            }
                             #[cfg(feature = "tui")]
                             {
                                 self.config_update_rx = config_update_rx;
@@ -270,7 +314,7 @@ impl App {
                             tracing::warn!("Unexpected tool call from session {}: {:?}", session_id, other);
                             let response = ToolResponse::failure(
                                 request.request_id,
-                                "This tool is not available. Use complete() to signal you're done.".to_string(),
+                                "This tool is not available to implementer agents. You have access only to complete(). Call complete(success=true, message=\"...\") when your task is done, or complete(success=false, message=\"...\") if you encountered an error.".to_string(),
                             );
                             let _ = response_tx.send(response);
                         }
@@ -280,7 +324,10 @@ impl App {
                 Some(msg) = session_rx.recv() => {
                     let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
                     if finished {
-                        self.tool_rx = Some(tool_rx);
+                        // Only restore tool_rx to self if we took it (not using override)
+                        if !using_override {
+                            self.tool_rx = Some(tool_rx);
+                        }
                         #[cfg(feature = "tui")]
                         {
                             self.config_update_rx = config_update_rx;
@@ -296,18 +343,28 @@ impl App {
     /// Used for tests with mock clients that don't support the routing infrastructure.
     /// Polls both planner and worker clients to handle all session types.
     #[allow(clippy::ignored_unit_patterns)] // `update` pattern is () when tui feature disabled
-    #[tracing::instrument(skip(self, writer), fields(session_id = %session_id, mode = "direct"))]
+    #[tracing::instrument(skip(self, writer, tool_rx_override), fields(session_id = %session_id, mode = "direct"))]
     async fn wait_for_session_output_direct(
         &mut self,
         session_id: &str,
         writer: &mut AgentWriter,
+        tool_rx_override: Option<super::types::ToolReceiver>,
     ) -> Result<SessionOutput> {
         tracing::debug!("⏳ Waiting for session (direct): {}", session_id);
         let mut output = SessionOutput::new();
         let mut seen_unhandled: std::collections::HashSet<String> =
             std::collections::HashSet::new();
 
-        let mut tool_rx = self.tool_rx.take().context("Tool receiver not set up")?;
+        // Track whether we're using an override tool_rx (from a dedicated socket)
+        // vs the main self.tool_rx. We only restore self.tool_rx when we took it.
+        let using_override = tool_rx_override.is_some();
+
+        // Use the override tool_rx if provided (for CLI planner with separate socket),
+        // otherwise use self.tool_rx
+        let mut tool_rx = match tool_rx_override {
+            Some(rx) => rx,
+            None => self.tool_rx.take().context("Tool receiver not set up")?,
+        };
 
         // Take the config update receiver out of self so we don't hold a mutable borrow
         #[cfg(feature = "tui")]
@@ -320,7 +377,10 @@ impl App {
         loop {
             // If both clients are exhausted and no tool messages, we're stuck
             if worker_exhausted && planner_exhausted {
-                self.tool_rx = Some(tool_rx);
+                // Only restore tool_rx to self if we took it (not using override)
+                if !using_override {
+                    self.tool_rx = Some(tool_rx);
+                }
                 #[cfg(feature = "tui")]
                 {
                     self.config_update_rx = config_update_rx;
@@ -385,7 +445,10 @@ impl App {
                                 tracing::trace!("Drain timeout, proceeding");
                             }
 
-                            self.tool_rx = Some(tool_rx);
+                            // Only restore tool_rx to self if we took it (not using override)
+                            if !using_override {
+                                self.tool_rx = Some(tool_rx);
+                            }
                             #[cfg(feature = "tui")]
                             {
                                 self.config_update_rx = config_update_rx;
@@ -430,7 +493,7 @@ impl App {
                             tracing::warn!("Unexpected tool call from session {}: {:?}", session_id, other);
                             let response = ToolResponse::failure(
                                 request.request_id,
-                                "This tool is not available. Use complete() to signal you're done.".to_string(),
+                                "This tool is not available to implementer agents. You have access only to complete(). Call complete(success=true, message=\"...\") when your task is done, or complete(success=false, message=\"...\") if you encountered an error.".to_string(),
                             );
                             let _ = response_tx.send(response);
                         }
@@ -442,7 +505,10 @@ impl App {
                     if let Ok(msg) = msg_result {
                         let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
                         if finished {
-                            self.tool_rx = Some(tool_rx);
+                            // Only restore tool_rx to self if we took it (not using override)
+                            if !using_override {
+                                self.tool_rx = Some(tool_rx);
+                            }
                             #[cfg(feature = "tui")]
                             {
                                 self.config_update_rx = config_update_rx;
@@ -461,7 +527,10 @@ impl App {
                     if let Ok(msg) = msg_result {
                         let finished = self.handle_worker_session_message(&msg, session_id, writer, &mut output, &mut seen_unhandled).await?;
                         if finished {
-                            self.tool_rx = Some(tool_rx);
+                            // Only restore tool_rx to self if we took it (not using override)
+                            if !using_override {
+                                self.tool_rx = Some(tool_rx);
+                            }
                             #[cfg(feature = "tui")]
                             {
                                 self.config_update_rx = config_update_rx;
@@ -476,5 +545,312 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::transport::{AgentTransport, SessionConfig, SessionInfo, ToolResult};
+    use crate::logging::RunLogManager;
+    use crate::mcp_server::{ToolCall, ToolRequest};
+    use crate::models::{ModelConfig, ModelTier};
+    use crate::testing::{MockBackend, MockTransport};
+    use anyhow::{anyhow, Result};
+    use async_trait::async_trait;
+    use serde_json::{json, Value};
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::{mpsc, oneshot};
+    use tokio::time::{sleep, timeout, Duration};
+
+    struct ChannelTransport {
+        rx: Option<mpsc::Receiver<Value>>,
+    }
+
+    impl ChannelTransport {
+        fn new(rx: mpsc::Receiver<Value>) -> Self {
+            Self { rx: Some(rx) }
+        }
+    }
+
+    #[async_trait]
+    impl AgentTransport for ChannelTransport {
+        async fn initialize(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn create_session(&mut self, _config: SessionConfig) -> Result<SessionInfo> {
+            Ok(SessionInfo::new("channel-session"))
+        }
+
+        async fn send_prompt(&mut self, _session_id: &str, _prompt: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn take_notifications(&mut self) -> Option<mpsc::Receiver<crate::backend::transport::SessionUpdate>> {
+            None
+        }
+
+        async fn respond_to_tool(
+            &mut self,
+            _session_id: &str,
+            _tool_use_id: &str,
+            _result: ToolResult,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn recv(&mut self) -> Result<Value> {
+            let rx = self
+                .rx
+                .as_mut()
+                .ok_or_else(|| anyhow!("notification receiver already taken"))?;
+
+            rx.recv()
+                .await
+                .ok_or_else(|| anyhow!("no more scripted notifications"))
+        }
+    }
+
+    fn make_model_config() -> ModelConfig {
+        let available = [ModelTier::Sonnet].into_iter().collect();
+        ModelConfig::new(available)
+    }
+
+    fn session_update(session_id: &str, update_type: &str, content: Option<&str>) -> Value {
+        let mut msg = json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": session_id,
+                "update": {
+                    "sessionUpdate": update_type
+                }
+            }
+        });
+
+        if let Some(text) = content {
+            msg["params"]["update"]["content"] = json!({ "text": text });
+        }
+
+        msg
+    }
+
+    fn send_tool_request(
+        tool_tx: &mpsc::Sender<ToolMessage>,
+        request_id: &str,
+        tool_call: ToolCall,
+    ) -> oneshot::Receiver<crate::mcp_server::ToolResponse> {
+        let (response_tx, response_rx) = oneshot::channel();
+        tool_tx
+            .try_send(ToolMessage::Request {
+                request: ToolRequest {
+                    request_id: request_id.to_string(),
+                    tool_call,
+                },
+                response_tx,
+            })
+            .expect("tool request should enqueue");
+        response_rx
+    }
+
+    fn make_test_app(
+        tool_rx: mpsc::Receiver<ToolMessage>,
+        worker: Box<dyn AgentTransport>,
+    ) -> (App, TempDir) {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let log_manager = Arc::new(
+            RunLogManager::new(temp_dir.path().to_str().expect("utf-8 temp path"))
+                .expect("log manager"),
+        );
+
+        let app = App::with_mock_transports_and_tool_rx(
+            Box::new(MockBackend::new()),
+            Box::new(MockTransport::empty()),
+            Box::new(MockTransport::empty()),
+            worker,
+            make_model_config(),
+            log_manager,
+            tool_rx,
+        );
+
+        (app, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_session_output_routed_drains_target_messages_and_unregisters_session() {
+        let (tool_tx, tool_rx) = mpsc::channel(8);
+        let (mut app, _temp_dir) = make_test_app(tool_rx, Box::new(MockTransport::empty()));
+        app.router_active = true;
+
+        let mut writer = app.current_scope.planner_writer().await.expect("planner writer");
+        let log_path = writer.path().clone();
+
+        let create_task_response = send_tool_request(
+            &tool_tx,
+            "req-create",
+            ToolCall::CreateTask {
+                name: "race task".to_string(),
+                description: "created before completion wins".to_string(),
+                dependencies: vec![],
+            },
+        );
+        let complete_response = send_tool_request(
+            &tool_tx,
+            "req-complete",
+            ToolCall::Complete {
+                success: true,
+                message: Some("completed first".to_string()),
+                notes: None,
+                add_tasks: None,
+            },
+        );
+
+        let session_router = Arc::clone(&app.session_router);
+        let notifier = tokio::spawn(async move {
+            let target_msg = session_update("session-routed", "agent_message_chunk", Some("drained target"));
+            let other_msg = session_update("session-other", "agent_message_chunk", Some("ignored other"));
+            let finished_msg = session_update("session-routed", "session_finished", None);
+
+            let mut routed = false;
+            for _ in 0..20 {
+                {
+                    let router = session_router.read().await;
+                    if router.route(target_msg.clone()) {
+                        assert!(!router.route(other_msg.clone()));
+                        assert!(router.route(finished_msg.clone()));
+                        routed = true;
+                        break;
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+
+            assert!(routed, "session should register before notifier gives up");
+        });
+
+        let output = timeout(
+            Duration::from_secs(2),
+            app.wait_for_session_output_with_tool_rx("session-routed", &mut writer, None),
+        )
+        .await
+        .expect("wait should not time out")
+        .expect("session should complete");
+
+        notifier.await.expect("notifier should finish");
+
+        let create_task_response = create_task_response.await.expect("create_task response");
+        let complete_response = complete_response.await.expect("complete response");
+        assert!(create_task_response.success);
+        assert!(create_task_response.summary.contains("race task"));
+        assert!(complete_response.success);
+        assert_eq!(complete_response.summary, "completed first");
+
+        assert!(
+            output.text.is_empty(),
+            "messages drained after complete() should not be appended to SessionOutput"
+        );
+        assert!(app.tool_rx.is_some(), "tool receiver should be restored after routed wait");
+
+        let log_contents = std::fs::read_to_string(&log_path).expect("writer log should be readable");
+        assert!(log_contents.contains("drained target"));
+        assert!(!log_contents.contains("ignored other"));
+
+        let task_manager = app.task_manager.read().await;
+        assert!(task_manager
+            .all_tasks()
+            .into_iter()
+            .any(|task| task.name == "race task"));
+        drop(task_manager);
+
+        let late_msg = session_update("session-routed", "agent_message_chunk", Some("too late"));
+        let router = app.session_router.read().await;
+        assert!(
+            !router.route(late_msg),
+            "messages for the session should stop routing after unregister"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_session_output_direct_keeps_pre_complete_output_and_drains_tail() {
+        let (tool_tx, tool_rx) = mpsc::channel(8);
+        let (worker_tx, worker_rx) = mpsc::channel(8);
+        let (mut app, _temp_dir) = make_test_app(tool_rx, Box::new(ChannelTransport::new(worker_rx)));
+
+        let mut writer = app
+            .current_scope
+            .implementer_writer()
+            .await
+            .expect("implementer writer");
+        let log_path = writer.path().clone();
+
+        let tool_tx_for_task = tool_tx.clone();
+        let sender_task = tokio::spawn(async move {
+            worker_tx
+                .send(session_update(
+                    "session-direct",
+                    "agent_message_chunk",
+                    Some("before complete"),
+                ))
+                .await
+                .expect("first worker update");
+
+            sleep(Duration::from_millis(10)).await;
+
+            let complete_response = send_tool_request(
+                &tool_tx_for_task,
+                "req-direct-complete",
+                ToolCall::Complete {
+                    success: true,
+                    message: Some("done".to_string()),
+                    notes: None,
+                    add_tasks: None,
+                },
+            );
+
+            sleep(Duration::from_millis(10)).await;
+
+            worker_tx
+                .send(session_update(
+                    "session-direct",
+                    "agent_message_chunk",
+                    Some("drained tail"),
+                ))
+                .await
+                .expect("tail worker update");
+            worker_tx
+                .send(session_update("session-direct", "session_finished", None))
+                .await
+                .expect("session finished");
+
+            complete_response.await.expect("complete response")
+        });
+
+        let output = timeout(
+            Duration::from_secs(2),
+            app.wait_for_session_output_with_tool_rx("session-direct", &mut writer, None),
+        )
+        .await
+        .expect("direct wait should not time out")
+        .expect("direct session should complete");
+
+        let complete_response = sender_task.await.expect("sender task should finish");
+        assert!(complete_response.success);
+        assert_eq!(complete_response.summary, "done");
+
+        assert_eq!(output.text, "before complete");
+        assert!(app.tool_rx.is_some(), "tool receiver should be restored after direct wait");
+
+        let log_contents = std::fs::read_to_string(&log_path).expect("writer log should be readable");
+        assert!(log_contents.contains("before complete"));
+        assert!(
+            log_contents.contains("drained tail"),
+            "tail output should still be forwarded during the drain phase"
+        );
     }
 }

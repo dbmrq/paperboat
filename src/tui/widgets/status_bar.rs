@@ -96,3 +96,318 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &TuiState) {
 
     frame.render_widget(paragraph, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+
+    use crate::logging::{AgentType, LogEvent};
+
+    fn render_status_bar_to_string(state: &TuiState, area: Rect) -> String {
+        let backend = TestBackend::new(area.width, area.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| render_status_bar(frame, area, state))
+            .expect("status bar should render");
+        format!("{}", terminal.backend())
+    }
+
+    // ========================================================================
+    // Basic Render Tests
+    // ========================================================================
+
+    #[test]
+    fn test_render_status_bar_shows_status_label() {
+        let state = TuiState::new();
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 80, 1));
+
+        assert!(rendered.contains("Status:"));
+    }
+
+    #[test]
+    fn test_render_status_bar_shows_idle_when_no_agents() {
+        let state = TuiState::new();
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 80, 1));
+
+        assert!(rendered.contains("Idle"));
+    }
+
+    #[test]
+    fn test_render_status_bar_shows_running_with_active_agent() {
+        let mut state = TuiState::new();
+        state.handle_event(LogEvent::AgentStarted {
+            agent_type: AgentType::Orchestrator,
+            session_id: "sess-1".to_string(),
+            depth: 0,
+            task: "Test task".to_string(),
+        });
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 80, 1));
+
+        assert!(rendered.contains("Running"));
+    }
+
+    #[test]
+    fn test_render_status_bar_shows_agents_label() {
+        let state = TuiState::new();
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 80, 1));
+
+        assert!(rendered.contains("Agents:"));
+    }
+
+    #[test]
+    fn test_render_status_bar_shows_tasks_label() {
+        let state = TuiState::new();
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 80, 1));
+
+        assert!(rendered.contains("Tasks:"));
+    }
+
+    #[test]
+    fn test_render_status_bar_shows_help_hint() {
+        let state = TuiState::new();
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 80, 1));
+
+        assert!(rendered.contains("?=help"));
+    }
+
+    #[test]
+    fn test_render_status_bar_shows_settings_hint() {
+        let state = TuiState::new();
+        // Use wider terminal to ensure settings hint fits
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 120, 1));
+
+        assert!(rendered.contains("settings"));
+    }
+
+    // ========================================================================
+    // Agent Stats Tests
+    // ========================================================================
+
+    #[test]
+    fn test_render_status_bar_shows_succeeded_count() {
+        let mut state = TuiState::new();
+        state.handle_event(LogEvent::AgentStarted {
+            agent_type: AgentType::Orchestrator,
+            session_id: "sess-1".to_string(),
+            depth: 0,
+            task: "Task".to_string(),
+        });
+        state.handle_event(LogEvent::AgentComplete {
+            agent_type: AgentType::Orchestrator,
+            session_id: Some("sess-1".to_string()),
+            depth: 0,
+            success: true,
+        });
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 100, 1));
+
+        assert!(rendered.contains("✓1"));
+    }
+
+    #[test]
+    fn test_render_status_bar_shows_failed_count() {
+        let mut state = TuiState::new();
+        state.handle_event(LogEvent::AgentStarted {
+            agent_type: AgentType::Orchestrator,
+            session_id: "sess-1".to_string(),
+            depth: 0,
+            task: "Task".to_string(),
+        });
+        state.handle_event(LogEvent::AgentComplete {
+            agent_type: AgentType::Orchestrator,
+            session_id: Some("sess-1".to_string()),
+            depth: 0,
+            success: false,
+        });
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 100, 1));
+
+        assert!(rendered.contains("✗1"));
+    }
+
+    #[test]
+    fn test_render_status_bar_shows_in_progress_count() {
+        let mut state = TuiState::new();
+        state.handle_event(LogEvent::AgentStarted {
+            agent_type: AgentType::Orchestrator,
+            session_id: "sess-1".to_string(),
+            depth: 0,
+            task: "Task".to_string(),
+        });
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 100, 1));
+
+        assert!(rendered.contains("~1"));
+    }
+
+    #[test]
+    fn test_render_status_bar_shows_total_agents() {
+        let mut state = TuiState::new();
+        state.handle_event(LogEvent::AgentStarted {
+            agent_type: AgentType::Orchestrator,
+            session_id: "sess-1".to_string(),
+            depth: 0,
+            task: "Task 1".to_string(),
+        });
+        state.handle_event(LogEvent::AgentStarted {
+            agent_type: AgentType::Planner,
+            session_id: "sess-2".to_string(),
+            depth: 0,
+            task: "Task 2".to_string(),
+        });
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 120, 1));
+
+        assert!(rendered.contains("2 total"));
+    }
+
+    // ========================================================================
+    // Task Progress Tests
+    // ========================================================================
+
+    #[test]
+    fn test_render_status_bar_shows_task_progress_zero() {
+        let state = TuiState::new();
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 80, 1));
+
+        assert!(rendered.contains("0/0"));
+    }
+
+    #[test]
+    fn test_render_status_bar_shows_task_progress() {
+        let mut state = TuiState::new();
+        state.handle_event(LogEvent::TaskCreated {
+            task_id: "task-1".to_string(),
+            name: "Task 1".to_string(),
+            description: "Desc".to_string(),
+            dependencies: vec![],
+            depth: 0,
+        });
+        state.handle_event(LogEvent::TaskCreated {
+            task_id: "task-2".to_string(),
+            name: "Task 2".to_string(),
+            description: "Desc".to_string(),
+            dependencies: vec![],
+            depth: 0,
+        });
+        state.handle_event(LogEvent::TaskStateChanged {
+            task_id: "task-1".to_string(),
+            name: "Task 1".to_string(),
+            old_status: "pending".to_string(),
+            new_status: "completed".to_string(),
+            depth: 0,
+        });
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 80, 1));
+
+        assert!(rendered.contains("1/2"));
+    }
+
+    // ========================================================================
+    // Status Message Tests
+    // ========================================================================
+
+    #[test]
+    fn test_render_status_bar_shows_status_message() {
+        let mut state = TuiState::new();
+        state.status_message = Some("Custom message".to_string());
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 100, 1));
+
+        assert!(rendered.contains("Custom message"));
+    }
+
+    #[test]
+    fn test_render_status_bar_no_status_message_when_none() {
+        let state = TuiState::new();
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 100, 1));
+
+        // Should not contain any random status message
+        assert!(!rendered.contains("Custom message"));
+    }
+
+    // ========================================================================
+    // Integration Tests
+    // ========================================================================
+
+    #[test]
+    fn test_status_bar_full_agent_workflow() {
+        let mut state = TuiState::new();
+
+        // Start agents
+        state.handle_event(LogEvent::AgentStarted {
+            agent_type: AgentType::Orchestrator,
+            session_id: "orch".to_string(),
+            depth: 0,
+            task: "Orchestrate".to_string(),
+        });
+        state.handle_event(LogEvent::AgentStarted {
+            agent_type: AgentType::Planner,
+            session_id: "plan".to_string(),
+            depth: 0,
+            task: "Plan".to_string(),
+        });
+        state.handle_event(LogEvent::AgentStarted {
+            agent_type: AgentType::Implementer { index: 1 },
+            session_id: "impl".to_string(),
+            depth: 1,
+            task: "Implement".to_string(),
+        });
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 120, 1));
+        assert!(rendered.contains("Running"));
+        assert!(rendered.contains("~3")); // 3 in progress
+
+        // Complete some
+        state.handle_event(LogEvent::AgentComplete {
+            agent_type: AgentType::Planner,
+            session_id: Some("plan".to_string()),
+            depth: 0,
+            success: true,
+        });
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 120, 1));
+        assert!(rendered.contains("✓1")); // 1 succeeded
+        assert!(rendered.contains("~2")); // 2 still in progress
+
+        // Fail one
+        state.handle_event(LogEvent::AgentComplete {
+            agent_type: AgentType::Implementer { index: 1 },
+            session_id: Some("impl".to_string()),
+            depth: 1,
+            success: false,
+        });
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 120, 1));
+        assert!(rendered.contains("✗1")); // 1 failed
+        assert!(rendered.contains("~1")); // 1 still in progress
+
+        // Complete last
+        state.handle_event(LogEvent::AgentComplete {
+            agent_type: AgentType::Orchestrator,
+            session_id: Some("orch".to_string()),
+            depth: 0,
+            success: true,
+        });
+
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 120, 1));
+        assert!(rendered.contains("Idle")); // No more running
+        assert!(rendered.contains("✓2")); // 2 succeeded
+        assert!(rendered.contains("✗1")); // 1 failed
+        assert!(rendered.contains("~0")); // 0 in progress
+    }
+
+    #[test]
+    fn test_status_bar_renders_on_narrow_terminal() {
+        let state = TuiState::new();
+
+        // Should not panic on narrow terminal
+        let rendered = render_status_bar_to_string(&state, Rect::new(0, 0, 40, 1));
+
+        // Core elements should still be present (may be truncated)
+        assert!(rendered.contains("Status"));
+    }
+}

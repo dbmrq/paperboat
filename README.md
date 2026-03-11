@@ -72,10 +72,12 @@ Instead of specific model versions, Paperboat uses **model tiers** that each bac
 |------|-------------|
 | `opus` | Most capable, best for complex reasoning |
 | `sonnet` | Balanced capability and speed (default) |
-| `haiku` | Fast and cheap |
-| `codex` | OpenAI Codex |
+| `haiku` | Fast and cheap (Auggie only) |
+| `gpt` | OpenAI GPT (general purpose) |
+| `openai` | Meta-tier: expands to `gpt, codex` |
+| `codex` | OpenAI Codex (coding-optimized) |
 | `codex-mini` | Smaller Codex variant |
-| `gemini` | Google Gemini |
+| `gemini` | Google Gemini Pro |
 | `gemini-flash` | Faster Gemini variant |
 | `grok` | xAI Grok |
 | `composer` | Cursor Composer |
@@ -102,6 +104,27 @@ model = "sonnet, opus"
 # implementer.toml - coding-optimized
 model = "sonnet, codex"
 ```
+
+### Effort Levels
+
+Some backends (like Cursor) support **effort levels** that control model thinking/reasoning depth:
+
+| Level | Description |
+|-------|-------------|
+| `low` | Fastest, minimal thinking |
+| `medium` | Balanced (default) |
+| `high` | More thinking, better quality |
+| `xhigh` | Maximum reasoning (uses thinking models) |
+
+Configure effort per agent alongside the model:
+
+```toml
+# planner.toml - use high-effort models for planning
+model = "openai, opus, gemini, composer"
+effort = "high"
+```
+
+On Cursor, this resolves to model variants like `gpt-5.4-high`, `opus-4.6-high`, etc. Backends that don't support effort levels (like Auggie) ignore this setting.
 
 ### Options
 

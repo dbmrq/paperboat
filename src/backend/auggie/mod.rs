@@ -97,16 +97,26 @@ impl Backend for AuggieBackend {
         models::discover_auggie_tiers().await
     }
 
-    fn resolve_tier(&self, tier: ModelTier) -> Result<String> {
+    fn resolve_tier(
+        &self,
+        tier: ModelTier,
+        _effort: Option<crate::models::EffortLevel>,
+    ) -> Result<Vec<String>> {
         // Auggie uses format like "haiku4.5", "sonnet4.5", "opus4.5"
-        // We map each tier to the latest known version
+        // Returns a fallback chain of versions to try (newest first)
+        // Note: Auggie doesn't support effort levels - the parameter is ignored
         match tier {
-            ModelTier::Auto => Ok("auto".to_string()),
-            ModelTier::Opus => Ok("opus4.5".to_string()),
-            ModelTier::Sonnet => Ok("sonnet4.5".to_string()),
-            ModelTier::Haiku => Ok("haiku4.5".to_string()),
+            ModelTier::Auto => Ok(vec!["auto".to_string()]),
+            // Opus: try 4.5 (latest known)
+            ModelTier::Opus => Ok(vec!["opus4.5".to_string()]),
+            // Sonnet: try 4.5 (latest known)
+            ModelTier::Sonnet => Ok(vec!["sonnet4.5".to_string()]),
+            // Haiku: try 4.5 (latest known)
+            ModelTier::Haiku => Ok(vec!["haiku4.5".to_string()]),
             // Auggie doesn't have these tiers
-            ModelTier::Codex
+            ModelTier::Gpt
+            | ModelTier::OpenAI
+            | ModelTier::Codex
             | ModelTier::CodexMini
             | ModelTier::Gemini
             | ModelTier::GeminiFlash

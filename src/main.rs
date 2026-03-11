@@ -370,59 +370,11 @@ async fn main() -> Result<()> {
     };
 
     // ==========================================================================
-    // EARLY BACKEND SELECTION (before TUI takes over terminal)
+    // TUI INITIALIZATION (if enabled, start TUI immediately for splash screen)
     // ==========================================================================
-    // This must happen BEFORE the TUI starts because the prompt uses stdin/stdout.
-    // We determine backend_kind and transport_kind here, then use them after TUI init.
-    let (backend_kind, transport_kind) = if let Some(ref config) = cli_backend_config {
-        // CLI flag takes precedence - no prompt needed
-        let transport = config.effective_transport();
-        (config.kind, transport)
-    } else if let Some(config) = get_explicit_backend_config() {
-        // Explicit config from env var or config file - no prompt needed
-        let transport = config.effective_transport();
-        (config.kind, transport)
-    } else {
-        // No explicit config - auto-detect available backends
-        // This may prompt the user if multiple backends are available
-        let available = discover_available_backends().await;
-
-        match available.len() {
-            0 => {
-                eprintln!(
-                    "❌ No AI backends available.\n\n\
-                    Please install and authenticate at least one backend:\n  \
-                    • Augment CLI: Install auggie and run 'auggie login'\n  \
-                    • Cursor: Install cursor-agent and run 'agent login'\n\n\
-                    You can also specify a backend explicitly with --backend <name>"
-                );
-                std::process::exit(1);
-            }
-            1 => {
-                // Only one backend available - use it automatically
-                let kind = available[0];
-                let transport = kind.default_transport();
-                (kind, transport)
-            }
-            _ => {
-                // Multiple backends available - prompt user to select
-                // This MUST happen before TUI starts since it uses stdin/stdout
-                if let Some(kind) = prompt_backend_selection(&available) {
-                    let transport = kind.default_transport();
-                    (kind, transport)
-                } else {
-                    // Could not prompt (not a terminal) - use first available
-                    let kind = available[0];
-                    let transport = kind.default_transport();
-                    (kind, transport)
-                }
-            }
-        }
-    };
-
-    // Store TUI config channels for later use (after model_config is built)
+    // Store TUI config channels for later use
     #[cfg(feature = "tui")]
-    let tui_config_channels: Option<tui::TuiConfigChannels>;
+    let mut tui_config_channels: Option<tui::TuiConfigChannels>;
 
     #[cfg(feature = "tui")]
     let tui_handle: Option<std::thread::JoinHandle<anyhow::Result<()>>> = if tui_enabled {
@@ -467,7 +419,7 @@ async fn main() -> Result<()> {
         let (app_channels, tui_channels) = tui::spawn_event_bridge_with_config(log_event_rx);
         tui_config_channels = Some(app_channels);
 
-        // Spawn TUI thread - it will wait for initial config via channels
+        // Spawn TUI thread - starts showing splash immediately
         Some(std::thread::spawn(move || {
             tui::run_tui_with_channels(tui_channels)
         }))
@@ -516,6 +468,100 @@ async fn main() -> Result<()> {
         }
 
         None
+    };
+
+    // ==========================================================================
+    // BACKEND SELECTION (via TUI popup or console prompt)
+    // ==========================================================================
+    let (backend_kind, transport_kind) = if let Some(ref config) = cli_backend_config {
+        // CLI flag takes precedence - no selection needed
+        let transport = config.effective_transport();
+        (config.kind, transport)
+    } else if let Some(config) = get_explicit_backend_config() {
+        // Explicit config from env var or config file - no selection needed
+        let transport = config.effective_transport();
+        (config.kind, transport)
+    } else {
+        // Auto-detect available backends
+        let available = discover_available_backends().await;
+
+        match available.len() {
+            0 => {
+                eprintln!(
+                    "❌ No AI backends available.\n\n\
+                    Please install and authenticate at least one backend:\n  \
+                    • Augment CLI: Install auggie and run 'auggie login'\n  \
+                    • Cursor: Install cursor-agent and run 'agent login'\n\n\
+                    You can also specify a backend explicitly with --backend <name>"
+                );
+                std::process::exit(1);
+            }
+            1 => {
+                // Only one backend available - use it automatically
+                // Send to TUI so it knows (single backend = no popup needed)
+                #[cfg(feature = "tui")]
+                if let Some(ref channels) = tui_config_channels {
+                    let _ = channels.available_backends_tx.send(available.clone());
+                }
+                let kind = available[0];
+                let transport = kind.default_transport();
+                (kind, transport)
+            }
+            _ => {
+                // Multiple backends available
+                #[cfg(feature = "tui")]
+                if let Some(ref mut channels) = tui_config_channels {
+                    // TUI mode: send backends to TUI, wait for selection via popup
+                    if let Err(e) = channels.available_backends_tx.send(available.clone()) {
+                        tracing::warn!("Failed to send backends to TUI: {:?}", e);
+                        // Fall back to first available
+                        let kind = available[0];
+                        let transport = kind.default_transport();
+                        (kind, transport)
+                    } else {
+                        // Wait for TUI to send back the selected backend
+                        match channels.selected_backend_rx.recv().await {
+                            Some(kind) => {
+                                let transport = kind.default_transport();
+                                (kind, transport)
+                            }
+                            None => {
+                                // Channel closed, fall back to first
+                                tracing::warn!("Backend selection channel closed, using default");
+                                let kind = available[0];
+                                let transport = kind.default_transport();
+                                (kind, transport)
+                            }
+                        }
+                    }
+                } else {
+                    // Non-TUI mode: prompt in console
+                    #[cfg(not(feature = "tui"))]
+                    {
+                        if let Some(kind) = prompt_backend_selection(&available) {
+                            let transport = kind.default_transport();
+                            (kind, transport)
+                        } else {
+                            let kind = available[0];
+                            let transport = kind.default_transport();
+                            (kind, transport)
+                        }
+                    }
+                    #[cfg(feature = "tui")]
+                    {
+                        // TUI feature enabled but not running, prompt in console
+                        if let Some(kind) = prompt_backend_selection(&available) {
+                            let transport = kind.default_transport();
+                            (kind, transport)
+                        } else {
+                            let kind = available[0];
+                            let transport = kind.default_transport();
+                            (kind, transport)
+                        }
+                    }
+                }
+            }
+        }
     };
 
     // Non-TUI build: standard console output + file logging

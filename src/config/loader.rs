@@ -27,13 +27,15 @@ use std::path::{Path, PathBuf};
 
 use crate::backend::BackendKind;
 use crate::error::{suggest_model_alias, ConfigError, KNOWN_MODEL_ALIASES};
-use crate::models::{ModelConfig, ModelFallbackChain, ModelTier};
+use crate::models::{EffortLevel, ModelConfig, ModelFallbackChain, ModelTier};
 
 /// Configuration for a single agent loaded from TOML
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct AgentFileConfig {
-    /// Model to use for this agent (e.g., "opus", "sonnet4.5")
+    /// Model to use for this agent (e.g., "opus", "sonnet4.5", "openai, opus, gemini")
     pub model: Option<String>,
+    /// Effort/thinking level for this agent (e.g., "low", "medium", "high", "xhigh")
+    pub effort: Option<String>,
 }
 
 impl AgentFileConfig {
@@ -67,7 +69,25 @@ impl AgentFileConfig {
     }
 
     /// Validates a model alias against known values.
+    ///
+    /// Supports both single models ("opus") and fallback chains ("openai, opus, gemini").
     fn validate_model(&self, model: &str, file_path: Option<&Path>) -> Result<(), ConfigError> {
+        // Handle fallback chains (comma-separated models)
+        let models: Vec<&str> = model.split(',').map(|s| s.trim()).collect();
+
+        for single_model in models {
+            self.validate_single_model(single_model, file_path)?;
+        }
+
+        Ok(())
+    }
+
+    /// Validates a single model alias (not a chain).
+    fn validate_single_model(
+        &self,
+        model: &str,
+        file_path: Option<&Path>,
+    ) -> Result<(), ConfigError> {
         let model_lower = model.trim().to_lowercase();
 
         // Check if it's a known alias
@@ -149,6 +169,7 @@ fn load_agent_config(path: &Path) -> Result<AgentFileConfig> {
 fn merge_agent_config(base: AgentFileConfig, override_config: AgentFileConfig) -> AgentFileConfig {
     AgentFileConfig {
         model: override_config.model.or(base.model),
+        effort: override_config.effort.or(base.effort),
     }
 }
 
@@ -180,6 +201,7 @@ pub fn load_agent_configs() -> Result<LoadedAgentConfigs> {
 /// Builds a `ModelConfig` from loaded agent configurations.
 ///
 /// Parses model strings (e.g., "opus", "sonnet, codex, opus") into fallback chains.
+/// Parses effort strings (e.g., "high", "xhigh") into effort levels.
 /// The special value "auto" is handled directly.
 pub fn build_model_config(
     loaded: &LoadedAgentConfigs,
@@ -187,22 +209,34 @@ pub fn build_model_config(
 ) -> Result<ModelConfig> {
     let mut config = ModelConfig::new(available_tiers);
 
-    // Parse orchestrator model fallback chain
+    // Parse orchestrator model fallback chain and effort
     if let Some(ref model_str) = loaded.orchestrator.model {
         config.orchestrator_model = parse_model_chain(model_str)
             .with_context(|| format!("Failed to parse orchestrator model '{model_str}'"))?;
     }
+    if let Some(ref effort_str) = loaded.orchestrator.effort {
+        config.orchestrator_effort = parse_effort_level(effort_str)
+            .with_context(|| format!("Failed to parse orchestrator effort '{effort_str}'"))?;
+    }
 
-    // Parse planner model fallback chain
+    // Parse planner model fallback chain and effort
     if let Some(ref model_str) = loaded.planner.model {
         config.planner_model = parse_model_chain(model_str)
             .with_context(|| format!("Failed to parse planner model '{model_str}'"))?;
     }
+    if let Some(ref effort_str) = loaded.planner.effort {
+        config.planner_effort = parse_effort_level(effort_str)
+            .with_context(|| format!("Failed to parse planner effort '{effort_str}'"))?;
+    }
 
-    // Parse implementer model fallback chain
+    // Parse implementer model fallback chain and effort
     if let Some(ref model_str) = loaded.implementer.model {
         config.implementer_model = parse_model_chain(model_str)
             .with_context(|| format!("Failed to parse implementer model '{model_str}'"))?;
+    }
+    if let Some(ref effort_str) = loaded.implementer.effort {
+        config.implementer_effort = parse_effort_level(effort_str)
+            .with_context(|| format!("Failed to parse implementer effort '{effort_str}'"))?;
     }
 
     Ok(config)
@@ -215,6 +249,13 @@ pub fn build_model_config(
 /// - Comma-separated list: "gemini, codex, opus"
 fn parse_model_chain(model_str: &str) -> Result<ModelFallbackChain> {
     model_str.parse()
+}
+
+/// Parses an effort string into an effort level.
+///
+/// Accepts: "low", "medium", "high", "xhigh"
+fn parse_effort_level(effort_str: &str) -> Result<EffortLevel> {
+    effort_str.parse()
 }
 
 // ============================================================================
@@ -523,6 +564,7 @@ mod tests {
         ] {
             let config = AgentFileConfig {
                 model: Some(alias.to_string()),
+                ..Default::default()
             };
             assert!(
                 config.validate().is_ok(),
@@ -537,11 +579,13 @@ mod tests {
         // Test that validation is case-insensitive
         let config = AgentFileConfig {
             model: Some("OPUS".to_string()),
+            ..Default::default()
         };
         assert!(config.validate().is_ok());
 
         let config = AgentFileConfig {
             model: Some("Sonnet".to_string()),
+            ..Default::default()
         };
         assert!(config.validate().is_ok());
     }
@@ -550,8 +594,44 @@ mod tests {
     fn test_validate_with_whitespace() {
         let config = AgentFileConfig {
             model: Some("  opus  ".to_string()),
+            ..Default::default()
         };
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_fallback_chain() {
+        // Test comma-separated fallback chains
+        let config = AgentFileConfig {
+            model: Some("openai, opus, gemini, composer".to_string()),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+
+        let config = AgentFileConfig {
+            model: Some("gpt, codex, sonnet".to_string()),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+
+        // Single model in chain format should also work
+        let config = AgentFileConfig {
+            model: Some("opus".to_string()),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_fallback_chain_with_invalid_model() {
+        // One invalid model in chain should fail
+        let config = AgentFileConfig {
+            model: Some("opus, invalid_model, sonnet".to_string()),
+            ..Default::default()
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid_model"));
     }
 
     #[test]
@@ -559,11 +639,13 @@ mod tests {
         // Versioned models should be allowed
         let config = AgentFileConfig {
             model: Some("sonnet4".to_string()),
+            ..Default::default()
         };
         assert!(config.validate().is_ok());
 
         let config = AgentFileConfig {
             model: Some("opus5".to_string()),
+            ..Default::default()
         };
         assert!(config.validate().is_ok());
     }
@@ -572,6 +654,7 @@ mod tests {
     fn test_validate_invalid_model() {
         let config = AgentFileConfig {
             model: Some("invalid_model".to_string()),
+            ..Default::default()
         };
         let result = config.validate();
         assert!(result.is_err());
@@ -594,6 +677,7 @@ mod tests {
         // Use a typo that has a suggestion in suggest_model_alias
         let config = AgentFileConfig {
             model: Some("sonnett".to_string()),
+            ..Default::default()
         };
         let result = config.validate();
         assert!(result.is_err());
@@ -609,7 +693,7 @@ mod tests {
     #[test]
     fn test_validate_empty_model_is_ok() {
         // No model specified should be fine (uses default)
-        let config = AgentFileConfig { model: None };
+        let config = AgentFileConfig::default();
         assert!(config.validate().is_ok());
     }
 
@@ -617,6 +701,7 @@ mod tests {
     fn test_validate_with_path_includes_file() {
         let config = AgentFileConfig {
             model: Some("badmodel".to_string()),
+            ..Default::default()
         };
         let path = PathBuf::from(".paperboat/agents/orchestrator.toml");
         let result = config.validate_with_path(&path);
@@ -722,9 +807,11 @@ model = "opus"  # inline comment
     fn test_merge_agent_config_override_takes_priority() {
         let base = AgentFileConfig {
             model: Some("haiku".to_string()),
+            ..Default::default()
         };
         let override_config = AgentFileConfig {
             model: Some("opus".to_string()),
+            ..Default::default()
         };
 
         let merged = merge_agent_config(base, override_config);
@@ -735,8 +822,9 @@ model = "opus"  # inline comment
     fn test_merge_agent_config_base_used_when_override_empty() {
         let base = AgentFileConfig {
             model: Some("sonnet".to_string()),
+            ..Default::default()
         };
-        let override_config = AgentFileConfig { model: None };
+        let override_config = AgentFileConfig::default();
 
         let merged = merge_agent_config(base, override_config);
         assert_eq!(merged.model, Some("sonnet".to_string()));
@@ -744,8 +832,8 @@ model = "opus"  # inline comment
 
     #[test]
     fn test_merge_agent_config_both_empty() {
-        let base = AgentFileConfig { model: None };
-        let override_config = AgentFileConfig { model: None };
+        let base = AgentFileConfig::default();
+        let override_config = AgentFileConfig::default();
 
         let merged = merge_agent_config(base, override_config);
         assert!(merged.model.is_none());
@@ -775,12 +863,15 @@ model = "opus"  # inline comment
         let loaded = LoadedAgentConfigs {
             orchestrator: AgentFileConfig {
                 model: Some("opus".to_string()),
+                ..Default::default()
             },
             planner: AgentFileConfig {
                 model: Some("sonnet".to_string()),
+                ..Default::default()
             },
             implementer: AgentFileConfig {
                 model: Some("haiku".to_string()),
+                ..Default::default()
             },
         };
 
@@ -801,9 +892,10 @@ model = "opus"  # inline comment
         let loaded = LoadedAgentConfigs {
             orchestrator: AgentFileConfig {
                 model: Some("gemini, codex, opus".to_string()),
+                ..Default::default()
             },
-            planner: AgentFileConfig { model: None },
-            implementer: AgentFileConfig { model: None },
+            planner: AgentFileConfig::default(),
+            implementer: AgentFileConfig::default(),
         };
 
         let available_tiers: HashSet<ModelTier> =
@@ -823,9 +915,10 @@ model = "opus"  # inline comment
         let loaded = LoadedAgentConfigs {
             orchestrator: AgentFileConfig {
                 model: Some("opus".to_string()),
+                ..Default::default()
             },
-            planner: AgentFileConfig { model: None },
-            implementer: AgentFileConfig { model: None },
+            planner: AgentFileConfig::default(),
+            implementer: AgentFileConfig::default(),
         };
 
         let available_tiers: HashSet<ModelTier> = [ModelTier::Opus].into_iter().collect();
@@ -846,9 +939,10 @@ model = "opus"  # inline comment
         let loaded = LoadedAgentConfigs {
             orchestrator: AgentFileConfig {
                 model: Some("invalid_model_name".to_string()),
+                ..Default::default()
             },
-            planner: AgentFileConfig { model: None },
-            implementer: AgentFileConfig { model: None },
+            planner: AgentFileConfig::default(),
+            implementer: AgentFileConfig::default(),
         };
 
         let available_tiers: HashSet<ModelTier> = HashSet::new();
@@ -863,11 +957,13 @@ model = "opus"  # inline comment
         let loaded = LoadedAgentConfigs {
             orchestrator: AgentFileConfig {
                 model: Some("auto".to_string()),
+                ..Default::default()
             },
             planner: AgentFileConfig {
                 model: Some("AUTO".to_string()), // Test case insensitivity
+                ..Default::default()
             },
-            implementer: AgentFileConfig { model: None },
+            implementer: AgentFileConfig::default(),
         };
 
         let available_tiers: HashSet<ModelTier> = HashSet::new();

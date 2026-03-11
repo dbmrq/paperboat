@@ -193,3 +193,129 @@ fn test_mock_session_builder_with_skip_tasks_no_reason() {
         _ => panic!("Expected SkipTasks injection"),
     }
 }
+
+#[test]
+fn test_mock_session_builder_with_create_task_dependencies() {
+    let session = MockSessionBuilder::new("planner-deps-001")
+        .with_create_task("Task A", "Primary work", 0)
+        .with_create_task_dependencies(
+            "Task B",
+            "Follow-up work",
+            vec!["Task A".to_string()],
+            0,
+        )
+        .build();
+
+    let create_updates: Vec<_> = session
+        .updates
+        .iter()
+        .filter_map(|update| update.inject_mcp_tool_call.as_ref())
+        .collect();
+    assert_eq!(create_updates.len(), 2);
+
+    match create_updates[1] {
+        MockMcpToolCall::CreateTask {
+            name,
+            description,
+            dependencies,
+        } => {
+            assert_eq!(name, "Task B");
+            assert_eq!(description, "Follow-up work");
+            assert_eq!(dependencies, &vec!["Task A".to_string()]);
+        }
+        _ => panic!("Expected CreateTask injection"),
+    }
+}
+
+#[test]
+fn test_mock_session_builder_with_spawn_agents_batch() {
+    let session = MockSessionBuilder::new("orch-batch-001")
+        .with_spawn_agents(
+            vec![
+                MockAgentSpec {
+                    role: Some("implementer".to_string()),
+                    task: Some("Task A".to_string()),
+                    task_id: None,
+                    prompt: None,
+                    tools: None,
+                    model_complexity: None,
+                },
+                MockAgentSpec {
+                    role: Some("verifier".to_string()),
+                    task: Some("Task B".to_string()),
+                    task_id: None,
+                    prompt: None,
+                    tools: Some(vec!["read_file".to_string()]),
+                    model_complexity: None,
+                },
+            ],
+            MockWaitMode::Any,
+            25,
+        )
+        .build();
+
+    let spawn_update = session
+        .updates
+        .iter()
+        .find(|u| {
+            matches!(
+                &u.inject_mcp_tool_call,
+                Some(MockMcpToolCall::SpawnAgents { .. })
+            )
+        })
+        .expect("Should have spawn_agents injection");
+
+    match &spawn_update.inject_mcp_tool_call {
+        Some(MockMcpToolCall::SpawnAgents { task, agents, wait }) => {
+            assert!(task.is_none());
+            assert_eq!(*wait, MockWaitMode::Any);
+            assert_eq!(agents.len(), 2);
+            assert_eq!(agents[0].task.as_deref(), Some("Task A"));
+            assert_eq!(agents[1].role.as_deref(), Some("verifier"));
+        }
+        _ => panic!("Expected SpawnAgents injection"),
+    }
+}
+
+#[test]
+fn test_mock_scenario_parse_spawn_agents_batch() {
+    let toml = r#"
+[scenario]
+name = "spawn_batch"
+description = "Parse multi-agent spawn batch"
+
+[[orchestrator_sessions]]
+session_id = "orchestrator-001"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 0
+session_update = "agent_message_chunk"
+content = "[Calling spawn_agents]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "spawn_agents"
+wait = "any"
+
+[[orchestrator_sessions.updates.inject_mcp_tool_call.agents]]
+role = "implementer"
+task = "Task A"
+
+[[orchestrator_sessions.updates.inject_mcp_tool_call.agents]]
+role = "verifier"
+task = "Task B"
+"#;
+
+    let scenario = MockScenario::parse(toml).expect("Scenario should parse");
+    let update = &scenario.orchestrator_sessions[0].updates[0];
+
+    match &update.inject_mcp_tool_call {
+        Some(MockMcpToolCall::SpawnAgents { task, agents, wait }) => {
+            assert!(task.is_none());
+            assert_eq!(*wait, MockWaitMode::Any);
+            assert_eq!(agents.len(), 2);
+            assert_eq!(agents[0].task.as_deref(), Some("Task A"));
+            assert_eq!(agents[1].role.as_deref(), Some("verifier"));
+        }
+        _ => panic!("Expected SpawnAgents injection"),
+    }
+}

@@ -1,0 +1,151 @@
+# ============================================================================
+# Completion Rejection Scenario
+# ============================================================================
+#
+# Purpose: Tests that orchestrator completion is rejected when tasks remain
+# pending (not started). The orchestrator must either spawn agents for pending
+# tasks or explicitly skip them before completing.
+#
+# Expected Flow:
+#   1. Planner creates 2 tasks
+#   2. Planner calls complete(success=true)
+#   3. Orchestrator implements Task 1 only
+#   4. Orchestrator calls complete(success=true) - REJECTED (pending tasks)
+#   5. Orchestrator skips Task 2
+#   6. Orchestrator calls complete(success=true) - ACCEPTED
+#
+# Test Assertions:
+#   - result.task_result.success == true
+#   - First complete() call is rejected with "pending tasks remain"
+#   - Second complete() call is accepted after skip_tasks
+#   - Task 2 final status is "skipped"
+#
+# Sessions Defined: 1 planner, 1 orchestrator, 1 implementer
+# ============================================================================
+
+[scenario]
+name = "completion_rejection"
+description = "Orchestrator completion is rejected when pending tasks remain"
+
+# Planner session
+[[planner_sessions]]
+session_id = "planner-001"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Creating plan with two tasks.\n"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "First task"
+description = "Do the first task"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Creating second task]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Second task"
+description = "Do the second task (optional)"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Plan complete]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Plan created with 2 tasks"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Orchestrator session: implements one task, attempts premature completion, then skips
+[[orchestrator_sessions]]
+session_id = "orchestrator-001"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Executing first task only...\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "spawn_agents"
+task = "First task"
+
+# Attempt premature completion - should be rejected
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Attempting completion with pending tasks]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Premature completion attempt"
+
+# Skip the second task after rejection
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Skipping remaining tasks...\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "skip_tasks"
+task_ids = ["task002"]
+reason = "Not required for this scenario"
+
+# Final completion should succeed
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Completing after reconciliation]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "All tasks resolved"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Implementer for first task
+[[implementer_sessions]]
+session_id = "implementer-001"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Implementing first task...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Done]"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "First task implemented"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Mock response for spawn_agents
+[[mock_tool_responses]]
+tool_type = "SpawnAgents"
+task_pattern = ".*First task.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "First task completed"
+

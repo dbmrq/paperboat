@@ -46,26 +46,6 @@ pub enum IpcError {
         /// The underlying IO error
         source: io::Error,
     },
-
-    /// Read operation failed.
-    ReadFailed {
-        /// The underlying IO error
-        source: io::Error,
-    },
-
-    /// Write operation failed.
-    WriteFailed {
-        /// The underlying IO error
-        source: io::Error,
-    },
-
-    /// Address cleanup failed (e.g., removing socket file).
-    CleanupFailed {
-        /// The address that failed to clean up
-        address: String,
-        /// The underlying IO error
-        source: io::Error,
-    },
 }
 
 impl fmt::Display for IpcError {
@@ -80,15 +60,6 @@ impl fmt::Display for IpcError {
             Self::AcceptFailed { source } => {
                 write!(f, "Failed to accept IPC connection: {source}")
             }
-            Self::ReadFailed { source } => {
-                write!(f, "IPC read failed: {source}")
-            }
-            Self::WriteFailed { source } => {
-                write!(f, "IPC write failed: {source}")
-            }
-            Self::CleanupFailed { address, source } => {
-                write!(f, "Failed to clean up IPC endpoint '{address}': {source}")
-            }
         }
     }
 }
@@ -98,10 +69,7 @@ impl std::error::Error for IpcError {
         match self {
             Self::BindFailed { source, .. }
             | Self::ConnectionFailed { source, .. }
-            | Self::AcceptFailed { source }
-            | Self::ReadFailed { source }
-            | Self::WriteFailed { source }
-            | Self::CleanupFailed { source, .. } => Some(source),
+            | Self::AcceptFailed { source } => Some(source),
         }
     }
 }

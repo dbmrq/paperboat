@@ -63,6 +63,9 @@ pub struct CursorCliTransport {
     agent_type: String,
     /// Socket path for MCP communication (set from SessionConfig)
     socket_path: Option<String>,
+    /// Unique ID for this session to prevent MCP server caching.
+    /// Each session gets a unique ID that's used in the MCP server name.
+    session_unique_id: String,
     /// Permission policy for tool filtering
     permission_policy: PermissionPolicy,
     /// Current session ID (from last successful prompt)
@@ -79,16 +82,49 @@ pub struct CursorCliTransport {
 }
 
 /// Parsed output line from CLI stream-json format.
+///
+/// Cursor CLI outputs various message types:
+/// - `thinking` with `subtype: "delta"` for streaming thought tokens
+/// - `thinking` with `subtype: "completed"` when thinking is done
+/// - `assistant` with the final response message
+/// - `tool_use` for tool invocations
+/// - `tool_result` for tool outputs
+/// - `result` for completion status
+/// - `system`, `user` for metadata (ignored)
+///
+/// Note: We use `#[serde(flatten)]` to capture any extra fields as `Value` since the
+/// Cursor CLI may add new fields like `timestamp_ms`, `apiKeySource`, etc.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum CliOutputLine {
-    /// Text content from the agent
-    Text { content: String },
+    /// Text content from the agent (legacy format, may not be used by Cursor)
+    Text {
+        content: String,
+        #[serde(flatten)]
+        _extra: Value,
+    },
+    /// Thinking/reasoning tokens (streaming delta or completed)
+    Thinking {
+        #[serde(default)]
+        subtype: Option<String>,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(flatten)]
+        _extra: Value,
+    },
+    /// Final assistant response message
+    Assistant {
+        message: AssistantMessage,
+        #[serde(flatten)]
+        _extra: Value,
+    },
     /// Tool use request
     ToolUse {
         id: String,
         name: String,
         input: Value,
+        #[serde(flatten)]
+        _extra: Value,
     },
     /// Tool result
     ToolResult {
@@ -96,6 +132,8 @@ enum CliOutputLine {
         content: String,
         #[serde(default)]
         is_error: bool,
+        #[serde(flatten)]
+        _extra: Value,
     },
     /// Final result with session info
     Result {
@@ -104,7 +142,37 @@ enum CliOutputLine {
         session_id: Option<String>,
         #[serde(default)]
         result: Option<String>,
+        #[serde(flatten)]
+        _extra: Value,
     },
+    /// System initialization message (ignored)
+    System {
+        #[serde(flatten)]
+        _extra: Value,
+    },
+    /// User message echo (ignored)
+    User {
+        #[serde(flatten)]
+        _extra: Value,
+    },
+}
+
+/// Assistant message structure from Cursor CLI
+#[derive(Debug, Deserialize)]
+struct AssistantMessage {
+    #[allow(dead_code)]
+    role: String,
+    content: Vec<ContentBlock>,
+}
+
+/// Content block within a message
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ContentBlock {
+    Text { text: String },
+    // Tool use blocks are handled separately via ToolUse type
+    #[serde(other)]
+    Other,
 }
 
 impl CursorCliTransport {
@@ -117,11 +185,15 @@ impl CursorCliTransport {
     #[must_use]
     pub fn new(agent_type: impl Into<String>, permission_policy: PermissionPolicy) -> Self {
         let (tx, rx) = mpsc::channel(100);
+        // Generate a unique ID for this transport instance to prevent MCP server caching.
+        // Use first 8 chars of UUID for readability while maintaining sufficient uniqueness.
+        let session_unique_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
         Self {
             workspace: PathBuf::new(),
             model: String::new(),
             agent_type: agent_type.into(),
             socket_path: None,
+            session_unique_id,
             permission_policy,
             current_session_id: None,
             notification_tx: tx,
@@ -157,11 +229,47 @@ impl CursorCliTransport {
         let parsed: Result<CliOutputLine, _> = serde_json::from_str(line);
 
         match parsed {
-            Ok(CliOutputLine::Text { content }) => Some(SessionUpdate::Text {
+            Ok(CliOutputLine::Text { content, .. }) => Some(SessionUpdate::Text {
                 session_id: session_id.to_string(),
                 content,
             }),
-            Ok(CliOutputLine::ToolUse { id, name, input }) => {
+            Ok(CliOutputLine::Thinking { subtype, text, .. }) => {
+                // Only emit text for delta subtypes (streaming tokens)
+                // Ignore "completed" subtypes
+                if subtype.as_deref() == Some("delta") {
+                    if let Some(text) = text {
+                        return Some(SessionUpdate::Text {
+                            session_id: session_id.to_string(),
+                            content: text,
+                        });
+                    }
+                }
+                None
+            }
+            Ok(CliOutputLine::Assistant { message, .. }) => {
+                // Extract text from the message content blocks
+                let text: String = message
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        ContentBlock::Other => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+
+                if !text.is_empty() {
+                    Some(SessionUpdate::Text {
+                        session_id: session_id.to_string(),
+                        content: format!("\n\n**Response:**\n{}", text),
+                    })
+                } else {
+                    None
+                }
+            }
+            Ok(CliOutputLine::ToolUse {
+                id, name, input, ..
+            }) => {
                 // Apply permission policy filtering
                 if !self.permission_policy.should_allow(&name) {
                     tracing::warn!(
@@ -181,6 +289,7 @@ impl CursorCliTransport {
                 tool_use_id,
                 content,
                 is_error,
+                ..
             }) => Some(SessionUpdate::ToolResult {
                 session_id: session_id.to_string(),
                 tool_use_id,
@@ -191,6 +300,7 @@ impl CursorCliTransport {
                 subtype,
                 session_id: new_session_id,
                 result,
+                ..
             }) => {
                 let success = subtype.as_deref() == Some("success");
                 Some(SessionUpdate::Completion {
@@ -199,6 +309,8 @@ impl CursorCliTransport {
                     success,
                 })
             }
+            // Ignore system and user message echoes
+            Ok(CliOutputLine::System { .. }) | Ok(CliOutputLine::User { .. }) => None,
             Err(e) => {
                 // Log parse errors for debugging but don't fail
                 tracing::trace!("Failed to parse CLI output line: {} - {}", line, e);
@@ -215,12 +327,119 @@ impl CursorCliTransport {
         }
     }
 
+    /// Convert a SessionUpdate to the JSON format expected by the legacy notification router.
+    ///
+    /// This mimics the ACP notification format so the existing routing code can handle
+    /// messages from CLI transport the same way it handles ACP transport messages.
+    ///
+    /// The session handler (`handle_worker_session_message`) expects:
+    /// - Text: `update.content.text` for the message content
+    /// - ToolCall: `update.title` for the tool name
+    /// - ToolResult: `update.title`, `update.isError`, `update.content.text`
+    fn session_update_to_json(update: SessionUpdate) -> Value {
+        match update {
+            SessionUpdate::Text {
+                session_id,
+                content,
+            } => {
+                // Session handler expects: update.content.text
+                json!({
+                    "method": "session/update",
+                    "params": {
+                        "session_id": session_id,
+                        "update": {
+                            "type": "agent_message_chunk",
+                            "content": {
+                                "text": content
+                            }
+                        }
+                    }
+                })
+            }
+            SessionUpdate::ToolUse {
+                session_id,
+                tool_use_id,
+                tool_name,
+                input,
+            } => {
+                // Session handler expects: update.title for the tool name
+                json!({
+                    "method": "session/update",
+                    "params": {
+                        "session_id": session_id,
+                        "update": {
+                            "type": "tool_call",
+                            "title": tool_name,
+                            "tool_use_id": tool_use_id,
+                            "input": input
+                        }
+                    }
+                })
+            }
+            SessionUpdate::ToolResult {
+                session_id,
+                tool_use_id,
+                content,
+                is_success,
+            } => {
+                // Session handler expects: update.title, update.isError, update.content.text
+                json!({
+                    "method": "session/update",
+                    "params": {
+                        "session_id": session_id,
+                        "update": {
+                            "type": "tool_result",
+                            "title": tool_use_id,
+                            "isError": !is_success,
+                            "content": {
+                                "text": content
+                            }
+                        }
+                    }
+                })
+            }
+            SessionUpdate::Completion {
+                session_id,
+                result,
+                success,
+            } => {
+                // Session handler expects: type "complete" to signal session end
+                json!({
+                    "method": "session/update",
+                    "params": {
+                        "session_id": session_id,
+                        "update": {
+                            "type": "complete",
+                            "result": result,
+                            "success": success
+                        }
+                    }
+                })
+            }
+            SessionUpdate::Raw { session_id, data } => {
+                json!({
+                    "method": "session/update",
+                    "params": {
+                        "session_id": session_id.unwrap_or_default(),
+                        "update": data
+                    }
+                })
+            }
+        }
+    }
+
     /// Spawn the agent process and start reading output.
     async fn spawn_agent(&mut self, prompt: &str) -> Result<()> {
         // Configure MCP for this agent type before spawning
         // This ensures the agent only sees the tools it should use
+        // We use a unique suffix to prevent Cursor from caching MCP server processes
+        // across different agent types/sessions
         if let Some(socket_path) = &self.socket_path {
-            super::mcp_config::enable_mcp_for_agent(&self.agent_type, socket_path)?;
+            super::mcp_config::enable_mcp_for_agent(
+                &self.agent_type,
+                socket_path,
+                Some(&self.session_unique_id),
+            )?;
         } else {
             tracing::warn!(
                 "No socket path configured for CLI transport - MCP tools may not work correctly"
@@ -259,10 +478,10 @@ impl CursorCliTransport {
         // Configure process
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped()) // Capture stderr for logging
             .kill_on_drop(true);
 
-        tracing::debug!(
+        tracing::info!(
             "🚀 Spawning Cursor CLI: model={}, workspace={}, resume={:?}",
             self.model,
             self.workspace.display(),
@@ -271,7 +490,26 @@ impl CursorCliTransport {
 
         let mut child = cmd.spawn().context("Failed to spawn Cursor agent CLI")?;
 
+        // Log the process ID for debugging
+        if let Some(pid) = child.id() {
+            tracing::info!("🚀 Cursor CLI started with PID: {}", pid);
+        }
+
         let stdout = child.stdout.take().context("Failed to get stdout")?;
+        let stderr = child.stderr.take();
+
+        // Spawn background task to log stderr
+        if let Some(stderr) = stderr {
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if !line.trim().is_empty() {
+                        tracing::warn!("📛 CLI stderr: {}", line);
+                    }
+                }
+            });
+        }
 
         // Generate a temporary session ID for this prompt
         // (will be updated when we receive the result message)
@@ -295,6 +533,7 @@ impl CursorCliTransport {
                 model: String::new(),
                 agent_type,
                 socket_path: None,
+                session_unique_id: String::new(), // Not used for parsing
                 permission_policy,
                 current_session_id: None,
                 notification_tx: tx.clone(),
@@ -308,11 +547,48 @@ impl CursorCliTransport {
                     continue;
                 }
 
+                // Log raw CLI output for debugging (at debug level to avoid noise in normal runs)
+                tracing::debug!("📤 CLI output: {}", line);
+
                 if let Some(update) = parser.parse_output_line(&line, &temp_session_id) {
+                    // Also log the parsed update type for easier debugging
+                    match &update {
+                        crate::backend::transport::SessionUpdate::Text { content, .. } => {
+                            tracing::trace!(
+                                "  → Text: {}...",
+                                &content.chars().take(50).collect::<String>()
+                            );
+                        }
+                        crate::backend::transport::SessionUpdate::ToolUse { tool_name, .. } => {
+                            tracing::debug!("  → Tool call: {}", tool_name);
+                        }
+                        crate::backend::transport::SessionUpdate::ToolResult {
+                            tool_use_id,
+                            is_success,
+                            ..
+                        } => {
+                            tracing::debug!(
+                                "  → Tool result: {} (success={})",
+                                tool_use_id,
+                                is_success
+                            );
+                        }
+                        crate::backend::transport::SessionUpdate::Completion {
+                            success, ..
+                        } => {
+                            tracing::info!("  → Completion: success={}", success);
+                        }
+                        crate::backend::transport::SessionUpdate::Raw { data, .. } => {
+                            tracing::trace!("  → Raw: {:?}", data);
+                        }
+                    }
                     if tx.send(update).await.is_err() {
                         tracing::debug!("Notification receiver dropped, stopping CLI reader");
                         break;
                     }
+                } else {
+                    // Log lines that couldn't be parsed (might indicate issues)
+                    tracing::warn!("📤 CLI unparseable output: {}", line);
                 }
             }
 
@@ -457,97 +733,46 @@ impl AgentTransport for CursorCliTransport {
         })?;
 
         // Convert SessionUpdate to the JSON format expected by legacy code
-        // This mimics the ACP notification format
-        let json = match update {
-            SessionUpdate::Text {
-                session_id,
-                content,
-            } => {
-                json!({
-                    "method": "session/update",
-                    "params": {
-                        "session_id": session_id,
-                        "update": {
-                            "type": "agent_message_chunk",
-                            "data": content
-                        }
-                    }
-                })
-            }
-            SessionUpdate::ToolUse {
-                session_id,
-                tool_use_id,
-                tool_name,
-                input,
-            } => {
-                json!({
-                    "method": "session/update",
-                    "params": {
-                        "session_id": session_id,
-                        "update": {
-                            "type": "tool_call",
-                            "data": {
-                                "tool_use_id": tool_use_id,
-                                "tool_name": tool_name,
-                                "input": input
-                            }
-                        }
-                    }
-                })
-            }
-            SessionUpdate::ToolResult {
-                session_id,
-                tool_use_id,
-                content,
-                is_success,
-            } => {
-                json!({
-                    "method": "session/update",
-                    "params": {
-                        "session_id": session_id,
-                        "update": {
-                            "type": "tool_result",
-                            "data": {
-                                "tool_use_id": tool_use_id,
-                                "content": content,
-                                "is_success": is_success
-                            }
-                        }
-                    }
-                })
-            }
-            SessionUpdate::Completion {
-                session_id,
-                result,
-                success,
-            } => {
-                json!({
-                    "method": "session/update",
-                    "params": {
-                        "session_id": session_id,
-                        "update": {
-                            "type": "complete",
-                            "data": {
-                                "result": result,
-                                "success": success
-                            }
-                        }
-                    }
-                })
-            }
-            SessionUpdate::Raw { session_id, data } => {
-                // For raw updates, wrap them in session/update format
-                json!({
-                    "method": "session/update",
-                    "params": {
-                        "session_id": session_id.unwrap_or_default(),
-                        "update": data
-                    }
-                })
-            }
-        };
+        Ok(Self::session_update_to_json(update))
+    }
 
-        Ok(json)
+    /// Returns the transport kind for this transport.
+    ///
+    /// CLI transport returns `TransportKind::Cli` to enable transport-specific
+    /// behavior like creating unique sockets to prevent MCP server caching.
+    fn kind(&self) -> crate::backend::transport::TransportKind {
+        crate::backend::transport::TransportKind::Cli
+    }
+
+    /// Take the raw notification receiver (legacy compatibility).
+    ///
+    /// This converts the typed `SessionUpdate` channel to a raw `Value` channel
+    /// for compatibility with the existing notification routing system.
+    ///
+    /// A bridge task is spawned that converts each `SessionUpdate` to the JSON
+    /// format expected by the legacy code and forwards it to a new channel.
+    fn take_notification_rx(&mut self) -> Option<mpsc::Receiver<Value>> {
+        // Take the typed receiver
+        let typed_rx = self.notification_rx.take()?;
+
+        // Create a new channel for raw JSON values
+        let (tx, rx) = mpsc::channel::<Value>(100);
+
+        // Spawn a bridge task that converts SessionUpdate to Value
+        tokio::spawn(async move {
+            let mut typed_rx = typed_rx;
+            while let Some(update) = typed_rx.recv().await {
+                // Convert SessionUpdate to the JSON format expected by legacy code
+                let json = Self::session_update_to_json(update);
+                if tx.send(json).await.is_err() {
+                    // Receiver dropped, stop bridging
+                    break;
+                }
+            }
+            tracing::debug!("CLI transport notification bridge task ended");
+        });
+
+        Some(rx)
     }
 }
 
@@ -574,6 +799,30 @@ impl Drop for CursorCliTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::env;
+
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = env::var(key).ok();
+            env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
 
     // ========================================================================
     // JSON Output Parsing Tests
@@ -1015,6 +1264,64 @@ mod tests {
         assert!(matches!(update, Some(SessionUpdate::Raw { .. })));
     }
 
+    #[test]
+    fn test_parse_thinking_delta_output() {
+        let transport = CursorCliTransport::for_implementer();
+        let line = r#"{"type":"thinking","subtype":"delta","text":"reasoning...","session_id":"abc"}"#;
+        let update = transport.parse_output_line(line, "test-session");
+
+        if let Some(SessionUpdate::Text { session_id, content }) = update {
+            assert_eq!(session_id, "test-session");
+            assert_eq!(content, "reasoning...");
+        } else {
+            panic!("Expected Text update for thinking delta");
+        }
+    }
+
+    #[test]
+    fn test_parse_thinking_completed_is_ignored() {
+        let transport = CursorCliTransport::for_implementer();
+        let line = r#"{"type":"thinking","subtype":"completed","session_id":"abc"}"#;
+        let update = transport.parse_output_line(line, "test-session");
+
+        // Completed thinking events should be ignored
+        assert!(update.is_none());
+    }
+
+    #[test]
+    fn test_parse_assistant_message() {
+        let transport = CursorCliTransport::for_implementer();
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello!"}]},"session_id":"abc"}"#;
+        let update = transport.parse_output_line(line, "test-session");
+
+        if let Some(SessionUpdate::Text { session_id, content }) = update {
+            assert_eq!(session_id, "test-session");
+            assert!(content.contains("Hello!"));
+        } else {
+            panic!("Expected Text update for assistant message");
+        }
+    }
+
+    #[test]
+    fn test_parse_system_message_is_ignored() {
+        let transport = CursorCliTransport::for_implementer();
+        let line = r#"{"type":"system","subtype":"init","session_id":"abc"}"#;
+        let update = transport.parse_output_line(line, "test-session");
+
+        // System messages should be ignored
+        assert!(update.is_none());
+    }
+
+    #[test]
+    fn test_parse_user_message_is_ignored() {
+        let transport = CursorCliTransport::for_implementer();
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"test"}]},"session_id":"abc"}"#;
+        let update = transport.parse_output_line(line, "test-session");
+
+        // User message echoes should be ignored
+        assert!(update.is_none());
+    }
+
     // ========================================================================
     // Constructor and Factory Method Tests
     // ========================================================================
@@ -1104,6 +1411,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_session_extracts_socket_path_from_mcp_config() {
+        let mut transport = CursorCliTransport::for_implementer();
+        let config = SessionConfig::new("test-model", "/test/workspace").with_mcp_servers(vec![
+            json!({
+                "name": "paperboat",
+                "args": ["--mcp-server", "--socket", "/tmp/paperboat.sock"]
+            }),
+            json!({
+                "name": "other",
+                "args": ["--flag", "value"]
+            }),
+        ]);
+
+        transport.create_session(config).await.unwrap();
+
+        assert_eq!(
+            transport.socket_path.as_deref(),
+            Some("/tmp/paperboat.sock")
+        );
+    }
+
+    #[tokio::test]
     async fn test_take_notifications_returns_once() {
         let mut transport = CursorCliTransport::for_implementer();
 
@@ -1137,6 +1466,41 @@ mod tests {
         let mut transport = CursorCliTransport::for_implementer();
         let result = transport.shutdown().await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_recv_fails_after_take_notifications() {
+        let mut transport = CursorCliTransport::for_implementer();
+        assert!(transport.take_notifications().is_some());
+
+        let err = transport.recv().await.unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Notification receiver has been taken"));
+    }
+
+    #[tokio::test]
+    async fn test_take_notification_rx_bridges_session_updates() {
+        let mut transport = CursorCliTransport::for_implementer();
+        let mut rx = transport.take_notification_rx().unwrap();
+
+        transport
+            .notification_tx
+            .send(SessionUpdate::ToolResult {
+                session_id: "session-123".to_string(),
+                tool_use_id: "tool-1".to_string(),
+                content: "done".to_string(),
+                is_success: false,
+            })
+            .await
+            .unwrap();
+
+        let bridged = rx.recv().await.unwrap();
+        assert_eq!(bridged["method"], "session/update");
+        assert_eq!(bridged["params"]["session_id"], "session-123");
+        assert_eq!(bridged["params"]["update"]["type"], "tool_result");
+        assert_eq!(bridged["params"]["update"]["isError"], true);
+        assert_eq!(bridged["params"]["update"]["content"]["text"], "done");
     }
 
     // ========================================================================
@@ -1179,5 +1543,49 @@ mod tests {
         assert!(matches!(updates[2], SessionUpdate::ToolResult { .. }));
         assert!(matches!(updates[3], SessionUpdate::Text { .. }));
         assert!(matches!(updates[4], SessionUpdate::Completion { .. }));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_send_prompt_propagates_agent_spawn_failure_without_socket_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let _path = EnvGuard::set("PATH", temp_dir.path().to_str().unwrap());
+
+        let mut transport = CursorCliTransport::for_implementer();
+        transport
+            .create_session(SessionConfig::new("test-model", "/tmp/workspace"))
+            .await
+            .unwrap();
+
+        let err = transport
+            .send_prompt("session-id", "hello")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Failed to spawn Cursor agent CLI"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_send_prompt_propagates_mcp_enable_failure_with_socket_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let _home = EnvGuard::set("HOME", temp_dir.path().to_str().unwrap());
+        let _path = EnvGuard::set("PATH", temp_dir.path().to_str().unwrap());
+
+        let mut transport = CursorCliTransport::for_implementer();
+        transport
+            .create_session(
+                SessionConfig::new("test-model", "/tmp/workspace").with_mcp_servers(vec![json!({
+                    "name": "paperboat",
+                    "args": ["--mcp-server", "--socket", "/tmp/paperboat.sock"]
+                })]),
+            )
+            .await
+            .unwrap();
+
+        let err = transport
+            .send_prompt("session-id", "hello")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Failed to run 'agent mcp enable'"));
     }
 }

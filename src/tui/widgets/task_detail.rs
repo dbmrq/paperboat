@@ -255,3 +255,408 @@ pub fn handle_task_detail_key(
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+
+    use crate::logging::LogEvent;
+    use crate::tui::state::FocusedPanel;
+
+    fn create_test_task() -> TaskDisplay {
+        TaskDisplay {
+            task_id: "task-123".to_string(),
+            name: "Test Task".to_string(),
+            description: "A test task description".to_string(),
+            status: "pending".to_string(),
+            dependencies: vec![],
+            depth: 0,
+        }
+    }
+
+    fn render_task_detail_to_string(
+        state: &mut TuiState,
+        task: &TaskDisplay,
+        area: Rect,
+        focused: bool,
+    ) -> String {
+        let backend = TestBackend::new(area.width, area.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| render_task_detail(frame, area, state, task, focused))
+            .expect("task detail should render");
+        format!("{}", terminal.backend())
+    }
+
+    // ========================================================================
+    // Status Color Tests
+    // ========================================================================
+
+    #[test]
+    fn test_status_color_completed() {
+        assert_eq!(status_color("completed"), Color::Green);
+    }
+
+    #[test]
+    fn test_status_color_in_progress() {
+        assert_eq!(status_color("in_progress"), Color::Yellow);
+    }
+
+    #[test]
+    fn test_status_color_failed() {
+        assert_eq!(status_color("failed"), Color::Red);
+    }
+
+    #[test]
+    fn test_status_color_pending() {
+        assert_eq!(status_color("pending"), Color::Blue);
+    }
+
+    #[test]
+    fn test_status_color_cancelled() {
+        assert_eq!(status_color("cancelled"), Color::DarkGray);
+    }
+
+    #[test]
+    fn test_status_color_skipped() {
+        assert_eq!(status_color("skipped"), Color::DarkGray);
+    }
+
+    #[test]
+    fn test_status_color_blocked() {
+        assert_eq!(status_color("blocked"), Color::Magenta);
+    }
+
+    #[test]
+    fn test_status_color_unknown() {
+        assert_eq!(status_color("unknown_status"), Color::White);
+    }
+
+    // ========================================================================
+    // Status Symbol Tests
+    // ========================================================================
+
+    #[test]
+    fn test_status_symbol_completed() {
+        assert_eq!(status_symbol("completed"), "✓");
+    }
+
+    #[test]
+    fn test_status_symbol_in_progress() {
+        assert_eq!(status_symbol("in_progress"), "▶");
+    }
+
+    #[test]
+    fn test_status_symbol_failed() {
+        assert_eq!(status_symbol("failed"), "✗");
+    }
+
+    #[test]
+    fn test_status_symbol_pending() {
+        assert_eq!(status_symbol("pending"), "○");
+    }
+
+    #[test]
+    fn test_status_symbol_cancelled() {
+        assert_eq!(status_symbol("cancelled"), "⊘");
+    }
+
+    #[test]
+    fn test_status_symbol_blocked() {
+        assert_eq!(status_symbol("blocked"), "◈");
+    }
+
+    #[test]
+    fn test_status_symbol_unknown() {
+        assert_eq!(status_symbol("unknown"), "?");
+    }
+
+    // ========================================================================
+    // build_task_detail_lines Tests
+    // ========================================================================
+
+    #[test]
+    fn test_build_task_detail_lines_contains_id() {
+        let task = create_test_task();
+        let lines = build_task_detail_lines(&task);
+
+        let content: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        assert!(content.contains("ID:"));
+        assert!(content.contains("task-123"));
+    }
+
+    #[test]
+    fn test_build_task_detail_lines_contains_name() {
+        let task = create_test_task();
+        let lines = build_task_detail_lines(&task);
+
+        let content: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        assert!(content.contains("Name:"));
+        assert!(content.contains("Test Task"));
+    }
+
+    #[test]
+    fn test_build_task_detail_lines_contains_status() {
+        let task = create_test_task();
+        let lines = build_task_detail_lines(&task);
+
+        let content: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        assert!(content.contains("Status:"));
+        assert!(content.contains("pending"));
+    }
+
+    #[test]
+    fn test_build_task_detail_lines_contains_depth() {
+        let mut task = create_test_task();
+        task.depth = 2;
+        let lines = build_task_detail_lines(&task);
+
+        let content: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        assert!(content.contains("Depth:"));
+        assert!(content.contains('2'));
+    }
+
+    #[test]
+    fn test_build_task_detail_lines_contains_description() {
+        let task = create_test_task();
+        let lines = build_task_detail_lines(&task);
+
+        let content: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        assert!(content.contains("Description:"));
+        assert!(content.contains("A test task description"));
+    }
+
+    #[test]
+    fn test_build_task_detail_lines_empty_description() {
+        let mut task = create_test_task();
+        task.description = String::new();
+        let lines = build_task_detail_lines(&task);
+
+        let content: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        assert!(content.contains("(No description)"));
+    }
+
+    #[test]
+    fn test_build_task_detail_lines_with_dependencies() {
+        let mut task = create_test_task();
+        task.dependencies = vec!["dep-1".to_string(), "dep-2".to_string()];
+        let lines = build_task_detail_lines(&task);
+
+        let content: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        assert!(content.contains("Dependencies:"));
+        assert!(content.contains("dep-1"));
+        assert!(content.contains("dep-2"));
+    }
+
+    #[test]
+    fn test_build_task_detail_lines_no_dependencies() {
+        let task = create_test_task();
+        let lines = build_task_detail_lines(&task);
+
+        let content: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        assert!(content.contains("Dependencies:"));
+        assert!(content.contains("(None)"));
+    }
+
+    // ========================================================================
+    // Render Tests
+    // ========================================================================
+
+    #[test]
+    fn test_render_task_detail_shows_task_info() {
+        let mut state = TuiState::new();
+        state.current_focus = FocusedPanel::TaskList;
+        let task = create_test_task();
+        let area = Rect::new(0, 0, 60, 20);
+
+        let rendered = render_task_detail_to_string(&mut state, &task, area, true);
+
+        assert!(rendered.contains("Test Task"));
+        assert!(rendered.contains("pending"));
+    }
+
+    #[test]
+    fn test_render_task_detail_focused_vs_unfocused() {
+        let mut state = TuiState::new();
+        let task = create_test_task();
+        let area = Rect::new(0, 0, 60, 20);
+
+        // Both focused and unfocused should render without panic
+        let focused = render_task_detail_to_string(&mut state, &task, area, true);
+        let unfocused = render_task_detail_to_string(&mut state, &task, area, false);
+
+        assert!(focused.contains("Test Task"));
+        assert!(unfocused.contains("Test Task"));
+    }
+
+    #[test]
+    fn test_render_task_detail_resets_scroll_on_task_change() {
+        let mut state = TuiState::new();
+        state.task_detail_scroll = 10;
+        state.last_selected_task_id = Some("old-task".to_string());
+
+        let task = create_test_task();
+        let area = Rect::new(0, 0, 60, 20);
+
+        render_task_detail_to_string(&mut state, &task, area, true);
+
+        // Scroll should reset when task changes
+        assert_eq!(state.task_detail_scroll, 0);
+        assert_eq!(state.last_selected_task_id, Some("task-123".to_string()));
+    }
+
+    #[test]
+    fn test_render_task_detail_preserves_scroll_on_same_task() {
+        let mut state = TuiState::new();
+        let task = create_test_task();
+        let area = Rect::new(0, 0, 60, 5); // Small area to allow scrolling
+
+        // First render
+        render_task_detail_to_string(&mut state, &task, area, true);
+
+        // Set scroll
+        state.task_detail_scroll = 2;
+
+        // Second render of same task
+        render_task_detail_to_string(&mut state, &task, area, true);
+
+        // Scroll should be preserved (or clamped if exceeds content)
+        // In this case, content should be enough to allow scroll of 2
+        assert!(state.task_detail_scroll <= 2);
+    }
+
+    #[test]
+    fn test_render_task_detail_clamps_scroll() {
+        let mut state = TuiState::new();
+        state.task_detail_scroll = 999;
+        state.last_selected_task_id = Some("task-123".to_string()); // Same task
+
+        let task = create_test_task();
+        let area = Rect::new(0, 0, 60, 20);
+
+        render_task_detail_to_string(&mut state, &task, area, true);
+
+        // Scroll should be clamped to valid range
+        let lines = build_task_detail_lines(&task);
+        let inner_height = area.height.saturating_sub(2) as usize;
+        let max_scroll = lines.len().saturating_sub(inner_height) as u16;
+        assert!(state.task_detail_scroll <= max_scroll);
+    }
+
+    // ========================================================================
+    // Keyboard Navigation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_handle_task_detail_key_page_up() {
+        let mut state = TuiState::new();
+
+        // Add a task and select it
+        state.handle_event(LogEvent::TaskCreated {
+            task_id: "task-1".to_string(),
+            name: "Test".to_string(),
+            description: "Description".to_string(),
+            dependencies: vec![],
+            depth: 0,
+        });
+        state.task_list_state.selected_index = Some(0);
+        state.task_detail_scroll = 10;
+
+        let handled = handle_task_detail_key(
+            &mut state,
+            crossterm::event::KeyCode::PageUp,
+            15,
+        );
+
+        assert!(handled);
+        assert!(state.task_detail_scroll < 10);
+    }
+
+    #[test]
+    fn test_handle_task_detail_key_page_down() {
+        let mut state = TuiState::new();
+
+        // Add a task with long description to enable scrolling
+        let long_desc = "Line\n".repeat(30);
+        state.handle_event(LogEvent::TaskCreated {
+            task_id: "task-1".to_string(),
+            name: "Test".to_string(),
+            description: long_desc,
+            dependencies: vec![],
+            depth: 0,
+        });
+        state.task_list_state.selected_index = Some(0);
+        state.task_detail_scroll = 0;
+
+        let handled = handle_task_detail_key(
+            &mut state,
+            crossterm::event::KeyCode::PageDown,
+            10,
+        );
+
+        assert!(handled);
+        assert!(state.task_detail_scroll > 0);
+    }
+
+    #[test]
+    fn test_handle_task_detail_key_unrecognized() {
+        let mut state = TuiState::new();
+
+        let handled = handle_task_detail_key(
+            &mut state,
+            crossterm::event::KeyCode::Char('x'),
+            15,
+        );
+
+        assert!(!handled);
+    }
+
+    #[test]
+    fn test_handle_task_detail_key_no_task_selected() {
+        let mut state = TuiState::new();
+        // No task selected
+
+        let handled = handle_task_detail_key(
+            &mut state,
+            crossterm::event::KeyCode::PageDown,
+            15,
+        );
+
+        // Should still return true (key was handled) but no scroll change
+        assert!(handled);
+        assert_eq!(state.task_detail_scroll, 0);
+    }
+}

@@ -5,7 +5,7 @@
 //! and scrolling.
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
@@ -81,13 +81,9 @@ pub fn render_agent_output(frame: &mut Frame, area: Rect, state: &mut TuiState, 
         let lines = format_messages(msgs);
         Text::from(lines)
     } else {
-        Text::from(vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "Waiting for output...",
-                Style::default().fg(Color::DarkGray).italic(),
-            )),
-        ])
+        // Show animated "waiting" display with boat and waves
+        // Pass inner width (minus borders) for centering
+        render_waiting_animation(state, area.width.saturating_sub(2))
     };
 
     // Calculate visible area (minus borders)
@@ -140,6 +136,130 @@ pub fn render_agent_output(frame: &mut Frame, area: Rect, state: &mut TuiState, 
         // Render scrollbar in the same area (it will appear in the border)
         frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
     }
+}
+
+/// Renders an animated waiting display with a paper boat sailing on waves.
+///
+/// The animation consists of:
+/// 1. A boat emoji (⛵) that moves forward across the screen, then "washes back" to start
+/// 2. Two rows of animated waves that shift horizontally
+/// 3. A status line showing "Agent working..." with elapsed time (if agent is running)
+///
+/// The boat moves forward over ~12 seconds, then quickly washes back over ~2 seconds.
+fn render_waiting_animation(state: &TuiState, panel_width: u16) -> Text<'static> {
+    let frame = state.animation_frame;
+
+    // Wave characters that create a flowing water effect
+    const WAVE_CHARS: [char; 4] = ['~', '·', '~', '·'];
+    const WAVE_WIDTH: usize = 24;
+
+    // Boat movement: moves forward over ~1800 frames (30s), washes back over ~300 frames (5s)
+    // Total cycle: 2100 frames (~35 seconds at 60fps)
+    const FORWARD_FRAMES: u32 = 1800;
+    const BACKWARD_FRAMES: u32 = 300;
+    const CYCLE_FRAMES: u32 = FORWARD_FRAMES + BACKWARD_FRAMES;
+
+    let cycle_pos = frame % CYCLE_FRAMES;
+    // Boat position in visual columns (0 to WAVE_WIDTH - 2, since boat takes 2 columns)
+    let max_boat_pos = WAVE_WIDTH - 2;
+    let boat_pos = if cycle_pos < FORWARD_FRAMES {
+        // Moving forward: ease-out for smooth deceleration
+        let progress = cycle_pos as f32 / FORWARD_FRAMES as f32;
+        let eased = 1.0 - (1.0 - progress).powi(2); // ease-out quadratic
+        (eased * max_boat_pos as f32) as usize
+    } else {
+        // Washing back: quick linear return
+        let backward_progress = (cycle_pos - FORWARD_FRAMES) as f32 / BACKWARD_FRAMES as f32;
+        ((1.0 - backward_progress) * max_boat_pos as f32) as usize
+    };
+
+    // Calculate centering padding
+    let padding = (panel_width as usize).saturating_sub(WAVE_WIDTH) / 2;
+    let pad_str = " ".repeat(padding);
+
+    // Wave offsets - different speeds for parallax depth effect
+    // Closer waves (bottom) move faster, distant waves (top) move slower
+    let wave_offset_top = (frame / 24) as usize; // Slowest (horizon)
+    let wave_offset_mid = (frame / 18) as usize; // Medium
+    let wave_offset_bottom = (frame / 12) as usize; // Fastest (closest)
+    let mut boat_line = String::with_capacity(WAVE_WIDTH + padding);
+    let mut wave_line1 = String::with_capacity(WAVE_WIDTH + padding);
+    let mut wave_line2 = String::with_capacity(WAVE_WIDTH + padding);
+
+    // Add centering padding
+    boat_line.push_str(&pad_str);
+    wave_line1.push_str(&pad_str);
+    wave_line2.push_str(&pad_str);
+
+    // Build boat line (boat emoji is double-width, so we track visual position)
+    let mut visual_col = 0;
+    while visual_col < WAVE_WIDTH {
+        if visual_col == boat_pos {
+            boat_line.push('⛵');
+            visual_col += 2; // Boat takes 2 visual columns
+        } else {
+            let wave_char = WAVE_CHARS[(visual_col + wave_offset_top) % WAVE_CHARS.len()];
+            boat_line.push(wave_char);
+            visual_col += 1;
+        }
+    }
+
+    // Build wave lines with different offsets for parallax effect
+    for i in 0..WAVE_WIDTH {
+        let wave_char1 = WAVE_CHARS[(i + wave_offset_mid) % WAVE_CHARS.len()];
+        let wave_char2 = WAVE_CHARS[(i + wave_offset_bottom) % WAVE_CHARS.len()];
+        wave_line1.push(wave_char1);
+        wave_line2.push(wave_char2);
+    }
+
+    // Build the status message with elapsed time
+    let status_message = if let Some(agent) = state.selected_agent() {
+        use super::super::agent_node::AgentStatus;
+        match agent.status {
+            AgentStatus::Running => {
+                let elapsed = agent.start_time.elapsed();
+                let secs = elapsed.as_secs();
+                let mins = secs / 60;
+                let secs = secs % 60;
+                if mins > 0 {
+                    format!("Agent working... {}m {}s", mins, secs)
+                } else {
+                    format!("Agent working... {}s", secs)
+                }
+            }
+            AgentStatus::Completed => "Agent completed".to_string(),
+            AgentStatus::Failed => "Agent failed".to_string(),
+        }
+    } else {
+        "Waiting for output...".to_string()
+    };
+
+    // Center the status message
+    let status_padding = (panel_width as usize).saturating_sub(status_message.len()) / 2;
+    let centered_status = format!("{}{}", " ".repeat(status_padding), status_message);
+
+    // Use intensity modifiers instead of hardcoded colors for theme compatibility
+    // DIM = faint/far (horizon), normal = mid, BOLD = bright/close
+    Text::from(vec![
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            boat_line,
+            Style::default().add_modifier(Modifier::DIM),
+        )),
+        Line::from(Span::styled(wave_line1, Style::default())),
+        Line::from(Span::styled(
+            wave_line2,
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            centered_status,
+            Style::default()
+                .add_modifier(Modifier::DIM)
+                .add_modifier(Modifier::ITALIC),
+        )),
+    ])
 }
 
 /// Formats messages for display with styling.
@@ -323,6 +443,34 @@ pub fn handle_agent_output_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    use crate::logging::{AgentType, LogEvent};
+
+    fn render_agent_output_to_string(state: &mut TuiState, area: Rect) -> String {
+        let backend = TestBackend::new(area.width, area.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| render_agent_output(frame, area, state, true))
+            .expect("agent output should render");
+        format!("{}", terminal.backend())
+    }
+
+    fn state_with_selected_agent(session_id: &str) -> TuiState {
+        let mut state = TuiState::new();
+        state.splash_visible = false;
+        state.handle_event(LogEvent::AgentStarted {
+            agent_type: AgentType::Orchestrator,
+            session_id: session_id.to_string(),
+            depth: 0,
+            task: "Test task".to_string(),
+        });
+        state
+    }
+
+    // ========================================================================
+    // Format Messages Tests
+    // ========================================================================
 
     #[test]
     fn test_format_messages_single_line_break() {
@@ -442,5 +590,622 @@ mod tests {
 
         // Line 1 + blank + Line 2 + blank (collapsed from 2 empties) + Line 3 = 5 lines
         assert_eq!(lines.len(), 5);
+    }
+
+    // ========================================================================
+    // Auto-Scroll Tests
+    // ========================================================================
+
+    #[test]
+    fn test_render_agent_output_auto_scrolls_when_new_messages_arrive() {
+        let mut state = state_with_selected_agent("agent-1");
+        let area = Rect::new(0, 0, 40, 6);
+
+        for idx in 0..8 {
+            state
+                .agent_tree_state
+                .handle_standalone_message(Some("agent-1"), &format!("line {idx}"));
+        }
+
+        render_agent_output_to_string(&mut state, area);
+
+        let expected_scroll = Paragraph::new(Text::from(
+            state
+                .selected_agent_messages()
+                .expect("messages should exist")
+                .iter()
+                .cloned()
+                .map(|msg| Line::from(msg))
+                .collect::<Vec<_>>(),
+        ))
+        .block(Block::default().borders(Borders::ALL))
+        .wrap(Wrap { trim: false })
+        .line_count(area.width)
+        .saturating_sub(area.height.saturating_sub(2) as usize) as u16;
+
+        assert_eq!(state.last_message_count, 8);
+        assert_eq!(state.agent_output_scroll, expected_scroll);
+    }
+
+    #[test]
+    fn test_auto_scroll_triggers_on_new_content() {
+        let mut state = state_with_selected_agent("agent-1");
+        let area = Rect::new(0, 0, 40, 6);
+
+        // Add initial messages using standalone messages (simpler counting)
+        for idx in 0..3 {
+            state
+                .agent_tree_state
+                .handle_standalone_message(Some("agent-1"), &format!("message {idx}"));
+        }
+
+        // Render to set baseline
+        render_agent_output_to_string(&mut state, area);
+        let initial_count = state.last_message_count;
+        assert_eq!(initial_count, 3);
+
+        // User scrolls up manually
+        state.agent_output_scroll = 0;
+
+        // New message arrives
+        state
+            .agent_tree_state
+            .handle_standalone_message(Some("agent-1"), "new message");
+
+        // Render again - should auto-scroll
+        render_agent_output_to_string(&mut state, area);
+        assert!(state.last_message_count > initial_count,
+            "Message count should increase after new message");
+    }
+
+    #[test]
+    fn test_auto_scroll_stays_at_zero_when_content_fits() {
+        let mut state = state_with_selected_agent("agent-1");
+        let area = Rect::new(0, 0, 80, 20); // Large area
+
+        // Add a single short message
+        state.handle_event(LogEvent::AgentMessage {
+            agent_type: AgentType::Orchestrator,
+            session_id: Some("agent-1".to_string()),
+            depth: 0,
+            content: "short".to_string(),
+        });
+
+        render_agent_output_to_string(&mut state, area);
+
+        // Scroll should be 0 when content fits
+        assert_eq!(state.agent_output_scroll, 0);
+    }
+
+    // ========================================================================
+    // Scroll Clamp Tests
+    // ========================================================================
+
+    #[test]
+    fn test_render_agent_output_clamps_scroll_after_content_shrinks() {
+        let mut state = state_with_selected_agent("agent-1");
+        let area = Rect::new(0, 0, 40, 6);
+        state.agent_output_scroll = 99;
+
+        state.handle_event(LogEvent::AgentMessage {
+            agent_type: AgentType::Orchestrator,
+            session_id: Some("agent-1".to_string()),
+            depth: 0,
+            content: "short output".to_string(),
+        });
+        state.last_message_count = 1;
+
+        render_agent_output_to_string(&mut state, area);
+
+        assert_eq!(state.agent_output_scroll, 0);
+        assert_eq!(state.last_message_count, 1);
+    }
+
+    #[test]
+    fn test_scroll_clamp_to_valid_range() {
+        let mut state = state_with_selected_agent("agent-1");
+        let area = Rect::new(0, 0, 40, 6);
+
+        // Set an absurdly high scroll
+        state.agent_output_scroll = 9999;
+
+        // Add minimal content
+        state.handle_event(LogEvent::AgentMessage {
+            agent_type: AgentType::Orchestrator,
+            session_id: Some("agent-1".to_string()),
+            depth: 0,
+            content: "line1".to_string(),
+        });
+        state.last_message_count = 1;
+
+        render_agent_output_to_string(&mut state, area);
+
+        // Scroll should be clamped to valid range (0 since content fits)
+        assert_eq!(state.agent_output_scroll, 0);
+    }
+
+    #[test]
+    fn test_scroll_maintains_position_when_valid() {
+        let mut state = state_with_selected_agent("agent-1");
+        let area = Rect::new(0, 0, 40, 6);
+
+        // Add enough content to scroll
+        for idx in 0..15 {
+            state
+                .agent_tree_state
+                .handle_standalone_message(Some("agent-1"), &format!("line {idx}"));
+        }
+
+        // Set initial render
+        render_agent_output_to_string(&mut state, area);
+        let auto_scroll = state.agent_output_scroll;
+
+        // User scrolls up by 2
+        if auto_scroll > 2 {
+            state.agent_output_scroll = auto_scroll - 2;
+            let manual_scroll = state.agent_output_scroll;
+
+            // Render again (no new messages)
+            render_agent_output_to_string(&mut state, area);
+
+            // Scroll should stay at manual position (no new messages)
+            assert_eq!(state.agent_output_scroll, manual_scroll);
+        }
+    }
+
+    // ========================================================================
+    // Waiting State Text Tests (Running/Completed/Failed Agents)
+    // ========================================================================
+
+    #[test]
+    fn test_render_agent_output_shows_waiting_text_for_running_agent() {
+        let mut state = state_with_selected_agent("agent-1");
+
+        let rendered = render_agent_output_to_string(&mut state, Rect::new(0, 0, 60, 10));
+
+        assert!(rendered.contains("Agent working..."));
+    }
+
+    #[test]
+    fn test_waiting_state_shows_completed_text() {
+        let mut state = state_with_selected_agent("agent-1");
+
+        // Mark agent as completed
+        state.handle_event(LogEvent::AgentComplete {
+            agent_type: AgentType::Orchestrator,
+            session_id: Some("agent-1".to_string()),
+            depth: 0,
+            success: true,
+        });
+
+        let rendered = render_agent_output_to_string(&mut state, Rect::new(0, 0, 60, 10));
+
+        assert!(rendered.contains("Agent completed"));
+    }
+
+    #[test]
+    fn test_waiting_state_shows_failed_text() {
+        let mut state = state_with_selected_agent("agent-1");
+
+        // Mark agent as failed
+        state.handle_event(LogEvent::AgentComplete {
+            agent_type: AgentType::Orchestrator,
+            session_id: Some("agent-1".to_string()),
+            depth: 0,
+            success: false,
+        });
+
+        let rendered = render_agent_output_to_string(&mut state, Rect::new(0, 0, 60, 10));
+
+        assert!(rendered.contains("Agent failed"));
+    }
+
+    #[test]
+    fn test_render_no_agent_selected_message() {
+        let mut state = TuiState::new();
+        state.splash_visible = false;
+        // No agent selected
+
+        let rendered = render_agent_output_to_string(&mut state, Rect::new(0, 0, 60, 10));
+
+        assert!(rendered.contains("No agent selected"));
+        assert!(rendered.contains("Select an agent"));
+    }
+
+    #[test]
+    fn test_render_shows_agent_title_when_selected() {
+        let mut state = state_with_selected_agent("agent-1");
+
+        let rendered = render_agent_output_to_string(&mut state, Rect::new(0, 0, 60, 10));
+
+        // Title should include some form of "Output"
+        assert!(rendered.contains("Output"));
+    }
+
+    // ========================================================================
+    // Keyboard Navigation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_handle_agent_output_key_end_scrolls_to_bottom_of_wrapped_content() {
+        let mut state = state_with_selected_agent("agent-1");
+        state.handle_event(LogEvent::AgentMessage {
+            agent_type: AgentType::Orchestrator,
+            session_id: Some("agent-1".to_string()),
+            depth: 0,
+            content: "this is a deliberately long line that wraps multiple times".to_string(),
+        });
+
+        let handled = handle_agent_output_key(
+            &mut state,
+            crossterm::event::KeyCode::End,
+            6,
+            18,
+        );
+
+        let total_lines = calculate_wrapped_line_count(
+            state.selected_agent_messages().expect("messages should exist"),
+            16,
+        );
+        let visible_height = 4;
+
+        assert!(handled);
+        assert_eq!(
+            state.agent_output_scroll,
+            total_lines.saturating_sub(visible_height) as u16
+        );
+    }
+
+    #[test]
+    fn test_handle_key_home_scrolls_to_top() {
+        let mut state = state_with_selected_agent("agent-1");
+
+        // Add content and scroll down
+        for idx in 0..20 {
+            state
+                .agent_tree_state
+                .handle_standalone_message(Some("agent-1"), &format!("line {idx}"));
+        }
+        state.agent_output_scroll = 10;
+
+        let handled = handle_agent_output_key(
+            &mut state,
+            crossterm::event::KeyCode::Home,
+            10,
+            40,
+        );
+
+        assert!(handled);
+        assert_eq!(state.agent_output_scroll, 0);
+    }
+
+    #[test]
+    fn test_handle_key_g_scrolls_to_top() {
+        let mut state = state_with_selected_agent("agent-1");
+        state.agent_output_scroll = 15;
+
+        let handled = handle_agent_output_key(
+            &mut state,
+            crossterm::event::KeyCode::Char('g'),
+            10,
+            40,
+        );
+
+        assert!(handled);
+        assert_eq!(state.agent_output_scroll, 0);
+    }
+
+    #[test]
+    fn test_handle_key_up_scrolls_up_one_line() {
+        let mut state = state_with_selected_agent("agent-1");
+        state.agent_output_scroll = 5;
+
+        let handled = handle_agent_output_key(
+            &mut state,
+            crossterm::event::KeyCode::Up,
+            10,
+            40,
+        );
+
+        assert!(handled);
+        assert_eq!(state.agent_output_scroll, 4);
+    }
+
+    #[test]
+    fn test_handle_key_k_scrolls_up_one_line() {
+        let mut state = state_with_selected_agent("agent-1");
+        state.agent_output_scroll = 5;
+
+        let handled = handle_agent_output_key(
+            &mut state,
+            crossterm::event::KeyCode::Char('k'),
+            10,
+            40,
+        );
+
+        assert!(handled);
+        assert_eq!(state.agent_output_scroll, 4);
+    }
+
+    #[test]
+    fn test_handle_key_down_scrolls_down_one_line() {
+        let mut state = state_with_selected_agent("agent-1");
+
+        // Add content
+        for idx in 0..20 {
+            state
+                .agent_tree_state
+                .handle_standalone_message(Some("agent-1"), &format!("line {idx}"));
+        }
+        state.agent_output_scroll = 0;
+        state.last_message_count = 20;
+
+        let handled = handle_agent_output_key(
+            &mut state,
+            crossterm::event::KeyCode::Down,
+            10,
+            40,
+        );
+
+        assert!(handled);
+        assert_eq!(state.agent_output_scroll, 1);
+    }
+
+    #[test]
+    fn test_handle_key_j_scrolls_down_one_line() {
+        let mut state = state_with_selected_agent("agent-1");
+
+        // Add content
+        for idx in 0..20 {
+            state
+                .agent_tree_state
+                .handle_standalone_message(Some("agent-1"), &format!("line {idx}"));
+        }
+        state.agent_output_scroll = 0;
+        state.last_message_count = 20;
+
+        let handled = handle_agent_output_key(
+            &mut state,
+            crossterm::event::KeyCode::Char('j'),
+            10,
+            40,
+        );
+
+        assert!(handled);
+        assert_eq!(state.agent_output_scroll, 1);
+    }
+
+    #[test]
+    fn test_handle_key_page_up_scrolls_by_page() {
+        let mut state = state_with_selected_agent("agent-1");
+        state.agent_output_scroll = 20;
+
+        let handled = handle_agent_output_key(
+            &mut state,
+            crossterm::event::KeyCode::PageUp,
+            10, // visible height
+            40,
+        );
+
+        assert!(handled);
+        // Page size is visible_height - 2 (for borders) = 8
+        assert_eq!(state.agent_output_scroll, 12);
+    }
+
+    #[test]
+    fn test_handle_unrecognized_key_returns_false() {
+        let mut state = state_with_selected_agent("agent-1");
+
+        let handled = handle_agent_output_key(
+            &mut state,
+            crossterm::event::KeyCode::Char('x'),
+            10,
+            40,
+        );
+
+        assert!(!handled);
+    }
+
+    // ========================================================================
+    // Line Formatting Tests
+    // ========================================================================
+
+    #[test]
+    fn test_format_line_tool_call_styling() {
+        let line = format_line("> Calling: view");
+        // Should be styled as tool call (yellow/bold)
+        assert!(!line.spans.is_empty());
+        let span = &line.spans[0];
+        assert!(span.content.starts_with('>'));
+        assert_eq!(span.style.fg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn test_format_line_success_styling() {
+        let line = format_line("✓ view completed");
+        assert!(!line.spans.is_empty());
+        let span = &line.spans[0];
+        assert!(span.content.starts_with('✓'));
+        assert_eq!(span.style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn test_format_line_error_styling() {
+        let line = format_line("✗ compile failed");
+        assert!(!line.spans.is_empty());
+        let span = &line.spans[0];
+        assert!(span.content.starts_with('✗'));
+        assert_eq!(span.style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn test_format_line_added_styling() {
+        let line = format_line("+ Added file.rs");
+        assert!(!line.spans.is_empty());
+        let span = &line.spans[0];
+        assert!(span.content.starts_with('+'));
+        assert_eq!(span.style.fg, Some(Color::Blue));
+    }
+
+    #[test]
+    fn test_format_line_regular_text() {
+        let line = format_line("Regular text here");
+        assert!(!line.spans.is_empty());
+        let span = &line.spans[0];
+        assert_eq!(span.content.as_ref(), "Regular text here");
+        // Regular text has no special foreground color
+        assert!(span.style.fg.is_none());
+    }
+
+    // ========================================================================
+    // calculate_wrapped_line_count Tests
+    // ========================================================================
+
+    #[test]
+    fn test_calculate_wrapped_line_count_empty() {
+        let messages: Vec<String> = vec![];
+        let count = calculate_wrapped_line_count(&messages, 40);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_calculate_wrapped_line_count_short_messages() {
+        let messages = vec!["short".to_string(), "lines".to_string()];
+        let count = calculate_wrapped_line_count(&messages, 40);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_calculate_wrapped_line_count_wrapped_messages() {
+        // A message longer than the width should wrap
+        let long_msg = "a".repeat(100);
+        let messages = vec![long_msg];
+        let count = calculate_wrapped_line_count(&messages, 20);
+        // 100 chars / 20 width = 5 lines
+        assert!(count >= 5);
+    }
+
+    // ========================================================================
+    // Focus Styling Tests
+    // ========================================================================
+
+    #[test]
+    fn test_render_focused_vs_unfocused_styling() {
+        let mut state = state_with_selected_agent("agent-1");
+        state.current_focus = FocusedPanel::AgentOutput;
+
+        // Render focused
+        let focused = {
+            let backend = TestBackend::new(60, 10);
+            let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+            terminal
+                .draw(|frame| render_agent_output(frame, frame.area(), &mut state, true))
+                .expect("should render");
+            format!("{}", terminal.backend())
+        };
+
+        // Render unfocused
+        state.current_focus = FocusedPanel::AgentTree;
+        let unfocused = {
+            let backend = TestBackend::new(60, 10);
+            let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+            terminal
+                .draw(|frame| render_agent_output(frame, frame.area(), &mut state, false))
+                .expect("should render");
+            format!("{}", terminal.backend())
+        };
+
+        // Both should render without panic and contain the title
+        assert!(focused.contains("Output"));
+        assert!(unfocused.contains("Output"));
+    }
+
+    // ========================================================================
+    // Scroll Helper Function Tests
+    // ========================================================================
+
+    #[test]
+    fn test_scroll_up_clamps_at_zero() {
+        let mut state = TuiState::new();
+        state.agent_output_scroll = 2;
+
+        scroll_up(&mut state, 5);
+
+        assert_eq!(state.agent_output_scroll, 0);
+    }
+
+    #[test]
+    fn test_scroll_down_clamps_at_max() {
+        let mut state = TuiState::new();
+        state.agent_output_scroll = 0;
+
+        scroll_down(&mut state, 100, 10, 8); // max_lines=10, visible=8, so max_scroll=2
+
+        assert_eq!(state.agent_output_scroll, 2);
+    }
+
+    #[test]
+    fn test_scroll_to_top_sets_zero() {
+        let mut state = TuiState::new();
+        state.agent_output_scroll = 50;
+
+        scroll_to_top(&mut state);
+
+        assert_eq!(state.agent_output_scroll, 0);
+    }
+
+    #[test]
+    fn test_scroll_to_bottom_when_content_exceeds_height() {
+        let mut state = TuiState::new();
+
+        scroll_to_bottom(&mut state, 20, 10); // 20 lines, 10 visible
+
+        assert_eq!(state.agent_output_scroll, 10); // 20 - 10 = 10
+    }
+
+    #[test]
+    fn test_scroll_to_bottom_when_content_fits() {
+        let mut state = TuiState::new();
+
+        scroll_to_bottom(&mut state, 5, 10); // 5 lines, 10 visible
+
+        assert_eq!(state.agent_output_scroll, 0);
+    }
+
+    // ========================================================================
+    // Integration Tests
+    // ========================================================================
+
+    #[test]
+    fn test_full_agent_lifecycle_output() {
+        let mut state = state_with_selected_agent("agent-1");
+        let area = Rect::new(0, 0, 60, 15);
+
+        // Initial render - should show "Agent working..."
+        let rendered = render_agent_output_to_string(&mut state, area);
+        assert!(rendered.contains("Agent working..."));
+
+        // Agent sends messages
+        state.handle_event(LogEvent::AgentMessage {
+            agent_type: AgentType::Orchestrator,
+            session_id: Some("agent-1".to_string()),
+            depth: 0,
+            content: "I'm analyzing the code.".to_string(),
+        });
+
+        let rendered = render_agent_output_to_string(&mut state, area);
+        assert!(rendered.contains("analyzing"));
+
+        // Agent completes
+        state.handle_event(LogEvent::AgentComplete {
+            agent_type: AgentType::Orchestrator,
+            session_id: Some("agent-1".to_string()),
+            depth: 0,
+            success: true,
+        });
+
+        // Message should still be visible (not replaced by "completed")
+        let rendered = render_agent_output_to_string(&mut state, area);
+        assert!(rendered.contains("analyzing"));
     }
 }

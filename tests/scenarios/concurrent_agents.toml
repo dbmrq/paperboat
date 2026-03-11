@@ -101,7 +101,7 @@ delay_ms = 100
 session_update = "agent_message_chunk"
 content = "Executing 3 independent tasks concurrently.\n\n"
 
-# Single spawn_agents call with 3 agents
+# Single spawn_agents call with 3 agents and explicit wait mode
 [[orchestrator_sessions.updates]]
 delay_ms = 50
 session_update = "agent_message_chunk"
@@ -109,7 +109,19 @@ content = "[Calling spawn_agents with 3 concurrent agents]"
 
 [orchestrator_sessions.updates.inject_mcp_tool_call]
 tool = "spawn_agents"
-task = "Implement all three modules concurrently"
+wait = "all"
+
+[[orchestrator_sessions.updates.inject_mcp_tool_call.agents]]
+role = "implementer"
+task = "Implement Module A"
+
+[[orchestrator_sessions.updates.inject_mcp_tool_call.agents]]
+role = "implementer"
+task = "Implement Module B"
+
+[[orchestrator_sessions.updates.inject_mcp_tool_call.agents]]
+role = "implementer"
+task = "Implement Module C"
 
 # Skip the planner's tracked tasks (since we're using raw task descriptions)
 [[orchestrator_sessions.updates]]

@@ -171,3 +171,142 @@ pub fn handle_fire_and_forget(
     tracing::info!("🔥 Fire-and-forget mode: {} agents spawned", receiver_count);
     spawn_errors
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn agent_result(role: &str, task: &str, success: bool, message: &str) -> AgentResult {
+        AgentResult {
+            role: role.to_string(),
+            task: task.to_string(),
+            success,
+            message: Some(message.to_string()),
+            suggested_task_ids: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_all_collects_mixed_success_and_failure_results() {
+        let (success_tx, success_rx) = oneshot::channel();
+        let (failure_tx, failure_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let _ = success_tx.send(agent_result(
+                "implementer",
+                "task-success",
+                true,
+                "implemented successfully",
+            ));
+        });
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let _ = failure_tx.send(agent_result(
+                "verifier",
+                "task-failure",
+                false,
+                "verification failed",
+            ));
+        });
+
+        let spawn_error = agent_result(
+            "implementer",
+            "task-spawn-error",
+            false,
+            "spawn error before execution",
+        );
+        let results = wait_for_all(
+            vec![
+                (
+                    "implementer".to_string(),
+                    "task-success".to_string(),
+                    success_rx,
+                ),
+                ("verifier".to_string(), "task-failure".to_string(), failure_rx),
+            ],
+            vec![spawn_error.clone()],
+        )
+        .await;
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].task, spawn_error.task);
+        assert!(!results[0].success);
+
+        let successful: Vec<_> = results.iter().filter(|result| result.success).collect();
+        let failed: Vec<_> = results.iter().filter(|result| !result.success).collect();
+        assert_eq!(successful.len(), 1);
+        assert_eq!(failed.len(), 2);
+        assert!(
+            results
+                .iter()
+                .any(|result| result.task == "task-success" && result.success),
+            "wait_for_all should retain the successful completion"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|result| result.task == "task-failure" && !result.success),
+            "wait_for_all should retain the failed completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_any_returns_first_completion_even_when_it_fails() {
+        let (slow_success_tx, slow_success_rx) = oneshot::channel();
+        let (fast_failure_tx, fast_failure_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            let _ = slow_success_tx.send(agent_result(
+                "implementer",
+                "task-success",
+                true,
+                "implemented successfully",
+            ));
+        });
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            let _ = fast_failure_tx.send(agent_result(
+                "verifier",
+                "task-failure",
+                false,
+                "verification failed first",
+            ));
+        });
+
+        let spawn_error = agent_result(
+            "implementer",
+            "task-spawn-error",
+            false,
+            "spawn error before execution",
+        );
+        let results = wait_for_any(
+            vec![
+                (
+                    "implementer".to_string(),
+                    "task-success".to_string(),
+                    slow_success_rx,
+                ),
+                ("verifier".to_string(), "task-failure".to_string(), fast_failure_rx),
+            ],
+            vec![spawn_error.clone()],
+        )
+        .await;
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].task, spawn_error.task);
+        assert_eq!(results[1].task, "task-failure");
+        assert!(
+            !results[1].success,
+            "wait_for_any should return the first completion even if it is a failure"
+        );
+        assert_eq!(
+            results[1].message.as_deref(),
+            Some("verification failed first")
+        );
+    }
+}

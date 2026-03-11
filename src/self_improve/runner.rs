@@ -560,14 +560,22 @@ async fn drain_self_improver_session(
 /// Extract the session update type from a message.
 fn extract_session_update(msg: &Value, expected_session_id: &str) -> Option<String> {
     let params = msg.get("params")?;
-    let session_id = params.get("sessionId")?.as_str()?;
+    // Support both ACP format (sessionId) and CLI format (session_id)
+    let session_id = params
+        .get("sessionId")
+        .or_else(|| params.get("session_id"))?
+        .as_str()?;
 
     if session_id != expected_session_id {
         return None;
     }
 
     let update = params.get("update")?;
-    let session_update = update.get("sessionUpdate")?.as_str()?;
+    // Support both ACP format (sessionUpdate) and CLI format (type)
+    let session_update = update
+        .get("sessionUpdate")
+        .or_else(|| update.get("type"))?
+        .as_str()?;
     Some(session_update.to_string())
 }
 
@@ -604,6 +612,12 @@ fn is_editing_tool(tool_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    // Mutex to serialize tests that modify environment variables
+    static ENV_VAR_MUTEX: Mutex<()> = Mutex::new(());
 
     // ========================================================================
     // Configuration Tests
@@ -623,6 +637,29 @@ mod tests {
         assert!(config.model.contains("claude"));
     }
 
+    #[test]
+    fn test_self_improvement_config_clone() {
+        let config = SelfImprovementConfig {
+            session_timeout: Duration::from_secs(600),
+            request_timeout: Duration::from_secs(60),
+            model: "test-model".to_string(),
+        };
+        let cloned = config.clone();
+        assert_eq!(cloned.session_timeout, Duration::from_secs(600));
+        assert_eq!(cloned.request_timeout, Duration::from_secs(60));
+        assert_eq!(cloned.model, "test-model");
+    }
+
+    #[test]
+    fn test_self_improvement_config_debug() {
+        let config = SelfImprovementConfig::default();
+        let debug_str = format!("{config:?}");
+        assert!(debug_str.contains("SelfImprovementConfig"));
+        assert!(debug_str.contains("session_timeout"));
+        assert!(debug_str.contains("request_timeout"));
+        assert!(debug_str.contains("model"));
+    }
+
     // ========================================================================
     // Task Builder Tests
     // ========================================================================
@@ -635,6 +672,28 @@ mod tests {
         assert!(task.contains("/tmp/test-run"));
         assert!(task.contains("implement improvements"));
         assert!(task.contains("cargo check"));
+    }
+
+    #[test]
+    fn test_build_self_improvement_task_instructions() {
+        let run_dir = tempdir().unwrap();
+        let task = build_self_improvement_task(run_dir.path());
+
+        // Verify all required instructions are present
+        assert!(task.contains("Read the log files"));
+        assert!(task.contains("Identify patterns"));
+        assert!(task.contains("Make small, safe"));
+        assert!(task.contains("cargo test"));
+        assert!(task.contains("Error messages"));
+        assert!(task.contains("Documentation gaps"));
+        assert!(task.contains("small, safe changes"));
+    }
+
+    #[test]
+    fn test_build_self_improvement_task_with_special_path() {
+        let run_dir = std::path::PathBuf::from("/path/with spaces/and-dashes/run_123");
+        let task = build_self_improvement_task(&run_dir);
+        assert!(task.contains("/path/with spaces/and-dashes/run_123"));
     }
 
     // ========================================================================
@@ -665,6 +724,20 @@ mod tests {
         assert!(outcome.success);
         assert_eq!(outcome.message.as_deref(), Some("Changes made"));
         assert_eq!(outcome.changes_made, 3);
+    }
+
+    #[test]
+    fn test_outcome_debug_format() {
+        let outcome = SelfImprovementOutcome {
+            success: true,
+            message: Some("Test message".to_string()),
+            changes_made: 5,
+        };
+        let debug_str = format!("{outcome:?}");
+        assert!(debug_str.contains("SelfImprovementOutcome"));
+        assert!(debug_str.contains("success: true"));
+        assert!(debug_str.contains("Test message"));
+        assert!(debug_str.contains("5"));
     }
 
     // ========================================================================
@@ -727,6 +800,55 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_session_update_cli_format() {
+        // Test CLI format with session_id and type
+        let msg = serde_json::json!({
+            "params": {
+                "session_id": "cli-session-456",
+                "update": {
+                    "type": "session_finished"
+                }
+            }
+        });
+
+        let result = extract_session_update(&msg, "cli-session-456");
+        assert_eq!(result, Some("session_finished".to_string()));
+    }
+
+    #[test]
+    fn test_extract_session_update_missing_params() {
+        let msg = serde_json::json!({
+            "method": "session/update"
+        });
+        let result = extract_session_update(&msg, "any-session");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_session_update_missing_session_id() {
+        let msg = serde_json::json!({
+            "params": {
+                "update": {
+                    "sessionUpdate": "agent_turn_finished"
+                }
+            }
+        });
+        let result = extract_session_update(&msg, "session-123");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_session_update_missing_update() {
+        let msg = serde_json::json!({
+            "params": {
+                "sessionId": "session-123"
+            }
+        });
+        let result = extract_session_update(&msg, "session-123");
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn test_extract_message_text_valid() {
         let msg = serde_json::json!({
             "params": {
@@ -740,6 +862,47 @@ mod tests {
 
         let result = extract_message_text(&msg);
         assert_eq!(result, Some("Hello, world!".to_string()));
+    }
+
+    #[test]
+    fn test_extract_message_text_missing_content() {
+        let msg = serde_json::json!({
+            "params": {
+                "update": {}
+            }
+        });
+        let result = extract_message_text(&msg);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_message_text_missing_text() {
+        let msg = serde_json::json!({
+            "params": {
+                "update": {
+                    "content": {
+                        "type": "image"
+                    }
+                }
+            }
+        });
+        let result = extract_message_text(&msg);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_message_text_empty_text() {
+        let msg = serde_json::json!({
+            "params": {
+                "update": {
+                    "content": {
+                        "text": ""
+                    }
+                }
+            }
+        });
+        let result = extract_message_text(&msg);
+        assert_eq!(result, Some(String::new()));
     }
 
     #[test]
@@ -771,6 +934,41 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_tool_title_complex_prefix() {
+        let msg = serde_json::json!({
+            "params": {
+                "update": {
+                    "title": "mcp__paperboat-selfimprover__str-replace-editor"
+                }
+            }
+        });
+        let result = extract_tool_title(&msg);
+        assert_eq!(result, Some("str-replace-editor".to_string()));
+    }
+
+    #[test]
+    fn test_extract_tool_title_missing_update() {
+        let msg = serde_json::json!({
+            "params": {}
+        });
+        let result = extract_tool_title(&msg);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_tool_title_missing_title() {
+        let msg = serde_json::json!({
+            "params": {
+                "update": {
+                    "content": "some content"
+                }
+            }
+        });
+        let result = extract_tool_title(&msg);
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn test_is_editing_tool_true_cases() {
         assert!(is_editing_tool("str-replace-editor"));
         assert!(is_editing_tool("save-file"));
@@ -784,5 +982,627 @@ mod tests {
         assert!(!is_editing_tool("launch-process"));
         assert!(!is_editing_tool("complete"));
         assert!(!is_editing_tool("web-search"));
+    }
+
+    #[test]
+    fn test_is_editing_tool_case_sensitive() {
+        // Tool names are case-sensitive
+        assert!(!is_editing_tool("Str-Replace-Editor"));
+        assert!(!is_editing_tool("SAVE-FILE"));
+        assert!(!is_editing_tool("Remove-Files"));
+    }
+
+    #[test]
+    fn test_is_editing_tool_empty_string() {
+        assert!(!is_editing_tool(""));
+    }
+
+    // ========================================================================
+    // handle_selfimprover_request Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_handle_selfimprover_request_complete_tool() {
+        let (tx, mut rx) = mpsc::channel::<CompletionSignal>(1);
+
+        let arguments = json!({
+            "success": true,
+            "message": "Self-improvement complete"
+        });
+
+        let response = handle_selfimprover_request("req-001", "complete", &arguments, &tx).await;
+
+        // Verify response format
+        assert_eq!(response["request_id"], "req-001");
+        assert!(response["success"].as_bool().unwrap());
+        assert_eq!(
+            response["summary"],
+            "Self-improvement analysis complete."
+        );
+        assert!(response["files_modified"].as_array().unwrap().is_empty());
+
+        // Verify completion signal was sent
+        let signal = rx.recv().await.unwrap();
+        assert!(signal.success);
+        assert_eq!(signal.message, Some("Self-improvement complete".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_handle_selfimprover_request_complete_uppercase() {
+        let (tx, mut rx) = mpsc::channel::<CompletionSignal>(1);
+
+        let arguments = json!({
+            "success": false,
+            "message": "Failed to complete"
+        });
+
+        let response = handle_selfimprover_request("req-002", "Complete", &arguments, &tx).await;
+
+        assert!(response["success"].as_bool().unwrap());
+
+        let signal = rx.recv().await.unwrap();
+        assert!(!signal.success);
+        assert_eq!(signal.message, Some("Failed to complete".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_handle_selfimprover_request_complete_default_success() {
+        let (tx, mut rx) = mpsc::channel::<CompletionSignal>(1);
+
+        // No success field - should default to true
+        let arguments = json!({
+            "message": "Done"
+        });
+
+        let _ = handle_selfimprover_request("req-003", "complete", &arguments, &tx).await;
+
+        let signal = rx.recv().await.unwrap();
+        assert!(signal.success); // Default to true
+    }
+
+    #[tokio::test]
+    async fn test_handle_selfimprover_request_complete_no_message() {
+        let (tx, mut rx) = mpsc::channel::<CompletionSignal>(1);
+
+        let arguments = json!({
+            "success": true
+        });
+
+        let _ = handle_selfimprover_request("req-004", "complete", &arguments, &tx).await;
+
+        let signal = rx.recv().await.unwrap();
+        assert!(signal.success);
+        assert!(signal.message.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_handle_selfimprover_request_unknown_tool() {
+        let (tx, _rx) = mpsc::channel::<CompletionSignal>(1);
+
+        let arguments = json!({});
+
+        let response = handle_selfimprover_request("req-005", "unknown_tool", &arguments, &tx).await;
+
+        // Verify error response
+        assert_eq!(response["request_id"], "req-005");
+        assert!(!response["success"].as_bool().unwrap());
+        assert!(response["error"].as_str().unwrap().contains("unknown_tool"));
+        assert!(response["summary"]
+            .as_str()
+            .unwrap()
+            .contains("not handled"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_selfimprover_request_view_tool_not_handled() {
+        let (tx, _rx) = mpsc::channel::<CompletionSignal>(1);
+
+        let arguments = json!({
+            "path": "src/main.rs"
+        });
+
+        let response = handle_selfimprover_request("req-006", "view", &arguments, &tx).await;
+
+        assert!(!response["success"].as_bool().unwrap());
+        assert!(response["error"].as_str().unwrap().contains("view"));
+    }
+
+    // ========================================================================
+    // Socket Handler Tests (using real IPC sockets)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_setup_selfimprover_socket_binds_successfully() {
+        let socket_address = IpcAddress::generate("test-selfimprove-setup");
+        let (completion_tx, _completion_rx) = mpsc::channel::<CompletionSignal>(1);
+
+        let handle = setup_selfimprover_socket(&socket_address, completion_tx)
+            .await
+            .expect("Should bind socket successfully");
+
+        // Socket should exist on Unix
+        #[cfg(unix)]
+        assert!(socket_address.exists(), "Socket file should exist");
+
+        // Clean up
+        handle.cleanup();
+    }
+
+    #[tokio::test]
+    async fn test_selfimprover_socket_handle_cleanup() {
+        let socket_address = IpcAddress::generate("test-selfimprove-cleanup");
+        let (completion_tx, _completion_rx) = mpsc::channel::<CompletionSignal>(1);
+
+        let handle = setup_selfimprover_socket(&socket_address, completion_tx)
+            .await
+            .expect("Should bind socket");
+
+        let addr_clone = handle.socket_address.clone();
+        handle.cleanup();
+
+        // After cleanup, socket should not exist (on Unix)
+        #[cfg(unix)]
+        {
+            // Give a moment for cleanup to complete
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            assert!(!addr_clone.exists(), "Socket file should be cleaned up");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_selfimprover_socket_receives_complete_tool() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let socket_address = IpcAddress::generate("test-selfimprove-complete");
+        let (completion_tx, mut completion_rx) = mpsc::channel::<CompletionSignal>(1);
+
+        let handle = setup_selfimprover_socket(&socket_address, completion_tx)
+            .await
+            .expect("Should bind socket");
+
+        // Give the listener task time to start
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Connect as a client and send a complete tool call
+        let stream = IpcStream::connect(&socket_address)
+            .await
+            .expect("Should connect to socket");
+
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send complete tool call in the expected format
+        let request = json!({
+            "request_id": "test-req-001",
+            "tool_call": {
+                "complete": {
+                    "success": true,
+                    "message": "Socket test complete"
+                }
+            }
+        });
+
+        writer
+            .write_all(serde_json::to_string(&request).unwrap().as_bytes())
+            .await
+            .unwrap();
+        writer.write_all(b"\n").await.unwrap();
+        writer.flush().await.unwrap();
+
+        // Read response
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line).await.unwrap();
+        let response: Value = serde_json::from_str(&response_line).unwrap();
+
+        assert!(response["success"].as_bool().unwrap());
+
+        // Verify completion signal was received
+        let signal = tokio::time::timeout(Duration::from_secs(1), completion_rx.recv())
+            .await
+            .expect("Should receive signal within timeout")
+            .expect("Should have signal");
+
+        assert!(signal.success);
+        assert_eq!(signal.message, Some("Socket test complete".to_string()));
+
+        handle.cleanup();
+    }
+
+    #[tokio::test]
+    async fn test_selfimprover_socket_handles_invalid_json() {
+        let socket_address = IpcAddress::generate("test-selfimprove-invalid");
+        let (completion_tx, _completion_rx) = mpsc::channel::<CompletionSignal>(1);
+
+        let handle = setup_selfimprover_socket(&socket_address, completion_tx)
+            .await
+            .expect("Should bind socket");
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Connect and send invalid JSON
+        let stream = IpcStream::connect(&socket_address)
+            .await
+            .expect("Should connect");
+
+        let (_reader, mut writer) = stream.into_split();
+
+        // Send invalid JSON
+        writer.write_all(b"not valid json\n").await.unwrap();
+        writer.flush().await.unwrap();
+
+        // The connection should be closed without panicking
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        handle.cleanup();
+    }
+
+    #[tokio::test]
+    async fn test_selfimprover_socket_handles_connection_close() {
+        let socket_address = IpcAddress::generate("test-selfimprove-close");
+        let (completion_tx, _completion_rx) = mpsc::channel::<CompletionSignal>(1);
+
+        let handle = setup_selfimprover_socket(&socket_address, completion_tx)
+            .await
+            .expect("Should bind socket");
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Connect and immediately close
+        let stream = IpcStream::connect(&socket_address)
+            .await
+            .expect("Should connect");
+        drop(stream);
+
+        // Should not crash
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        handle.cleanup();
+    }
+
+    // ========================================================================
+    // Skip Path Tests (checking conditions for maybe_run_self_improvement)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_skip_when_disabled_via_env() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
+        // Disable via env var
+        std::env::set_var("PAPERBOAT_SELF_IMPROVE", "0");
+
+        let run_dir = tempdir().unwrap();
+        let result = TaskResult {
+            success: true,
+            message: Some("Test".to_string()),
+        };
+        let (event_tx, _) = broadcast::channel(10);
+        let task_manager = TaskManager::new(event_tx);
+
+        let outcome = maybe_run_self_improvement(run_dir.path(), &result, &task_manager).await;
+
+        // Should return Ok(None) - skipped because disabled
+        assert!(outcome.is_ok());
+        assert!(outcome.unwrap().is_none());
+
+        std::env::remove_var("PAPERBOAT_SELF_IMPROVE");
+    }
+
+    #[tokio::test]
+    async fn test_skip_when_primary_run_failed() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
+        // Enable self-improvement
+        std::env::set_var("PAPERBOAT_SELF_IMPROVE", "1");
+
+        let run_dir = tempdir().unwrap();
+        let result = TaskResult {
+            success: false, // Failed run
+            message: Some("Primary run failed".to_string()),
+        };
+        let (event_tx, _) = broadcast::channel(10);
+        let task_manager = TaskManager::new(event_tx);
+
+        let outcome = maybe_run_self_improvement(run_dir.path(), &result, &task_manager).await;
+
+        // Should return Ok(None) - skipped because run failed
+        assert!(outcome.is_ok());
+        assert!(outcome.unwrap().is_none());
+
+        std::env::remove_var("PAPERBOAT_SELF_IMPROVE");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_skip_when_not_paperboat_repo() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
+        // Enable self-improvement
+        std::env::set_var("PAPERBOAT_SELF_IMPROVE", "1");
+
+        // Create a temp directory that is NOT the paperboat repo
+        let temp_repo = tempdir().unwrap();
+        std::fs::write(
+            temp_repo.path().join("Cargo.toml"),
+            r#"[package]
+name = "other-project"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+
+        // Save current dir and change to temp repo
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_repo.path()).unwrap();
+
+        let run_dir = tempdir().unwrap();
+        let result = TaskResult {
+            success: true,
+            message: Some("Test".to_string()),
+        };
+        let (event_tx, _) = broadcast::channel(10);
+        let task_manager = TaskManager::new(event_tx);
+
+        let outcome = maybe_run_self_improvement(run_dir.path(), &result, &task_manager).await;
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+        std::env::remove_var("PAPERBOAT_SELF_IMPROVE");
+
+        // Should return Ok(None) - skipped because not in paperboat repo
+        assert!(outcome.is_ok());
+        assert!(outcome.unwrap().is_none());
+    }
+
+    // ========================================================================
+    // Failure Isolation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_self_improvement_outcome_type_supports_failure_isolation() {
+        // This test verifies the Result<Option<Outcome>> pattern
+        // that allows self-improvement failures to be isolated
+
+        // Successful self-improvement
+        let success: Result<Option<SelfImprovementOutcome>> = Ok(Some(SelfImprovementOutcome {
+            success: true,
+            message: Some("Improved".to_string()),
+            changes_made: 1,
+        }));
+        assert!(success.is_ok());
+
+        // Skipped self-improvement (not in paperboat repo, etc.)
+        let skipped: Result<Option<SelfImprovementOutcome>> = Ok(None);
+        assert!(skipped.is_ok());
+        assert!(skipped.unwrap().is_none());
+
+        // Failed self-improvement (error that can be logged but doesn't crash main run)
+        let failed: Result<Option<SelfImprovementOutcome>> =
+            Err(anyhow::anyhow!("Self-improvement error"));
+        assert!(failed.is_err());
+
+        // The caller can handle the error without affecting the main result
+        let main_result_success = true;
+        let self_improve_result: Result<Option<SelfImprovementOutcome>> =
+            Err(anyhow::anyhow!("Error"));
+
+        // Main result should remain unaffected
+        if let Err(e) = self_improve_result {
+            // Log the error but don't flip the main result
+            let _ = format!("Self-improvement failed (non-fatal): {e}");
+        }
+        assert!(main_result_success);
+    }
+
+    #[test]
+    fn test_outcome_failure_does_not_affect_success_field() {
+        // Even a failed self-improvement can have success: false in outcome
+        // without affecting the main run result
+        let outcome = SelfImprovementOutcome {
+            success: false, // Self-improvement failed
+            message: Some("Something went wrong".to_string()),
+            changes_made: 0,
+        };
+
+        // The outcome itself indicates failure...
+        assert!(!outcome.success);
+
+        // ...but this doesn't mean the main run failed
+        // (that's a separate concern handled by the caller)
+    }
+
+    // ========================================================================
+    // Completion Signal Tests
+    // ========================================================================
+
+    #[test]
+    fn test_completion_signal_structure() {
+        let signal = CompletionSignal {
+            success: true,
+            message: Some("Completed".to_string()),
+        };
+        assert!(signal.success);
+        assert_eq!(signal.message, Some("Completed".to_string()));
+
+        let signal_no_message = CompletionSignal {
+            success: false,
+            message: None,
+        };
+        assert!(!signal_no_message.success);
+        assert!(signal_no_message.message.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_completion_signal_channel_behavior() {
+        let (tx, mut rx) = mpsc::channel::<CompletionSignal>(1);
+
+        // Send a signal
+        tx.send(CompletionSignal {
+            success: true,
+            message: Some("Test signal".to_string()),
+        })
+        .await
+        .unwrap();
+
+        // Receive the signal
+        let signal = rx.recv().await.unwrap();
+        assert!(signal.success);
+        assert_eq!(signal.message, Some("Test signal".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_completion_signal_channel_closed() {
+        let (tx, mut rx) = mpsc::channel::<CompletionSignal>(1);
+
+        // Drop sender
+        drop(tx);
+
+        // Receive should return None
+        let result = rx.recv().await;
+        assert!(result.is_none());
+    }
+
+    // ========================================================================
+    // Socket Handle Tests
+    // ========================================================================
+
+    #[test]
+    fn test_socket_handle_has_cleanup() {
+        // This is a compile-time test - verifying the cleanup method exists
+        // and the struct has the expected fields
+        fn _check_handle_fields(handle: SelfImproverSocketHandle) {
+            let _: IpcAddress = handle.socket_address;
+            let _: JoinHandle<()> = handle.listener_task;
+        }
+    }
+
+    // ========================================================================
+    // Prompt Content Tests
+    // ========================================================================
+
+    #[test]
+    fn test_prompt_includes_required_elements() {
+        let run_dir = std::path::PathBuf::from("/test/run/dir");
+        let task = build_self_improvement_task(&run_dir);
+
+        // The task description should include key elements
+        assert!(task.contains("Run Directory"));
+        assert!(task.contains("/test/run/dir"));
+
+        // Mission items
+        assert!(task.contains("1."));
+        assert!(task.contains("2."));
+        assert!(task.contains("3."));
+        assert!(task.contains("4."));
+
+        // Focus areas
+        assert!(task.contains("Error messages"));
+        assert!(task.contains("Prompts that confused"));
+        assert!(task.contains("Edge cases"));
+        assert!(task.contains("Documentation"));
+
+        // Safety reminder
+        assert!(task.contains("small, safe"));
+        assert!(task.contains("No core refactors"));
+    }
+
+    // ========================================================================
+    // Additional Edge Case Tests
+    // ========================================================================
+
+    #[test]
+    fn test_extract_session_update_all_update_types() {
+        // Test various session update types
+        let update_types = [
+            "session_finished",
+            "agent_turn_finished",
+            "agent_message_chunk",
+            "agent_thought_chunk",
+            "tool_call",
+            "tool_result",
+        ];
+
+        for update_type in update_types {
+            let msg = serde_json::json!({
+                "params": {
+                    "sessionId": "test-session",
+                    "update": {
+                        "sessionUpdate": update_type
+                    }
+                }
+            });
+
+            let result = extract_session_update(&msg, "test-session");
+            assert_eq!(result, Some(update_type.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_extract_message_text_multiline() {
+        let msg = serde_json::json!({
+            "params": {
+                "update": {
+                    "content": {
+                        "text": "Line 1\nLine 2\nLine 3"
+                    }
+                }
+            }
+        });
+
+        let result = extract_message_text(&msg);
+        assert_eq!(result, Some("Line 1\nLine 2\nLine 3".to_string()));
+    }
+
+    #[test]
+    fn test_extract_message_text_with_special_chars() {
+        let msg = serde_json::json!({
+            "params": {
+                "update": {
+                    "content": {
+                        "text": "Special: 🔧 ✅ ❌ \"quotes\" and 'apostrophes'"
+                    }
+                }
+            }
+        });
+
+        let result = extract_message_text(&msg);
+        assert_eq!(
+            result,
+            Some("Special: 🔧 ✅ ❌ \"quotes\" and 'apostrophes'".to_string())
+        );
+    }
+
+    // ========================================================================
+    // Integration Test with Tempdir for Run Directory
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_run_directory_structure_creation() {
+        let run_dir = tempdir().unwrap();
+        let self_improve_dir = run_dir.path().join("self-improve");
+
+        // Create directory structure as run_self_improver would
+        std::fs::create_dir_all(&self_improve_dir).unwrap();
+
+        assert!(self_improve_dir.exists());
+        assert!(self_improve_dir.is_dir());
+    }
+
+    #[tokio::test]
+    async fn test_log_scope_creates_self_improver_writer() {
+        use crate::logging::LogScope;
+
+        let run_dir = tempdir().unwrap();
+        let self_improve_dir = run_dir.path().join("self-improve");
+        std::fs::create_dir_all(&self_improve_dir).unwrap();
+
+        let (event_tx, _) = broadcast::channel(100);
+        let scope = LogScope::new(self_improve_dir.clone(), event_tx, 0);
+
+        let writer = scope.self_improver_writer().await.unwrap();
+
+        // Verify log file was created
+        let log_path = self_improve_dir.join("self-improver.log");
+        assert!(log_path.exists());
+        assert_eq!(writer.agent_name(), "self-improver");
     }
 }

@@ -66,8 +66,9 @@ use tokio::sync::{mpsc, RwLock};
 /// The main application struct that orchestrates multi-agent workflows.
 pub struct App {
     /// The backend provider for agent communication (Auggie, Cursor, etc.)
-    #[allow(dead_code)]
-    backend: Box<dyn Backend>,
+    pub(crate) backend: Box<dyn Backend>,
+    /// Transport kind used for all agents (stored for creating new transports)
+    pub(crate) transport_kind: TransportKind,
     /// Transport for the orchestrator agent (coordinates task execution)
     pub(crate) acp_orchestrator: Box<dyn AgentTransport>,
     /// Transport for the planner agent (decomposes tasks into subtasks)
@@ -210,6 +211,7 @@ impl App {
 
         Ok(Self {
             backend,
+            transport_kind,
             acp_orchestrator,
             acp_planner,
             acp_worker,
@@ -249,6 +251,7 @@ impl App {
 
         Self {
             backend,
+            transport_kind: TransportKind::Acp, // Default to ACP for tests
             acp_orchestrator: orchestrator,
             acp_planner: planner,
             acp_worker: worker,
@@ -291,6 +294,7 @@ impl App {
 
         Self {
             backend,
+            transport_kind: TransportKind::Acp, // Default to ACP for tests
             acp_orchestrator: orchestrator,
             acp_planner: planner,
             acp_worker: worker,

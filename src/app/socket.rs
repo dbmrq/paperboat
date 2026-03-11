@@ -35,6 +35,12 @@ impl AgentSocketHandle {
 
 impl Drop for AgentSocketHandle {
     fn drop(&mut self) {
+        // Log when this handle is dropped - this helps debug socket lifecycle issues
+        tracing::warn!(
+            "⚠️ AgentSocketHandle DROPPED: {} - listener will be aborted!",
+            self.socket_address
+        );
+
         // Abort the listener task on drop
         self.listener_task.abort();
 
@@ -78,24 +84,34 @@ pub async fn setup_agent_socket(agent_id: &str) -> Result<AgentSocketHandle> {
     // Create channel for tool messages
     let (tool_tx, tool_rx) = mpsc::channel::<ToolMessage>(100);
 
+    let socket_addr_str = socket_address.as_str().to_string();
     let listener_task = tokio::spawn(async move {
+        tracing::debug!("🔌 Socket listener task started for {}", socket_addr_str);
         loop {
             match listener.accept().await {
                 Ok(stream) => {
+                    tracing::debug!("🔌 Socket accepted connection on {}", socket_addr_str);
                     let tool_tx = tool_tx.clone();
+                    let socket_addr = socket_addr_str.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_mcp_connection(stream, tool_tx).await {
-                            tracing::error!("Agent MCP connection error: {}", e);
+                            tracing::error!("🔌 MCP connection error on {}: {}", socket_addr, e);
+                        } else {
+                            tracing::debug!(
+                                "🔌 MCP connection completed successfully on {}",
+                                socket_addr
+                            );
                         }
                     });
                 }
                 Err(e) => {
                     // This error is expected when the listener is dropped during cleanup
-                    tracing::debug!("Agent socket listener stopped: {}", e);
+                    tracing::debug!("🔌 Socket listener stopped for {}: {}", socket_addr_str, e);
                     break;
                 }
             }
         }
+        tracing::debug!("🔌 Socket listener task exiting for {}", socket_addr_str);
     });
 
     // Yield to let the listener task start running
@@ -172,36 +188,75 @@ pub async fn handle_mcp_connection(stream: IpcStream, tool_tx: ToolSender) -> Re
 
     // Read the tool request (one line of JSON)
     if reader.read_line(&mut line).await? == 0 {
+        tracing::debug!("🔌 Socket connection closed (0 bytes read)");
         return Ok(()); // Connection closed
     }
 
     let request: ToolRequest =
         serde_json::from_str(&line).context("Failed to parse tool request")?;
 
-    tracing::trace!("🔌 Socket received: {:?}", request.tool_call);
+    tracing::debug!(
+        "🔌 Socket received tool call: {:?}, request_id={}",
+        request.tool_call.tool_type(),
+        request.request_id
+    );
 
     // Create a oneshot channel for the response
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
     // Send the request to the app for processing
-    tool_tx
+    let tool_type = format!("{:?}", request.tool_call.tool_type());
+    if let Err(e) = tool_tx
         .send(ToolMessage::Request {
             request,
             response_tx,
         })
         .await
-        .context("Failed to send tool request to app")?;
+    {
+        tracing::error!(
+            "🔌 Failed to send {} to app: {} - receiver may be dropped!",
+            tool_type,
+            e
+        );
+        return Err(anyhow::anyhow!(
+            "Failed to send tool request to app: {} - is tool_rx receiver alive?",
+            e
+        ));
+    }
+    tracing::debug!(
+        "🔌 Tool request {} sent to app, waiting for response...",
+        tool_type
+    );
 
     // Wait for the response
-    let response: ToolResponse = response_rx
-        .await
-        .context("Failed to receive response from app")?;
+    let response: ToolResponse = match response_rx.await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!(
+                "🔌 Failed to receive response for {}: {} - response_tx was dropped!",
+                tool_type,
+                e
+            );
+            return Err(anyhow::anyhow!(
+                "Failed to receive response from app: {} - did the handler drop response_tx?",
+                e
+            ));
+        }
+    };
+
+    tracing::debug!(
+        "🔌 Got response for {}: success={}",
+        tool_type,
+        response.success
+    );
 
     // Send the response back to the MCP server
     let response_json = serde_json::to_string(&response)?;
     writer.write_all(response_json.as_bytes()).await?;
     writer.write_all(b"\n").await?;
     writer.flush().await?;
+
+    tracing::debug!("🔌 Response for {} sent to MCP server", tool_type);
 
     Ok(())
 }

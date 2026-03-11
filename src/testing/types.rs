@@ -66,8 +66,18 @@ pub enum MockMcpToolCall {
         add_tasks: Option<Vec<MockSuggestedTask>>,
     },
     /// Call the `spawn_agents` tool (orchestrator only).
-    /// For backward compatibility, this accepts a single task and spawns one agent.
-    SpawnAgents { task: String },
+    ///
+    /// For backward compatibility, scenarios may still provide only `task`.
+    /// When `agents` is present, it takes precedence and allows multi-agent
+    /// batches plus explicit wait-mode coverage.
+    SpawnAgents {
+        #[serde(default)]
+        task: Option<String>,
+        #[serde(default)]
+        agents: Vec<MockAgentSpec>,
+        #[serde(default)]
+        wait: MockWaitMode,
+    },
     /// Call the decompose tool (orchestrator only).
     Decompose { task: String },
     /// Call the `skip_tasks` tool (orchestrator only).
@@ -85,6 +95,33 @@ pub struct MockToolResult {
     pub title: String,
     pub is_error: bool,
     pub content: String,
+}
+
+/// A mock agent specification used inside `spawn_agents` scenario steps.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MockAgentSpec {
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub task: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub model_complexity: Option<crate::mcp_server::ModelComplexity>,
+}
+
+/// Mock wait mode for `spawn_agents`.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MockWaitMode {
+    #[default]
+    All,
+    Any,
+    None,
 }
 
 /// A complete mock agent session (planner, orchestrator, or implementer).

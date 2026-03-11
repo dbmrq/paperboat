@@ -104,16 +104,6 @@ impl IpcStream {
         let (read, write) = tokio::io::split(self);
         (IpcReadHalf { inner: read }, IpcWriteHalf { inner: write })
     }
-
-    /// Get the underlying Unix stream (Unix only).
-    ///
-    /// This is a temporary escape hatch for gradual migration.
-    /// It will be removed once all callers use the abstraction.
-    #[cfg(unix)]
-    #[doc(hidden)]
-    pub fn into_inner(self) -> tokio::net::UnixStream {
-        self.inner
-    }
 }
 
 // ============================================================================

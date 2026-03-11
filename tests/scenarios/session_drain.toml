@@ -1,0 +1,131 @@
+# ============================================================================
+# Session Drain Scenario
+# ============================================================================
+#
+# Purpose: Tests behavior when notifications arrive after a session ends.
+# The session drain should ensure all pending updates are processed before
+# final cleanup.
+#
+# Expected Flow:
+#   1. Planner creates tasks and completes quickly
+#   2. Late notifications arrive after turn_finished
+#   3. Session drain handles queued updates correctly
+#   4. Orchestrator sees consistent state after drain
+#
+# Test Assertions:
+#   - All updates are processed despite session ending
+#   - No data loss from racing updates
+#   - Tasks are in expected final state
+#
+# Sessions Defined: 1 planner, 1 orchestrator, 1 implementer
+# ============================================================================
+
+[scenario]
+name = "session_drain"
+description = "Test session drain handles racing notifications correctly"
+
+# Planner session - completes, but updates keep coming
+[[planner_sessions]]
+session_id = "planner-001"
+
+[[planner_sessions.updates]]
+delay_ms = 10
+session_update = "agent_message_chunk"
+content = "Creating task.\n"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Drain test task"
+description = "Test drain behavior"
+dependencies = []
+
+# Quick succession of messages simulating race
+[[planner_sessions.updates]]
+delay_ms = 5
+session_update = "agent_message_chunk"
+content = "Late message 1"
+
+[[planner_sessions.updates]]
+delay_ms = 5
+session_update = "agent_message_chunk"
+content = "Late message 2"
+
+[[planner_sessions.updates]]
+delay_ms = 5
+session_update = "agent_message_chunk"
+content = "[Complete]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Plan done"
+
+# Turn finishes but more chunks may be queued
+[[planner_sessions.updates]]
+delay_ms = 2
+session_update = "agent_turn_finished"
+
+# Orchestrator session
+[[orchestrator_sessions]]
+session_id = "orchestrator-001"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Executing task...\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "spawn_agents"
+task = "Drain test task"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Done]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Session drain test complete"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Implementer session - also has late updates
+[[implementer_sessions]]
+session_id = "implementer-001"
+
+[[implementer_sessions.updates]]
+delay_ms = 10
+session_update = "agent_message_chunk"
+content = "Working...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 5
+session_update = "agent_message_chunk"
+content = "More work"
+
+[[implementer_sessions.updates]]
+delay_ms = 5
+session_update = "agent_message_chunk"
+content = "[Complete]"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Task done"
+
+[[implementer_sessions.updates]]
+delay_ms = 2
+session_update = "agent_turn_finished"
+
+# Mock response
+[[mock_tool_responses]]
+tool_type = "SpawnAgents"
+task_pattern = ".*Drain test.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Drain test task completed"
+

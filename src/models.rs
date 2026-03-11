@@ -9,6 +9,12 @@
 //! model tiers (e.g., "sonnet") that each backend resolves to the best
 //! available version.
 //!
+//! # Effort Levels
+//!
+//! Some backends (like Cursor) support effort/thinking levels that affect
+//! model behavior. Use [`EffortLevel`] to request higher quality responses
+//! at the cost of latency/tokens.
+//!
 //! # Fallback Chains
 //!
 //! Model configuration supports fallback chains like CSS font-family:
@@ -23,12 +29,102 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::str::FromStr;
 
+// ============================================================================
+// Effort Level
+// ============================================================================
+
+/// Effort/thinking level for model inference.
+///
+/// Some backends support different effort levels that affect model quality
+/// and latency. Higher effort typically means more "thinking" time and
+/// better responses, but at the cost of increased latency and tokens.
+///
+/// # Backend Support
+///
+/// - **Cursor**: Maps to model suffixes like `-low`, `-high`, `-thinking`
+/// - **Auggie**: Ignored (no effort level support)
+///
+/// # Example
+///
+/// ```toml
+/// # .paperboat/agents/planner.toml
+/// effort = "high"
+/// model = "openai, opus, gemini, composer"
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EffortLevel {
+    /// Low effort - fastest, minimal thinking
+    Low,
+    /// Medium effort - balanced (default)
+    #[default]
+    Medium,
+    /// High effort - more thinking, better quality
+    High,
+    /// Extra high effort - maximum thinking/reasoning
+    #[serde(rename = "xhigh")]
+    XHigh,
+}
+
+impl EffortLevel {
+    /// Returns the string identifier for this effort level.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+        }
+    }
+
+    /// Returns all known effort levels.
+    #[allow(dead_code)]
+    pub const fn all() -> &'static [Self] {
+        &[Self::Low, Self::Medium, Self::High, Self::XHigh]
+    }
+}
+
+impl FromStr for EffortLevel {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "low" => Ok(Self::Low),
+            "medium" | "med" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "xhigh" | "x-high" | "extra-high" | "max" => Ok(Self::XHigh),
+            _ => Err(anyhow!("Unknown effort level: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for EffortLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================================
+// Model Tiers
+// ============================================================================
+
 /// Model tiers representing capability classes across backends.
 ///
 /// Each tier maps to the best available model version for that tier
 /// in each backend. For example, `Sonnet` maps to:
 /// - Auggie: `sonnet4.5` (or latest)
 /// - Cursor: `sonnet-4.6` (or latest)
+///
+/// # Meta-Tiers
+///
+/// Some tiers are "meta-tiers" that expand to multiple concrete tiers:
+/// - `OpenAI`: Expands to `[Gpt, Codex]` - all OpenAI models
+///
+/// # Effort Levels
+///
+/// When combined with [`EffortLevel`], backends may select different model
+/// variants. For example, Cursor with `Gpt` + `High` effort resolves to
+/// `gpt-5.4-high`.
 ///
 /// Tiers are ordered roughly by capability (Opus > Sonnet > Haiku).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -43,6 +139,11 @@ pub enum ModelTier {
     Sonnet,
     /// Anthropic Haiku - fast and cheap (Auggie only)
     Haiku,
+    /// OpenAI GPT - general purpose model (meta-tier for all GPT models)
+    Gpt,
+    /// OpenAI models - meta-tier that expands to [Gpt, Codex]
+    #[serde(rename = "openai")]
+    OpenAI,
     /// GPT Codex - coding-optimized model
     Codex,
     /// GPT Codex Mini - cheaper coding model
@@ -65,6 +166,8 @@ impl ModelTier {
             Self::Opus => "opus",
             Self::Sonnet => "sonnet",
             Self::Haiku => "haiku",
+            Self::Gpt => "gpt",
+            Self::OpenAI => "openai",
             Self::Codex => "codex",
             Self::CodexMini => "codex-mini",
             Self::Gemini => "gemini",
@@ -82,6 +185,8 @@ impl ModelTier {
             Self::Opus,
             Self::Sonnet,
             Self::Haiku,
+            Self::Gpt,
+            Self::OpenAI,
             Self::Codex,
             Self::CodexMini,
             Self::Gemini,
@@ -95,6 +200,24 @@ impl ModelTier {
     #[allow(dead_code)]
     pub const fn is_auto(&self) -> bool {
         matches!(self, Self::Auto)
+    }
+
+    /// Returns `true` if this is a meta-tier that expands to multiple tiers.
+    #[allow(dead_code)]
+    pub const fn is_meta_tier(&self) -> bool {
+        matches!(self, Self::OpenAI)
+    }
+
+    /// Expands a meta-tier to its constituent tiers.
+    ///
+    /// For example, `OpenAI` expands to `[Gpt, Codex]`.
+    /// Non-meta tiers return a single-element slice containing themselves.
+    #[allow(dead_code)]
+    pub fn expand(&self) -> Vec<Self> {
+        match self {
+            Self::OpenAI => vec![Self::Gpt, Self::Codex],
+            other => vec![*other],
+        }
     }
 
     /// Resolves the "auto" tier to a concrete tier based on complexity.
@@ -128,6 +251,8 @@ impl FromStr for ModelTier {
             "opus" => Ok(Self::Opus),
             "sonnet" => Ok(Self::Sonnet),
             "haiku" => Ok(Self::Haiku),
+            "gpt" => Ok(Self::Gpt),
+            "openai" => Ok(Self::OpenAI),
             "codex" => Ok(Self::Codex),
             "codex-mini" | "codexmini" => Ok(Self::CodexMini),
             "gemini" => Ok(Self::Gemini),
@@ -229,16 +354,28 @@ impl FromStr for ModelFallbackChain {
 ///
 /// Each role has a fallback chain of model tiers. At runtime, the system
 /// resolves each chain to a concrete model using the backend's available tiers.
+///
+/// # Effort Levels
+///
+/// Each agent role can have its own effort level. When the backend supports
+/// effort levels (e.g., Cursor), this affects the model variant selected.
+/// For example, `Opus` with `High` effort might resolve to `opus-4.6-thinking`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     /// Available model tiers from the backend
     pub available_tiers: HashSet<ModelTier>,
     /// Model fallback chain for orchestration (default: opus, sonnet)
     pub orchestrator_model: ModelFallbackChain,
+    /// Effort level for orchestrator (default: medium)
+    pub orchestrator_effort: EffortLevel,
     /// Model fallback chain for planning (default: sonnet, opus)
     pub planner_model: ModelFallbackChain,
+    /// Effort level for planner (default: medium)
+    pub planner_effort: EffortLevel,
     /// Model fallback chain for implementation (default: sonnet, codex)
     pub implementer_model: ModelFallbackChain,
+    /// Effort level for implementer (default: medium)
+    pub implementer_effort: EffortLevel,
 }
 
 /// Default fallback chains for different environments.
@@ -259,16 +396,6 @@ pub mod defaults {
     pub fn implementer() -> ModelFallbackChain {
         ModelFallbackChain::new(vec![ModelTier::Sonnet, ModelTier::Codex, ModelTier::Opus])
     }
-
-    /// Debug/test chain: cheapest models for fast iteration
-    pub fn cheap() -> ModelFallbackChain {
-        ModelFallbackChain::new(vec![
-            ModelTier::CodexMini,
-            ModelTier::Grok,
-            ModelTier::GeminiFlash,
-            ModelTier::Haiku,
-        ])
-    }
 }
 
 impl Default for ModelConfig {
@@ -276,8 +403,11 @@ impl Default for ModelConfig {
         Self {
             available_tiers: HashSet::new(),
             orchestrator_model: defaults::orchestrator(),
+            orchestrator_effort: EffortLevel::default(),
             planner_model: defaults::planner(),
+            planner_effort: EffortLevel::default(),
             implementer_model: defaults::implementer(),
+            implementer_effort: EffortLevel::default(),
         }
     }
 }
@@ -288,8 +418,11 @@ impl ModelConfig {
         Self {
             available_tiers,
             orchestrator_model: defaults::orchestrator(),
+            orchestrator_effort: EffortLevel::default(),
             planner_model: defaults::planner(),
+            planner_effort: EffortLevel::default(),
             implementer_model: defaults::implementer(),
+            implementer_effort: EffortLevel::default(),
         }
     }
 
@@ -318,7 +451,12 @@ impl ModelConfig {
         }
 
         // Debug build default: use cheap fallback chain
-        let cheap = defaults::cheap();
+        let cheap = ModelFallbackChain::new(vec![
+            ModelTier::CodexMini,
+            ModelTier::Grok,
+            ModelTier::GeminiFlash,
+            ModelTier::Haiku,
+        ]);
         tracing::info!(
             "🧪 Debug build: using cheap models {} (override with PAPERBOAT_MODEL)",
             cheap
@@ -431,6 +569,79 @@ mod tests {
     use super::*;
 
     // ========================================================================
+    // EffortLevel Tests
+    // ========================================================================
+
+    #[test]
+    fn test_effort_level_as_str() {
+        assert_eq!(EffortLevel::Low.as_str(), "low");
+        assert_eq!(EffortLevel::Medium.as_str(), "medium");
+        assert_eq!(EffortLevel::High.as_str(), "high");
+        assert_eq!(EffortLevel::XHigh.as_str(), "xhigh");
+    }
+
+    #[test]
+    fn test_effort_level_from_str() {
+        assert_eq!(EffortLevel::from_str("low").unwrap(), EffortLevel::Low);
+        assert_eq!(
+            EffortLevel::from_str("medium").unwrap(),
+            EffortLevel::Medium
+        );
+        assert_eq!(EffortLevel::from_str("med").unwrap(), EffortLevel::Medium);
+        assert_eq!(EffortLevel::from_str("high").unwrap(), EffortLevel::High);
+        assert_eq!(EffortLevel::from_str("xhigh").unwrap(), EffortLevel::XHigh);
+        assert_eq!(EffortLevel::from_str("x-high").unwrap(), EffortLevel::XHigh);
+        assert_eq!(
+            EffortLevel::from_str("extra-high").unwrap(),
+            EffortLevel::XHigh
+        );
+        assert_eq!(EffortLevel::from_str("max").unwrap(), EffortLevel::XHigh);
+    }
+
+    #[test]
+    fn test_effort_level_from_str_case_insensitive() {
+        assert_eq!(EffortLevel::from_str("LOW").unwrap(), EffortLevel::Low);
+        assert_eq!(EffortLevel::from_str("HIGH").unwrap(), EffortLevel::High);
+        assert_eq!(EffortLevel::from_str("XHIGH").unwrap(), EffortLevel::XHigh);
+    }
+
+    #[test]
+    fn test_effort_level_from_str_invalid() {
+        assert!(EffortLevel::from_str("invalid").is_err());
+        assert!(EffortLevel::from_str("").is_err());
+        assert!(EffortLevel::from_str("highest").is_err());
+    }
+
+    #[test]
+    fn test_effort_level_default() {
+        assert_eq!(EffortLevel::default(), EffortLevel::Medium);
+    }
+
+    #[test]
+    fn test_effort_level_display() {
+        assert_eq!(format!("{}", EffortLevel::Low), "low");
+        assert_eq!(format!("{}", EffortLevel::Medium), "medium");
+        assert_eq!(format!("{}", EffortLevel::High), "high");
+        assert_eq!(format!("{}", EffortLevel::XHigh), "xhigh");
+    }
+
+    #[test]
+    fn test_effort_level_serde_roundtrip() {
+        let levels = [
+            EffortLevel::Low,
+            EffortLevel::Medium,
+            EffortLevel::High,
+            EffortLevel::XHigh,
+        ];
+
+        for level in levels {
+            let json = serde_json::to_string(&level).unwrap();
+            let parsed: EffortLevel = serde_json::from_str(&json).unwrap();
+            assert_eq!(level, parsed);
+        }
+    }
+
+    // ========================================================================
     // ModelTier Tests
     // ========================================================================
 
@@ -440,6 +651,8 @@ mod tests {
         assert_eq!(ModelTier::Opus.as_str(), "opus");
         assert_eq!(ModelTier::Sonnet.as_str(), "sonnet");
         assert_eq!(ModelTier::Haiku.as_str(), "haiku");
+        assert_eq!(ModelTier::Gpt.as_str(), "gpt");
+        assert_eq!(ModelTier::OpenAI.as_str(), "openai");
         assert_eq!(ModelTier::Codex.as_str(), "codex");
         assert_eq!(ModelTier::CodexMini.as_str(), "codex-mini");
     }
@@ -450,6 +663,8 @@ mod tests {
         assert_eq!(ModelTier::from_str("opus").unwrap(), ModelTier::Opus);
         assert_eq!(ModelTier::from_str("sonnet").unwrap(), ModelTier::Sonnet);
         assert_eq!(ModelTier::from_str("SONNET").unwrap(), ModelTier::Sonnet); // case insensitive
+        assert_eq!(ModelTier::from_str("gpt").unwrap(), ModelTier::Gpt);
+        assert_eq!(ModelTier::from_str("openai").unwrap(), ModelTier::OpenAI);
         assert_eq!(
             ModelTier::from_str("codex-mini").unwrap(),
             ModelTier::CodexMini
@@ -458,6 +673,28 @@ mod tests {
             ModelTier::from_str("codexmini").unwrap(),
             ModelTier::CodexMini
         );
+    }
+
+    #[test]
+    fn test_model_tier_meta_tier_expand() {
+        // OpenAI is a meta-tier that expands to Gpt and Codex
+        let expanded = ModelTier::OpenAI.expand();
+        assert_eq!(expanded, vec![ModelTier::Gpt, ModelTier::Codex]);
+
+        // Non-meta tiers expand to just themselves
+        let expanded = ModelTier::Opus.expand();
+        assert_eq!(expanded, vec![ModelTier::Opus]);
+
+        let expanded = ModelTier::Sonnet.expand();
+        assert_eq!(expanded, vec![ModelTier::Sonnet]);
+    }
+
+    #[test]
+    fn test_model_tier_is_meta_tier() {
+        assert!(ModelTier::OpenAI.is_meta_tier());
+        assert!(!ModelTier::Gpt.is_meta_tier());
+        assert!(!ModelTier::Opus.is_meta_tier());
+        assert!(!ModelTier::Sonnet.is_meta_tier());
     }
 
     #[test]

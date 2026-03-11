@@ -43,15 +43,31 @@ pub async fn send_request_and_wait(
     // Wait for response
     let mut reader = BufReader::new(reader);
     let mut response_line = String::new();
-    reader
+    let bytes_read = reader
         .read_line(&mut response_line)
         .await
         .context("Failed to read response from app")?;
 
-    eprintln!("📥 Received from app: {}", response_line.trim());
+    eprintln!(
+        "📥 Received from app: {} bytes, content: '{}'",
+        bytes_read,
+        response_line.trim()
+    );
 
-    let response: ToolResponse =
-        serde_json::from_str(&response_line).context("Failed to parse ToolResponse from app")?;
+    // Check if we got an empty response (socket closed before response)
+    if bytes_read == 0 {
+        return Err(anyhow::anyhow!(
+            "Socket closed before receiving response - the app listener may have been dropped"
+        ));
+    }
+
+    let response: ToolResponse = serde_json::from_str(&response_line).with_context(|| {
+        format!(
+            "Failed to parse ToolResponse from app. Received {} bytes: '{}'",
+            bytes_read,
+            response_line.trim()
+        )
+    })?;
 
     Ok(response)
 }

@@ -1,3 +1,4 @@
 # Implementer agent configuration
-model = "sonnet"
+model = "sonnet, codex, composer, gemini"
+effort = "medium"
 

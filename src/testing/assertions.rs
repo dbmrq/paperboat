@@ -3,7 +3,7 @@
 //! This module provides the `TestRunResult` type for capturing test outcomes
 //! and assertion helper functions for common test patterns.
 
-use crate::mcp_server::{ToolCall, ToolResponse};
+use crate::mcp_server::{ToolCall, ToolResponse, WaitMode};
 use crate::types::TaskResult;
 
 // ============================================================================
@@ -17,6 +17,8 @@ pub struct TestRunResult {
     pub task_result: TaskResult,
     /// All tool calls that were intercepted during the run.
     pub tool_calls: Vec<CapturedToolCall>,
+    /// The same tool calls paired with the actual responses returned by `App`.
+    pub app_tool_calls: Vec<CapturedToolCall>,
     /// All prompts sent to agents (`session_id`, prompt).
     pub prompts_sent: Vec<(String, String)>,
     /// Session IDs of all sessions created during the run.
@@ -38,6 +40,70 @@ pub struct FinalTaskState {
 }
 
 impl TestRunResult {
+    fn spawn_agents_calls_from(tool_calls: &[CapturedToolCall]) -> Vec<String> {
+        tool_calls
+            .iter()
+            .filter_map(|c| match &c.call {
+                ToolCall::SpawnAgents { agents, .. } => agents
+                    .first()
+                    .and_then(|a| a.task.clone().or_else(|| a.task_id.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn spawn_agents_batches_from(tool_calls: &[CapturedToolCall]) -> Vec<(WaitMode, Vec<String>)> {
+        tool_calls
+            .iter()
+            .filter_map(|c| match &c.call {
+                ToolCall::SpawnAgents { agents, wait } => Some((
+                    *wait,
+                    agents
+                        .iter()
+                        .filter_map(|agent| agent.task.clone().or_else(|| agent.task_id.clone()))
+                        .collect(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn decompose_calls_from(tool_calls: &[CapturedToolCall]) -> Vec<String> {
+        tool_calls
+            .iter()
+            .filter_map(|c| match &c.call {
+                ToolCall::Decompose { task_id, task } => task.clone().or_else(|| task_id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn skip_tasks_calls_from(
+        tool_calls: &[CapturedToolCall],
+    ) -> Vec<(Vec<String>, Option<String>)> {
+        tool_calls
+            .iter()
+            .filter_map(|c| match &c.call {
+                ToolCall::SkipTasks { task_ids, reason } => {
+                    Some((task_ids.clone(), reason.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn complete_calls_from(tool_calls: &[CapturedToolCall]) -> Vec<(bool, Option<String>)> {
+        tool_calls
+            .iter()
+            .filter_map(|c| match &c.call {
+                ToolCall::Complete {
+                    success, message, ..
+                } => Some((*success, message.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Check if a planner agent was spawned during the test run.
     pub fn planner_was_spawned(&self) -> bool {
         self.sessions_created
@@ -61,18 +127,22 @@ impl TestRunResult {
 
     /// Get all `spawn_agents` tool calls as task strings (first agent's task from each call).
     pub fn spawn_agents_calls(&self) -> Vec<String> {
-        self.tool_calls
-            .iter()
-            .filter_map(|c| match &c.call {
-                ToolCall::SpawnAgents { agents, .. } => {
-                    // Get task or task_id as fallback
-                    agents
-                        .first()
-                        .and_then(|a| a.task.clone().or_else(|| a.task_id.clone()))
-                }
-                _ => None,
-            })
-            .collect()
+        Self::spawn_agents_calls_from(&self.tool_calls)
+    }
+
+    /// Get all actual `spawn_agents` tool calls using the app's real responses.
+    pub fn app_spawn_agents_calls(&self) -> Vec<String> {
+        Self::spawn_agents_calls_from(&self.app_tool_calls)
+    }
+
+    /// Get `spawn_agents` batches as (`wait_mode`, `tasks`) tuples.
+    pub fn spawn_agents_batches(&self) -> Vec<(WaitMode, Vec<String>)> {
+        Self::spawn_agents_batches_from(&self.tool_calls)
+    }
+
+    /// Get actual `spawn_agents` batches as (`wait_mode`, `tasks`) tuples.
+    pub fn app_spawn_agents_batches(&self) -> Vec<(WaitMode, Vec<String>)> {
+        Self::spawn_agents_batches_from(&self.app_tool_calls)
     }
 
     /// Alias for backward compatibility - returns tasks from `spawn_agents` calls.
@@ -80,43 +150,54 @@ impl TestRunResult {
         self.spawn_agents_calls()
     }
 
+    /// Alias for actual `spawn_agents` tasks from app responses.
+    pub fn app_implement_calls(&self) -> Vec<String> {
+        self.app_spawn_agents_calls()
+    }
+
     /// Get all `decompose()` tool calls as task strings.
     pub fn decompose_calls(&self) -> Vec<String> {
-        self.tool_calls
-            .iter()
-            .filter_map(|c| match &c.call {
-                ToolCall::Decompose { task_id, task } => {
-                    // Return task if present, otherwise task_id
-                    task.clone().or_else(|| task_id.clone())
-                }
-                _ => None,
-            })
-            .collect()
+        Self::decompose_calls_from(&self.tool_calls)
+    }
+
+    /// Get actual `decompose()` tool calls using the app's real responses.
+    pub fn app_decompose_calls(&self) -> Vec<String> {
+        Self::decompose_calls_from(&self.app_tool_calls)
     }
 
     /// Get all `skip_tasks` tool calls as (`task_ids`, reason) tuples.
     pub fn skip_tasks_calls(&self) -> Vec<(Vec<String>, Option<String>)> {
-        self.tool_calls
-            .iter()
-            .filter_map(|c| match &c.call {
-                ToolCall::SkipTasks { task_ids, reason } => {
-                    Some((task_ids.clone(), reason.clone()))
-                }
-                _ => None,
-            })
-            .collect()
+        Self::skip_tasks_calls_from(&self.tool_calls)
+    }
+
+    /// Get actual `skip_tasks` tool calls using the app's real responses.
+    pub fn app_skip_tasks_calls(&self) -> Vec<(Vec<String>, Option<String>)> {
+        Self::skip_tasks_calls_from(&self.app_tool_calls)
     }
 
     /// Get all `complete()` tool calls as (success, message) tuples.
     pub fn complete_calls(&self) -> Vec<(bool, Option<String>)> {
-        self.tool_calls
+        Self::complete_calls_from(&self.tool_calls)
+    }
+
+    /// Get actual `complete()` tool calls using the app's real responses.
+    pub fn app_complete_calls(&self) -> Vec<(bool, Option<String>)> {
+        Self::complete_calls_from(&self.app_tool_calls)
+    }
+
+    /// Return the final status string for a task ID if present.
+    pub fn final_task_status(&self, task_id: &str) -> Option<&str> {
+        self.final_tasks
             .iter()
-            .filter_map(|c| match &c.call {
-                ToolCall::Complete {
-                    success, message, ..
-                } => Some((*success, message.clone())),
-                _ => None,
-            })
+            .find(|task| task.task_id == task_id)
+            .map(|task| task.status.as_str())
+    }
+
+    /// Return all final tasks with a specific status.
+    pub fn tasks_with_status(&self, status: &str) -> Vec<&FinalTaskState> {
+        self.final_tasks
+            .iter()
+            .filter(|task| task.status == status)
             .collect()
     }
 }
@@ -283,6 +364,7 @@ mod tests {
                     response: ToolResponse::success("req-2".to_string(), "decomposed".to_string()),
                 },
             ],
+            app_tool_calls: vec![],
             prompts_sent: vec![],
             sessions_created: vec![
                 "planner-001".to_string(),
@@ -313,6 +395,7 @@ mod tests {
                 message: None,
             },
             tool_calls: vec![],
+            app_tool_calls: vec![],
             prompts_sent: vec![],
             sessions_created: vec!["orchestrator-001".to_string()],
             final_tasks: vec![],
@@ -346,6 +429,7 @@ mod tests {
                     response: ToolResponse::success("req-2".to_string(), "Skipped 1".to_string()),
                 },
             ],
+            app_tool_calls: vec![],
             prompts_sent: vec![],
             sessions_created: vec![],
             final_tasks: vec![],
@@ -391,6 +475,7 @@ mod tests {
                     response: ToolResponse::success("req-2".to_string(), "OK".to_string()),
                 },
             ],
+            app_tool_calls: vec![],
             prompts_sent: vec![],
             sessions_created: vec![],
             final_tasks: vec![],

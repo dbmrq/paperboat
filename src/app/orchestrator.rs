@@ -24,10 +24,11 @@
 //! an accurate audit trail in the task list.
 
 use super::retry::{is_transient_error, RetryConfig};
+use super::socket::{setup_agent_socket, AgentSocketHandle};
 use super::types::{truncate_for_log, ToolMessage, ORCHESTRATOR_PROMPT};
 use super::App;
 use crate::acp::SessionMode;
-use crate::backend::transport::{SessionConfig, SessionInfo};
+use crate::backend::transport::{SessionConfig, SessionInfo, TransportKind};
 use crate::logging::AgentWriter;
 use crate::mcp_server::{AgentSpec, TaskStateInfo, ToolCall, ToolResponse};
 use crate::tasks::TaskStatus;
@@ -38,27 +39,67 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+/// Result of spawning an orchestrator agent.
+pub struct OrchestratorSession {
+    /// The session ID for the orchestrator session
+    pub session_id: String,
+    /// The model used for this session
+    pub model: String,
+    /// The full prompt sent to the orchestrator
+    pub full_prompt: String,
+    /// Socket handle for CLI transport (must be kept alive during the session).
+    /// This field is intentionally not read directly - its presence keeps the socket listener
+    /// alive until the OrchestratorSession is dropped.
+    #[allow(dead_code)]
+    socket_handle: Option<AgentSocketHandle>,
+    /// Tool receiver extracted from the socket handle (for passing to the orchestrator loop)
+    tool_rx: Option<super::types::ToolReceiver>,
+}
+
+impl OrchestratorSession {
+    /// Take the tool receiver for use in the orchestrator loop.
+    /// Returns None if there's no CLI socket handle (e.g., ACP transport).
+    pub fn take_tool_rx(&mut self) -> Option<super::types::ToolReceiver> {
+        self.tool_rx.take()
+    }
+}
+
 impl App {
     /// Spawn an orchestrator agent.
-    /// Returns (`session_id`, `model`, `full_prompt`) so the model and prompt can be logged.
+    /// Returns an `OrchestratorSession` containing session info and socket handle.
+    /// The socket handle must be kept alive until the orchestrator session completes.
     #[tracing::instrument(skip(self, prompt), fields(agent_type = "orchestrator", session_id))]
-    pub(crate) async fn spawn_orchestrator(
-        &mut self,
-        prompt: &str,
-    ) -> Result<(String, String, String)> {
+    pub(crate) async fn spawn_orchestrator(&mut self, prompt: &str) -> Result<OrchestratorSession> {
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
         // Get the path to the current binary
         let binary_path =
             std::env::current_exe().context("Failed to get current executable path")?;
 
-        // Get socket address
-        let socket_address = self
-            .socket_address
-            .as_ref()
-            .context("Socket not set up")?
-            .as_str()
-            .to_string();
+        // For CLI transport, create a unique socket to prevent MCP server caching.
+        // This ensures each orchestrator session gets its own MCP server process.
+        let (socket_address, cli_socket_handle) =
+            if self.acp_orchestrator.kind() == TransportKind::Cli {
+                let agent_id = format!("cli-orch-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+                let socket_handle = setup_agent_socket(&agent_id).await.with_context(|| {
+                    format!("Failed to create unique socket for CLI orchestrator: {agent_id}")
+                })?;
+                let addr = socket_handle.socket_address.as_str().to_string();
+                tracing::debug!(
+                    "🔌 Created unique socket for CLI orchestrator: {} -> {}",
+                    agent_id,
+                    addr
+                );
+                (addr, Some(socket_handle))
+            } else {
+                let addr = self
+                    .socket_address
+                    .as_ref()
+                    .context("Socket not set up")?
+                    .as_str()
+                    .to_string();
+                (addr, None)
+            };
 
         // Configure MCP server
         // For stdio transport, env is an array of {name, value} objects
@@ -99,79 +140,130 @@ impl App {
             .send_prompt(&response.session_id, &full_prompt)
             .await?;
 
-        Ok((response.session_id, model, full_prompt))
+        // Extract tool_rx from the socket handle if present (for CLI transport)
+        let (socket_handle, tool_rx) = match cli_socket_handle {
+            Some(mut handle) => {
+                // Take the tool_rx out of the handle so we can pass it to the orchestrator loop
+                // We need to keep the handle alive (it has the listener task), but use its tool_rx
+                let rx = std::mem::replace(
+                    &mut handle.tool_rx,
+                    tokio::sync::mpsc::channel(1).1, // Replace with dummy receiver
+                );
+                (Some(handle), Some(rx))
+            }
+            None => (None, None),
+        };
+
+        Ok(OrchestratorSession {
+            session_id: response.session_id,
+            model,
+            full_prompt,
+            socket_handle,
+            tool_rx,
+        })
     }
 
-    /// Create an orchestrator session with retry logic.
+    /// Create an orchestrator session with model fallback chain and retry logic.
     ///
-    /// This handles transient MCP server startup errors by retrying the session
-    /// creation with exponential backoff.
-    /// Returns (`SessionInfo`, `model`) so the model can be recorded in logs.
+    /// This tries each model in the chain, and for each model:
+    /// - Handles transient MCP server startup errors with exponential backoff
+    /// - Falls back to the next model if "model not available" error occurs
+    ///
+    /// Returns (`SessionInfo`, `actual_model`) so the model can be recorded in logs.
     async fn create_orchestrator_session_with_retry(
         &mut self,
         mcp_servers: Vec<Value>,
         cwd: &str,
     ) -> Result<(SessionInfo, String)> {
+        use super::retry::is_model_not_available_error;
+
         let retry_config = RetryConfig::from_env();
-        let model = self.resolve_orchestrator_model()?;
-        let mut attempt = 0;
-        let mut delay = retry_config.initial_delay;
+        let model_chain = self.resolve_orchestrator_model()?;
 
-        loop {
-            attempt += 1;
+        // Track the last error for reporting if all models fail
+        let mut last_error: Option<anyhow::Error> = None;
 
-            // Create session config with Agent mode - orchestrator needs to call MCP tools
-            // Note: Cursor's "plan" mode is read-only and can't call tools
-            let config = SessionConfig::new(&model, cwd)
-                .with_mcp_servers(mcp_servers.clone())
-                .with_mode(SessionMode::Agent);
+        for model in &model_chain {
+            let mut attempt = 0;
+            let mut delay = retry_config.initial_delay;
 
-            match self.acp_orchestrator.create_session(config).await {
-                Ok(response) => {
-                    if attempt > 1 {
-                        tracing::info!(
-                            "🔄 Orchestrator create_session succeeded on attempt {}/{}",
-                            attempt,
-                            retry_config.max_retries + 1
-                        );
+            loop {
+                attempt += 1;
+
+                // Create session config with Agent mode - orchestrator needs to call MCP tools
+                // Note: Cursor's "plan" mode is read-only and can't call tools
+                let config = SessionConfig::new(model, cwd)
+                    .with_mcp_servers(mcp_servers.clone())
+                    .with_mode(SessionMode::Agent);
+
+                match self.acp_orchestrator.create_session(config).await {
+                    Ok(response) => {
+                        if attempt > 1 {
+                            tracing::info!(
+                                "🔄 Orchestrator create_session succeeded on attempt {}/{} with model {}",
+                                attempt,
+                                retry_config.max_retries + 1,
+                                model
+                            );
+                        }
+                        return Ok((response, model.clone()));
                     }
-                    return Ok((response, model));
-                }
-                Err(e) => {
-                    let is_transient = is_transient_error(&e);
-                    let can_retry = attempt <= retry_config.max_retries && is_transient;
+                    Err(e) => {
+                        // Check if model is not available - try next model
+                        if is_model_not_available_error(&e) {
+                            tracing::debug!(
+                                "Model '{}' not available for orchestrator, trying next in chain...",
+                                model
+                            );
+                            last_error = Some(e);
+                            break; // Move to next model in chain
+                        }
 
-                    if can_retry {
-                        tracing::warn!(
-                            "⚠️ Orchestrator create_session failed (attempt {}/{}): {}. Retrying in {:?}...",
-                            attempt,
-                            retry_config.max_retries + 1,
-                            e,
-                            delay
-                        );
-                        tokio::time::sleep(delay).await;
+                        let is_transient = is_transient_error(&e);
+                        let can_retry = attempt <= retry_config.max_retries && is_transient;
 
-                        // Exponential backoff with cap
-                        delay = Duration::from_secs_f64(
-                            (delay.as_secs_f64() * retry_config.backoff_multiplier)
-                                .min(retry_config.max_delay.as_secs_f64()),
-                        );
-                    } else {
-                        let reason = if is_transient {
-                            "exhausted retries"
+                        if can_retry {
+                            tracing::warn!(
+                                "⚠️ Orchestrator create_session failed (attempt {}/{}, model {}): {}. Retrying in {:?}...",
+                                attempt,
+                                retry_config.max_retries + 1,
+                                model,
+                                e,
+                                delay
+                            );
+                            tokio::time::sleep(delay).await;
+
+                            // Exponential backoff with cap
+                            delay = Duration::from_secs_f64(
+                                (delay.as_secs_f64() * retry_config.backoff_multiplier)
+                                    .min(retry_config.max_delay.as_secs_f64()),
+                            );
                         } else {
-                            "non-transient error"
-                        };
-                        tracing::error!(
-                            "❌ Orchestrator create_session failed after {attempt} attempt(s) ({reason}): {e:#}",
-                        );
-                        return Err(e).context(format!(
-                            "Orchestrator create_session failed after {attempt} attempt(s)"
-                        ));
+                            // Non-transient, non-model error - fail immediately
+                            let reason = if is_transient {
+                                "exhausted retries"
+                            } else {
+                                "non-transient error"
+                            };
+                            tracing::error!(
+                                "❌ Orchestrator create_session failed after {attempt} attempt(s) ({reason}): {e:#}",
+                            );
+                            return Err(e).context(format!(
+                                "Orchestrator create_session failed after {attempt} attempt(s)"
+                            ));
+                        }
                     }
                 }
             }
         }
+
+        // All models in the chain failed
+        Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("No models in fallback chain"))
+            .context(format!(
+                "All models in fallback chain failed for orchestrator: {:?}",
+                model_chain
+            )))
     }
 
     /// Spawn and run an orchestrator agent with logging.
@@ -190,7 +282,7 @@ impl App {
         prompt: &str,
         writer: &mut AgentWriter,
     ) -> Result<TaskResult> {
-        let (session_id, model, full_prompt) = match self.spawn_orchestrator(prompt).await {
+        let mut orchestrator_session = match self.spawn_orchestrator(prompt).await {
             Ok(result) => result,
             Err(e) => {
                 // Write error to orchestrator log so it's not empty
@@ -206,8 +298,12 @@ impl App {
                 return Err(e);
             }
         };
+
+        let session_id = orchestrator_session.session_id.clone();
+        let full_prompt = orchestrator_session.full_prompt.clone();
+
         writer.set_session_id(session_id.clone());
-        writer.set_model(model);
+        writer.set_model(orchestrator_session.model.clone());
         // Use the plan as the task description, but log the full prompt for debugging
         if let Err(e) = writer.write_header_with_prompt(prompt, &full_prompt).await {
             tracing::warn!("Failed to write orchestrator header: {}", e);
@@ -215,14 +311,32 @@ impl App {
         // Emit AgentStarted event for TUI
         writer.emit_agent_started(prompt);
 
-        // Take tool_rx for this orchestrator run, but restore it when done
-        let mut tool_rx = self.tool_rx.take().context("Tool receiver not set up")?;
+        // Use the CLI-specific tool_rx if available, otherwise use self.tool_rx
+        // For CLI transport, the orchestrator has its own socket with its own tool_rx
+        // Track whether we used CLI's tool_rx so we know whether to restore self.tool_rx later
+        let (mut tool_rx, _used_cli_tool_rx) = match orchestrator_session.take_tool_rx() {
+            Some(rx) => (rx, true),
+            None => (
+                self.tool_rx.take().context("Tool receiver not set up")?,
+                false,
+            ),
+        };
+
+        // Keep the orchestrator session alive until the loop completes.
+        // This is critical for CLI transport - the socket_handle inside orchestrator_session
+        // contains the listener task that processes MCP connections. If it's dropped,
+        // the listener is aborted and tool calls won't be received.
+        let _keep_session_alive = orchestrator_session;
 
         // Take the config update receiver out of self so we don't hold a mutable borrow
         #[cfg(feature = "tui")]
         let mut config_update_rx = self.config_update_rx.take();
 
         // Handle tool calls from MCP server
+        tracing::info!(
+            "🎭 Orchestrator loop started for session {}, waiting for tool calls and ACP messages",
+            session_id
+        );
         let result = loop {
             // Config update future - receives from TUI channel when available
             #[cfg(feature = "tui")]
@@ -251,7 +365,11 @@ impl App {
 
                 Some(tool_msg) = tool_rx.recv() => {
                     let ToolMessage::Request { request, response_tx } = tool_msg;
-                    tracing::debug!("📨 Orchestrator MCP tool call received: {:?}", request.tool_call.tool_type());
+                    tracing::info!(
+                        "📨 Orchestrator MCP tool call received: {:?}, request_id={}",
+                        request.tool_call.tool_type(),
+                        request.request_id
+                    );
 
                     match &request.tool_call {
                         ToolCall::Decompose { task_id, task } => {
@@ -271,15 +389,17 @@ impl App {
                                 truncate_for_log(&resolved_task, 80)
                             );
 
-                            eprintln!(
-                                "[orchestrator] Before calling handle_decompose_with_response"
+                            tracing::debug!(
+                                "[L{}] Entering nested decompose handler",
+                                depth
                             );
                             self.tool_rx = Some(tool_rx);
                             let response = self
                                 .handle_decompose_with_response(&resolved_task, &request.request_id)
                                 .await;
-                            eprintln!(
-                                "[orchestrator] After handle_decompose_with_response: success={}",
+                            tracing::debug!(
+                                "[L{}] Nested decompose handler finished: success={}",
+                                depth,
                                 response.success
                             );
                             tool_rx = self
@@ -287,15 +407,21 @@ impl App {
                                 .take()
                                 .context("Tool receiver lost during decompose")?;
 
+                            // Use error message for failed responses, summary for success
+                            let log_message = if response.success {
+                                &response.summary
+                            } else {
+                                response.error.as_deref().unwrap_or("Unknown error")
+                            };
                             let _ = writer
                                 .write_mcp_tool_result(
                                     "decompose",
                                     response.success,
-                                    &truncate_for_log(&response.summary, 100),
+                                    &truncate_for_log(log_message, 100),
                                 )
                                 .await;
 
-                            eprintln!("[orchestrator] Decompose complete, continuing loop");
+                            tracing::debug!("[L{}] Decompose complete, continuing loop", depth);
                             let _ = response_tx.send(response);
                         }
                         ToolCall::SpawnAgents { ref agents, ref wait } => {
@@ -442,10 +568,16 @@ impl App {
                             };
 
                             // Log the result to orchestrator log
+                            // Use error message for failed responses, summary for success
+                            let log_message = if response.success {
+                                &response.summary
+                            } else {
+                                response.error.as_deref().unwrap_or("Unknown error")
+                            };
                             let _ = writer.write_mcp_tool_result(
                                 "spawn_agents",
                                 response.success,
-                                &truncate_for_log(&response.summary, 100)
+                                &truncate_for_log(log_message, 100)
                             ).await;
 
                             let _ = response_tx.send(response);
@@ -1091,8 +1223,10 @@ impl App {
         (all_success, combined)
     }
 
-    /// Resolve the orchestrator model configuration to an actual model string.
-    fn resolve_orchestrator_model(&self) -> Result<String> {
+    /// Resolve the orchestrator model configuration to a fallback chain of model strings.
+    ///
+    /// Returns a vector of model strings to try in order (first is preferred).
+    fn resolve_orchestrator_model(&self) -> Result<Vec<String>> {
         // Resolve fallback chain to a tier
         let tier = self
             .model_config
@@ -1100,7 +1234,8 @@ impl App {
             .resolve(&self.model_config.available_tiers)?;
 
         // Orchestrator doesn't use auto-resolution (no complexity hint)
-        // Convert tier to backend-specific model string
-        self.backend.resolve_tier(tier)
+        // Convert tier to backend-specific model fallback chain with effort level
+        self.backend
+            .resolve_tier(tier, Some(self.model_config.orchestrator_effort))
     }
 }

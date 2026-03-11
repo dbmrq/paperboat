@@ -60,6 +60,7 @@ pub use state::{FocusedPanel, TuiState};
 #[allow(unused_imports)]
 pub use task_list_state::{TaskDisplay, TaskListState};
 
+use crate::backend::BackendKind;
 use crate::models::ModelConfig;
 
 /// Channels for App -> TUI communication (model config)
@@ -68,6 +69,10 @@ pub struct TuiConfigChannels {
     pub initial_config_tx: std::sync::mpsc::SyncSender<ModelConfig>,
     /// Receiver for model configuration updates from TUI (App reads)
     pub config_update_rx: tokio::sync::mpsc::Receiver<ModelConfigUpdate>,
+    /// Sender for available backends list (App sends if backend selection needed)
+    pub available_backends_tx: std::sync::mpsc::SyncSender<Vec<BackendKind>>,
+    /// Receiver for selected backend from TUI (App reads)
+    pub selected_backend_rx: tokio::sync::mpsc::Receiver<BackendKind>,
 }
 
 /// Channels for TUI thread (passed to `run_tui_with_channels`)
@@ -78,6 +83,10 @@ pub struct TuiThreadChannels {
     pub initial_config_rx: std::sync::mpsc::Receiver<ModelConfig>,
     /// Sender for model configuration updates (TUI sends to App)
     pub config_update_tx: std::sync::mpsc::SyncSender<ModelConfigUpdate>,
+    /// Receiver for available backends (TUI reads, shows popup if multiple)
+    pub available_backends_rx: std::sync::mpsc::Receiver<Vec<BackendKind>>,
+    /// Sender for selected backend (TUI sends after user selection)
+    pub selected_backend_tx: std::sync::mpsc::SyncSender<BackendKind>,
 }
 
 /// Spawns a bridge task that forwards `LogEvent`s from a tokio broadcast channel
@@ -214,6 +223,14 @@ pub fn spawn_event_bridge_with_config(
     // Create async channel for config updates (App reads)
     let (config_async_tx, config_async_rx) = tokio::sync::mpsc::channel::<ModelConfigUpdate>(100);
 
+    // Create channels for backend selection
+    let (available_backends_tx, available_backends_rx) =
+        std::sync::mpsc::sync_channel::<Vec<BackendKind>>(1);
+    let (selected_backend_sync_tx, selected_backend_sync_rx) =
+        std::sync::mpsc::sync_channel::<BackendKind>(1);
+    let (selected_backend_async_tx, selected_backend_async_rx) =
+        tokio::sync::mpsc::channel::<BackendKind>(1);
+
     // Spawn bridge task for log events (async broadcast -> sync mpsc)
     tokio::spawn(async move {
         loop {
@@ -273,15 +290,28 @@ pub fn spawn_event_bridge_with_config(
         }
     });
 
+    // Spawn bridge task for backend selection (sync mpsc -> async mpsc)
+    tokio::spawn(async move {
+        // Only need to bridge one message
+        let result = tokio::task::spawn_blocking(move || selected_backend_sync_rx.recv()).await;
+        if let Ok(Ok(backend)) = result {
+            let _ = selected_backend_async_tx.send(backend).await;
+        }
+    });
+
     let app_channels = TuiConfigChannels {
         initial_config_tx,
         config_update_rx: config_async_rx,
+        available_backends_tx,
+        selected_backend_rx: selected_backend_async_rx,
     };
 
     let tui_channels = TuiThreadChannels {
         event_rx,
         initial_config_rx,
         config_update_tx: config_sync_tx,
+        available_backends_rx,
+        selected_backend_tx: selected_backend_sync_tx,
     };
 
     (app_channels, tui_channels)

@@ -102,19 +102,119 @@ impl Backend for CursorBackend {
         models::discover_cursor_tiers().await
     }
 
-    fn resolve_tier(&self, tier: ModelTier) -> Result<String> {
+    fn resolve_tier(
+        &self,
+        tier: ModelTier,
+        effort: Option<crate::models::EffortLevel>,
+    ) -> Result<Vec<String>> {
+        use crate::models::EffortLevel;
+
         // Cursor uses model IDs like "sonnet-4.6", "opus-4.6", "gpt-5.1-codex-mini"
-        // We map each tier to the best available model ID
+        //
+        // This returns a fallback chain of models to try in order.
+        // The chain includes multiple versions and effort variants to maximize
+        // the chance of finding an available model.
+
+        let effort = effort.unwrap_or_default();
+
+        // Helper to build Claude fallback chain (only base and -thinking exist)
+        let claude_chain = |versions: &[&str]| -> Vec<String> {
+            let mut chain = Vec::new();
+            for v in versions {
+                match effort {
+                    EffortLevel::High | EffortLevel::XHigh => {
+                        chain.push(format!("{v}-thinking"));
+                        chain.push(v.to_string());
+                    }
+                    EffortLevel::Low | EffortLevel::Medium => {
+                        chain.push(v.to_string());
+                        chain.push(format!("{v}-thinking"));
+                    }
+                }
+            }
+            chain
+        };
+
+        // Helper to build GPT/Codex fallback chain (full effort spectrum)
+        let gpt_chain = |versions: &[&str]| -> Vec<String> {
+            let mut chain = Vec::new();
+            for v in versions {
+                match effort {
+                    EffortLevel::XHigh => {
+                        chain.push(format!("{v}-xhigh"));
+                        chain.push(format!("{v}-high"));
+                        chain.push(v.to_string());
+                        chain.push(format!("{v}-low"));
+                    }
+                    EffortLevel::High => {
+                        chain.push(format!("{v}-high"));
+                        chain.push(v.to_string());
+                        chain.push(format!("{v}-xhigh"));
+                        chain.push(format!("{v}-low"));
+                    }
+                    EffortLevel::Medium => {
+                        chain.push(v.to_string());
+                        chain.push(format!("{v}-high"));
+                        chain.push(format!("{v}-low"));
+                    }
+                    EffortLevel::Low => {
+                        chain.push(format!("{v}-low"));
+                        chain.push(v.to_string());
+                        chain.push(format!("{v}-high"));
+                    }
+                }
+            }
+            chain
+        };
+
         match tier {
-            ModelTier::Auto => Ok("auto".to_string()),
-            ModelTier::Opus => Ok("opus-4.6".to_string()),
-            ModelTier::Sonnet => Ok("sonnet-4.6".to_string()),
-            ModelTier::Codex => Ok("gpt-5.3-codex".to_string()),
-            ModelTier::CodexMini => Ok("gpt-5.1-codex-mini".to_string()),
-            ModelTier::Gemini => Ok("gemini-3.1-pro".to_string()),
-            ModelTier::GeminiFlash => Ok("gemini-3-flash".to_string()),
-            ModelTier::Grok => Ok("grok".to_string()),
-            ModelTier::Composer => Ok("composer-1.5".to_string()),
+            ModelTier::Auto => Ok(vec!["auto".to_string()]),
+
+            // Opus: try 4.6, then 4.5
+            ModelTier::Opus => Ok(claude_chain(&["opus-4.6", "opus-4.5"])),
+
+            // Sonnet: try 4.6, then 4.5
+            ModelTier::Sonnet => Ok(claude_chain(&["sonnet-4.6", "sonnet-4.5"])),
+
+            // GPT: try 5.4, 5.3, 5.2, 5.1
+            ModelTier::Gpt => Ok(gpt_chain(&["gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1"])),
+
+            // OpenAI: comprehensive chain of all OpenAI models
+            // Includes GPT, Codex variants - try to find ANY working OpenAI model
+            ModelTier::OpenAI => {
+                let mut chain = gpt_chain(&["gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1"]);
+                // Also include codex variants as fallback
+                chain.extend(gpt_chain(&[
+                    "gpt-5.3-codex",
+                    "gpt-5.2-codex",
+                    "gpt-5.1-codex-max",
+                ]));
+                Ok(chain)
+            }
+
+            // Codex: specialized coding models
+            ModelTier::Codex => Ok(gpt_chain(&[
+                "gpt-5.3-codex",
+                "gpt-5.2-codex",
+                "gpt-5.1-codex-max",
+            ])),
+
+            // CodexMini: cheap/fast coding model
+            ModelTier::CodexMini => Ok(vec!["gpt-5.1-codex-mini".to_string()]),
+
+            // Gemini: try 3.1, then 3
+            ModelTier::Gemini => Ok(vec![
+                "gemini-3.1-pro".to_string(),
+                "gemini-3-pro".to_string(),
+            ]),
+
+            ModelTier::GeminiFlash => Ok(vec!["gemini-3-flash".to_string()]),
+
+            ModelTier::Grok => Ok(vec!["grok".to_string()]),
+
+            // Composer: try 1.5, then 1
+            ModelTier::Composer => Ok(vec!["composer-1.5".to_string(), "composer-1".to_string()]),
+
             // Cursor doesn't have Haiku
             ModelTier::Haiku => Err(anyhow!(
                 "Model tier 'haiku' is not available in Cursor backend. \
@@ -290,6 +390,32 @@ impl Backend for CursorBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::transport::SessionConfig;
+    use serde_json::json;
+    use serial_test::serial;
+    use std::env;
+
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = env::var(key).ok();
+            env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
 
     #[test]
     fn test_cursor_backend_name() {
@@ -348,8 +474,245 @@ mod tests {
         );
     }
 
-    // Note: create_transport() tests require async runtime and would spawn
-    // actual processes. Integration tests are in tests/integration/.
+    #[tokio::test]
+    async fn test_create_transport_cli_returns_cli_transport() {
+        let backend = CursorBackend::new();
+        let config = TransportConfig::new("/tmp/workspace")
+            .with_model("sonnet-4.6")
+            .with_mcp_server(json!({
+                "name": "paperboat",
+                "args": ["--mcp-server", "--socket", "/tmp/paperboat.sock"]
+            }));
+
+        let mut transport = backend
+            .create_transport(TransportKind::Cli, AgentType::Implementer, config)
+            .await
+            .unwrap();
+
+        assert_eq!(transport.kind(), TransportKind::Cli);
+
+        let session = transport
+            .create_session(
+                SessionConfig::new("sonnet-4.6", "/tmp/workspace").with_mcp_servers(vec![json!({
+                    "name": "paperboat",
+                    "args": ["--mcp-server", "--socket", "/tmp/paperboat.sock"]
+                })]),
+            )
+            .await
+            .unwrap();
+
+        assert!(!session.session_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_transport_acp_returns_uninitialized_acp_transport() {
+        let backend = CursorBackend::new();
+        let config = TransportConfig::new("/tmp/workspace")
+            .with_model("sonnet-4.6")
+            .with_request_timeout(Duration::from_secs(1))
+            .with_mcp_server(json!({
+                "name": "paperboat",
+                "args": ["--mcp-server", "--socket", "/tmp/paperboat.sock"]
+            }));
+
+        let mut transport = backend
+            .create_transport(TransportKind::Acp, AgentType::Planner, config)
+            .await
+            .unwrap();
+
+        assert_eq!(transport.kind(), TransportKind::Acp);
+
+        let err = transport
+            .create_session(SessionConfig::new("sonnet-4.6", "/tmp/workspace"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not initialized"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_setup_mcp_is_noop_for_cursor_backend() {
+        let temp = tempfile::tempdir().unwrap();
+        let _home = EnvGuard::set("HOME", temp.path().to_str().unwrap());
+        let backend = CursorBackend::new();
+
+        backend.setup_mcp("/tmp/paperboat.sock").await.unwrap();
+
+        assert!(!temp.path().join(".cursor/mcp.json").exists());
+    }
+
+    #[test]
+    #[serial]
+    fn test_cleanup_mcp_removes_paperboat_servers_and_preserves_unrelated_entries() {
+        let temp = tempfile::tempdir().unwrap();
+        let _home = EnvGuard::set("HOME", temp.path().to_str().unwrap());
+        let config_path = temp.path().join(".cursor/mcp.json");
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config_path,
+            serde_json::json!({
+                "mcpServers": {
+                    "github": {
+                        "command": "gh",
+                        "args": ["mcp", "serve"]
+                    },
+                    "paperboat-planner": {
+                        "command": "/old/paperboat",
+                        "args": ["--stale"]
+                    },
+                    "paperboat-implementer-session123": {
+                        "command": "/old/paperboat",
+                        "args": ["--stale"]
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        CursorBackend::new().cleanup_mcp().unwrap();
+
+        let config: mcp_config::CursorMcpConfig =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(config.mcp_servers.len(), 1);
+        assert!(config.mcp_servers.contains_key("github"));
+        assert!(!config.mcp_servers.keys().any(|name| name.starts_with("paperboat-")));
+    }
+
+    // ========================================================================
+    // Transport Selection Branch Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_create_transport_cli_for_orchestrator() {
+        let backend = CursorBackend::new();
+        let config = TransportConfig::new("/tmp/workspace")
+            .with_model("sonnet-4.6")
+            .with_mcp_server(json!({
+                "name": "paperboat-orchestrator",
+                "args": ["--mcp-server", "--socket", "/tmp/paperboat.sock"]
+            }));
+
+        let transport = backend
+            .create_transport(TransportKind::Cli, AgentType::Orchestrator, config)
+            .await
+            .unwrap();
+
+        assert_eq!(transport.kind(), TransportKind::Cli);
+    }
+
+    #[tokio::test]
+    async fn test_create_transport_cli_for_planner() {
+        let backend = CursorBackend::new();
+        let config = TransportConfig::new("/tmp/workspace")
+            .with_model("sonnet-4.6")
+            .with_mcp_server(json!({
+                "name": "paperboat-planner",
+                "args": ["--mcp-server", "--socket", "/tmp/paperboat.sock"]
+            }));
+
+        let transport = backend
+            .create_transport(TransportKind::Cli, AgentType::Planner, config)
+            .await
+            .unwrap();
+
+        assert_eq!(transport.kind(), TransportKind::Cli);
+    }
+
+    #[tokio::test]
+    async fn test_create_transport_acp_for_orchestrator() {
+        let backend = CursorBackend::new();
+        let config = TransportConfig::new("/tmp/workspace")
+            .with_model("sonnet-4.6")
+            .with_request_timeout(Duration::from_secs(1))
+            .with_mcp_server(json!({
+                "name": "paperboat-orchestrator",
+                "args": ["--mcp-server", "--socket", "/tmp/paperboat.sock"]
+            }));
+
+        let transport = backend
+            .create_transport(TransportKind::Acp, AgentType::Orchestrator, config)
+            .await
+            .unwrap();
+
+        assert_eq!(transport.kind(), TransportKind::Acp);
+    }
+
+    #[tokio::test]
+    async fn test_create_transport_acp_for_planner() {
+        let backend = CursorBackend::new();
+        let config = TransportConfig::new("/tmp/workspace")
+            .with_model("sonnet-4.6")
+            .with_request_timeout(Duration::from_secs(1))
+            .with_mcp_server(json!({
+                "name": "paperboat-planner",
+                "args": ["--mcp-server", "--socket", "/tmp/paperboat.sock"]
+            }));
+
+        let transport = backend
+            .create_transport(TransportKind::Acp, AgentType::Planner, config)
+            .await
+            .unwrap();
+
+        assert_eq!(transport.kind(), TransportKind::Acp);
+    }
+
+    #[tokio::test]
+    async fn test_create_transport_cli_session_creates_unique_session_id() {
+        let backend = CursorBackend::new();
+        let config1 = TransportConfig::new("/tmp/workspace").with_model("sonnet-4.6");
+        let config2 = TransportConfig::new("/tmp/workspace").with_model("sonnet-4.6");
+
+        let mut transport1 = backend
+            .create_transport(TransportKind::Cli, AgentType::Implementer, config1)
+            .await
+            .unwrap();
+
+        let mut transport2 = backend
+            .create_transport(TransportKind::Cli, AgentType::Implementer, config2)
+            .await
+            .unwrap();
+
+        // Each transport session should have unique IDs
+        let session1 = transport1
+            .create_session(SessionConfig::new("sonnet-4.6", "/tmp/workspace"))
+            .await
+            .unwrap();
+        let session2 = transport2
+            .create_session(SessionConfig::new("sonnet-4.6", "/tmp/workspace"))
+            .await
+            .unwrap();
+
+        assert_ne!(session1.session_id, session2.session_id);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_tier_returns_fallback_chain() {
+        let backend = CursorBackend::new();
+
+        // Auto tier
+        let auto_models = backend.resolve_tier(ModelTier::Auto, None).unwrap();
+        assert_eq!(auto_models, vec!["auto"]);
+
+        // Sonnet tier should return multiple options
+        let sonnet_models = backend.resolve_tier(ModelTier::Sonnet, None).unwrap();
+        assert!(sonnet_models.len() >= 2, "Sonnet should have fallback chain");
+        assert!(sonnet_models.iter().any(|m| m.contains("sonnet")));
+
+        // Opus tier
+        let opus_models = backend.resolve_tier(ModelTier::Opus, None).unwrap();
+        assert!(opus_models.len() >= 2, "Opus should have fallback chain");
+        assert!(opus_models.iter().any(|m| m.contains("opus")));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_tier_haiku_returns_error() {
+        let backend = CursorBackend::new();
+
+        let result = backend.resolve_tier(ModelTier::Haiku, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not available"));
+    }
 
     // Note: discover_models() tests are in the models module since they
     // require mocking the cursor-agent command or running against real CLI

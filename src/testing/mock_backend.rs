@@ -170,9 +170,13 @@ impl Backend for MockBackend {
             .collect())
     }
 
-    fn resolve_tier(&self, tier: ModelTier) -> Result<String> {
+    fn resolve_tier(
+        &self,
+        tier: ModelTier,
+        _effort: Option<crate::models::EffortLevel>,
+    ) -> Result<Vec<String>> {
         // Mock: just return the tier name as the model string
-        Ok(tier.as_str().to_string())
+        Ok(vec![tier.as_str().to_string()])
     }
 
     async fn setup_mcp(&self, _socket_path: &str) -> Result<()> {

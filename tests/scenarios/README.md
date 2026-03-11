@@ -13,6 +13,12 @@ This directory contains TOML scenario files that define scripted behaviors for i
 | `concurrent_agents.toml` | Multiple concurrent agents | Planner → Orchestrator → 3 Implementers (parallel) |
 | `error_recovery.toml` | Implementation failure and retry | Planner → Orchestrator → Fail → Retry → Success |
 | `planner_failure.toml` | Planner fails to create plan | Planner (complete with failure) |
+| `completion_rejection.toml` | Orchestrator completion rejected with pending tasks | Planner → Orchestrator (rejected) → skip_tasks → Complete |
+| `wait_mode_any.toml` | Test spawn_agents with wait=any mode | Planner → Orchestrator → 2 Implementers (first result returns) |
+| `wait_mode_all_mixed.toml` | Test spawn_agents with wait=all under mixed results | Planner → Orchestrator → 3 Implementers (mixed success/failure) |
+| `session_drain.toml` | Session drain handles racing notifications | Planner → Orchestrator → 1 Implementer (with late updates) |
+| `agent_spawn_failure.toml` | Agent spawn fails at startup | Planner → Orchestrator → Fail → 1 Implementer (partial success) |
+| `early_socket_close.toml` | Graceful handling of early socket close | Planner → Orchestrator → Implementer (interrupted) |
 
 ## What Each Scenario Tests
 
@@ -81,6 +87,65 @@ Tests handling of planning failures:
 3. Task fails with planner error
 
 **Use for**: Testing graceful handling of planning failures.
+
+### `completion_rejection.toml`
+Tests that orchestrator completion is rejected when tasks remain pending:
+1. Planner creates 2 tasks
+2. Orchestrator implements Task 1 only
+3. Orchestrator calls `complete(success=true)` - REJECTED (pending tasks)
+4. Orchestrator calls `skip_tasks` for Task 2
+5. Orchestrator calls `complete(success=true)` - ACCEPTED
+
+**Use for**: Verifying task reconciliation before completion.
+
+### `wait_mode_any.toml`
+Tests `spawn_agents` with `wait=any` mode where first result returns immediately:
+1. Planner creates 2 tasks
+2. Orchestrator spawns 2 agents with `wait=any`
+3. First agent fails quickly
+4. `wait=any` returns immediately with failure result
+5. Second agent continues in background
+6. Orchestrator handles result and completes
+
+**Use for**: Verifying wait=any semantics return first completion.
+
+### `wait_mode_all_mixed.toml`
+Tests `spawn_agents` with `wait=all` mode under mixed success/failure:
+1. Planner creates 3 tasks
+2. Orchestrator spawns 3 agents with `wait=all` (default)
+3. Agent 1: succeeds, Agent 2: fails, Agent 3: succeeds
+4. `wait=all` returns with mixed results
+5. Orchestrator handles mixed results appropriately
+
+**Use for**: Verifying wait=all waits for all agents and handles mixed results.
+
+### `session_drain.toml`
+Tests behavior when notifications arrive after a session ends:
+1. Planner creates tasks and completes quickly
+2. Late notifications arrive after `turn_finished`
+3. Session drain handles queued updates correctly
+4. Orchestrator sees consistent state after drain
+
+**Use for**: Verifying no data loss from racing session updates.
+
+### `agent_spawn_failure.toml`
+Tests behavior when agent spawn fails (model creation error, session startup failure):
+1. Planner creates 2 tasks
+2. Orchestrator spawns agent for Task 1 - FAILS (simulated startup error)
+3. Task 1 is marked as failed
+4. Orchestrator handles failure, spawns agent for Task 2 - succeeds
+5. Orchestrator completes with partial success
+
+**Use for**: Verifying system remains functional after spawn failures.
+
+### `early_socket_close.toml`
+Tests cleanup behavior when socket closes while agents are running:
+1. Planner creates task
+2. Orchestrator spawns agent
+3. Implementer starts but socket closes early (simulated via error)
+4. System cleans up and reports appropriate status
+
+**Use for**: Verifying graceful shutdown without hanging.
 
 ## Running Tests
 

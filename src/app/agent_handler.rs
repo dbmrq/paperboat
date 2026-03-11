@@ -31,6 +31,31 @@ fn strip_mcp_prefix(title: &str) -> &str {
     title
 }
 
+/// Build a helpful error message when an agent tries to use an unavailable tool.
+///
+/// Provides targeted guidance based on the specific tool that was called,
+/// especially for common mistakes like calling `create_task` instead of using
+/// `add_tasks` parameter in `complete()`.
+fn build_tool_rejection_message(tool_type: &str) -> String {
+    match tool_type {
+        "create_task" => {
+            "Tool 'create_task' is not available to worker agents. \
+             To suggest new tasks, use the 'add_tasks' parameter when calling \
+             complete(success=..., message=..., add_tasks=[...]). \
+             The add_tasks array accepts objects with 'name' and 'description' fields."
+                .to_string()
+        }
+        _ => {
+            format!(
+                "Worker agents can only call complete(). \
+                 Tool '{}' is not available. \
+                 Call complete(success=true/false, message=\"...\") when done.",
+                tool_type
+            )
+        }
+    }
+}
+
 /// Internal result of an agent completion, including notes and suggested tasks.
 pub struct AgentCompletionData {
     pub success: bool,
@@ -129,14 +154,8 @@ pub async fn run_agent_handler(
                                 "⚠️ [{}] Agent {} made unexpected tool call: {:?}",
                                 agent_name, role, other.tool_type()
                             );
-                            let response = ToolResponse::failure(
-                                request.request_id,
-                                format!(
-                                    "Worker agents can only call complete(). \
-                                     Tool '{}' is not available.",
-                                    other.tool_type()
-                                ),
-                            );
+                            let error_msg = build_tool_rejection_message(other.tool_type());
+                            let response = ToolResponse::failure(request.request_id, error_msg);
                             let _ = response_tx.send(response);
                         }
                     }
@@ -146,19 +165,32 @@ pub async fn run_agent_handler(
                 Some(msg) = session_rx.recv() => {
                     if let Some(params) = msg.get("params") {
                         if let Some(update) = params.get("update") {
-                            if let Some(session_update) = update.get("sessionUpdate").and_then(|v| v.as_str()) {
+                            // Support both ACP format (sessionUpdate) and CLI format (type)
+                            if let Some(session_update) = update
+                                .get("sessionUpdate")
+                                .or_else(|| update.get("type"))
+                                .and_then(|v| v.as_str())
+                            {
                                 match session_update {
-                                    "session_finished" => {
+                                    // ACP: "session_finished", CLI: "complete"
+                                    "session_finished" | "complete" => {
                                         tracing::debug!(
-                                            "[{}] Agent {} received session_finished without complete call",
-                                            agent_name, role
+                                            "[{}] Agent {} received {} without complete call",
+                                            agent_name, role, session_update
                                         );
                                         // Clean up socket
                                         socket_handle.cleanup();
                                         // Treat as failure since agent didn't call complete()
+                                        // Note: This can happen if the agent's complete() call failed due to
+                                        // socket connection issues. The agent may have finished its work
+                                        // but couldn't signal completion.
                                         return AgentCompletionData {
                                             success: false,
-                                            message: Some(format!("Agent finished without calling complete() for task: {task}")),
+                                            message: Some(format!(
+                                                "Agent finished without calling complete() for task: {task}. \
+                                                 This may indicate the agent completed its work but the MCP socket \
+                                                 connection failed when calling complete(). Check logs for socket errors."
+                                            )),
                                             notes: None,
                                             add_tasks: None,
                                         };
@@ -262,13 +294,17 @@ pub async fn wait_for_agent_completion(
 ) -> bool {
     let result = tokio::time::timeout(timeout, async {
         while let Some(msg) = session_rx.recv().await {
-            // Check for session_finished
+            // Check for session_finished (ACP) or complete (CLI)
             if let Some(params) = msg.get("params") {
                 if let Some(update) = params.get("update") {
-                    if let Some(session_update) =
-                        update.get("sessionUpdate").and_then(|v| v.as_str())
+                    // Support both ACP format (sessionUpdate) and CLI format (type)
+                    if let Some(session_update) = update
+                        .get("sessionUpdate")
+                        .or_else(|| update.get("type"))
+                        .and_then(|v| v.as_str())
                     {
-                        if session_update == "session_finished" {
+                        // ACP: "session_finished", CLI: "complete"
+                        if session_update == "session_finished" || session_update == "complete" {
                             return true;
                         }
                     }
@@ -280,4 +316,107 @@ pub async fn wait_for_agent_completion(
     .await;
 
     result.unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::socket::setup_agent_socket;
+    use crate::logging::{AgentType, AgentWriter};
+    use tempfile::tempdir;
+    use tokio::sync::broadcast;
+
+    #[tokio::test]
+    async fn run_agent_handler_propagates_missing_complete_as_failure_and_cleans_socket() {
+        let dir = tempdir().expect("create temp dir");
+        let log_path = dir.path().join("implementer.log");
+        let (event_tx, _) = broadcast::channel(8);
+        let mut writer = AgentWriter::new(
+            log_path,
+            AgentType::Implementer { index: 1 },
+            event_tx,
+            0,
+        )
+        .await
+        .expect("create writer");
+
+        let socket_handle = setup_agent_socket("handler-missing-complete")
+            .await
+            .expect("create test socket");
+        let socket_address = socket_handle.socket_address.clone();
+
+        let (session_tx, session_rx) = tokio::sync::mpsc::channel(4);
+        session_tx
+            .send(serde_json::json!({
+                "params": {
+                    "update": {
+                        "sessionUpdate": "session_finished"
+                    }
+                }
+            }))
+            .await
+            .expect("send session_finished");
+        drop(session_tx);
+
+        let completion = run_agent_handler(
+            socket_handle,
+            session_rx,
+            std::time::Duration::from_secs(1),
+            "implementer",
+            "Investigate startup failure",
+            "implementer-001",
+            &mut writer,
+        )
+        .await;
+
+        writer.finalize(false).await.expect("flush log");
+
+        assert!(!completion.success);
+        let message = completion
+            .message
+            .expect("missing complete should produce a failure message");
+        assert!(message.contains("without calling complete()"));
+        assert!(message.contains("Investigate startup failure"));
+        assert!(
+            !socket_address.exists(),
+            "socket endpoint should be cleaned up after handler failure"
+        );
+    }
+
+    #[test]
+    fn build_tool_rejection_message_create_task_has_helpful_guidance() {
+        let msg = super::build_tool_rejection_message("create_task");
+
+        // Should guide user to use add_tasks parameter in complete()
+        assert!(
+            msg.contains("add_tasks"),
+            "Should mention add_tasks parameter"
+        );
+        assert!(
+            msg.contains("complete("),
+            "Should mention the complete() tool"
+        );
+        assert!(
+            !msg.contains("is not available."),
+            "Should NOT use generic rejection for create_task"
+        );
+    }
+
+    #[test]
+    fn build_tool_rejection_message_other_tools_uses_generic_message() {
+        let msg = super::build_tool_rejection_message("spawn_agents");
+
+        assert!(
+            msg.contains("spawn_agents"),
+            "Should include the tool name"
+        );
+        assert!(
+            msg.contains("is not available"),
+            "Should use generic rejection"
+        );
+        assert!(
+            msg.contains("complete(success=true/false"),
+            "Should guide to use complete()"
+        );
+    }
 }

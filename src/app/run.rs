@@ -63,16 +63,19 @@ impl App {
 
         // First, spawn a Planner to create a plan from the goal
         tracing::info!("📝 Planning phase: spawning planner agent");
-        let planner_session = match self.spawn_planner(goal).await {
-            Ok((session, model, prompt)) => {
-                planner_writer.set_session_id(session.clone());
-                planner_writer.set_model(model);
-                if let Err(e) = planner_writer.write_header_with_prompt(goal, &prompt).await {
+        let mut planner_spawn_result = match self.spawn_planner(goal).await {
+            Ok(result) => {
+                planner_writer.set_session_id(result.session_id.clone());
+                planner_writer.set_model(result.model.clone());
+                if let Err(e) = planner_writer
+                    .write_header_with_prompt(goal, &result.prompt)
+                    .await
+                {
                     tracing::warn!("Failed to write planner header: {}", e);
                 }
                 // Emit AgentStarted event for TUI
                 planner_writer.emit_agent_started(goal);
-                session
+                result
             }
             Err(e) => {
                 // Write error to planner log so it's not empty
@@ -90,9 +93,25 @@ impl App {
             }
         };
 
+        // Extract session ID and tool_rx from the planner result
+        let planner_session = planner_spawn_result.session_id.clone();
+        let planner_tool_rx = planner_spawn_result.take_tool_rx();
+
+        // IMPORTANT: Keep planner_spawn_result alive until wait completes!
+        // The socket_handle inside it contains the listener task that processes
+        // MCP connections. If dropped, the socket listener is aborted and the
+        // MCP server can't connect. We use an explicit binding to prevent NLL
+        // from dropping it early.
+        let _keep_planner_alive = planner_spawn_result;
+
         // Wait for planner to complete and collect its output (with timeout)
+        // Pass the planner's tool_rx so MCP tool calls are received from the correct socket
         let planner_output = match self
-            .wait_for_session_output(&planner_session, &mut planner_writer)
+            .wait_for_session_output_with_tool_rx(
+                &planner_session,
+                &mut planner_writer,
+                planner_tool_rx,
+            )
             .await
         {
             Ok(output) => output,

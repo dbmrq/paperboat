@@ -4,8 +4,8 @@
 //! for constructing mock test data programmatically.
 
 use super::types::{
-    MockAgentSession, MockMcpToolCall, MockSessionUpdate, MockSuggestedTask, MockToolCallResponse,
-    MockToolResponseData, MockToolResult, MockToolType,
+    MockAgentSession, MockAgentSpec, MockMcpToolCall, MockSessionUpdate, MockSuggestedTask,
+    MockToolCallResponse, MockToolResponseData, MockToolResult, MockToolType, MockWaitMode,
 };
 
 // ============================================================================
@@ -107,6 +107,27 @@ impl MockSessionBuilder {
         self
     }
 
+    /// Add a custom session update.
+    ///
+    /// This is useful for lifecycle edges like `session_finished`, CLI `complete`,
+    /// or uncommon notifications involved in race-condition tests.
+    pub fn with_custom_update(
+        mut self,
+        session_update: impl Into<String>,
+        content: Option<String>,
+        delay_ms: u64,
+    ) -> Self {
+        self.updates.push(MockSessionUpdate {
+            delay_ms,
+            session_update: session_update.into(),
+            content,
+            tool_title: None,
+            tool_result: None,
+            inject_mcp_tool_call: None,
+        });
+        self
+    }
+
     /// Add a tool call update.
     pub fn with_tool_call(mut self, tool_title: impl Into<String>, delay_ms: u64) -> Self {
         self.updates.push(MockSessionUpdate {
@@ -156,6 +177,11 @@ impl MockSessionBuilder {
         self
     }
 
+    /// Add a `session_finished` update.
+    pub fn with_session_finished(self, delay_ms: u64) -> Self {
+        self.with_custom_update("session_finished", None, delay_ms)
+    }
+
     /// Add a `create_task` MCP tool call injection.
     /// This simulates the planner agent calling `create_task()`.
     pub fn with_create_task(
@@ -174,6 +200,30 @@ impl MockSessionBuilder {
                 name: name.into(),
                 description: description.into(),
                 dependencies: vec![],
+            }),
+        });
+        self
+    }
+
+    /// Add a `create_task` MCP tool call injection with explicit dependencies.
+    /// This simulates the planner agent creating a task that depends on prior work.
+    pub fn with_create_task_dependencies(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        dependencies: Vec<String>,
+        delay_ms: u64,
+    ) -> Self {
+        self.updates.push(MockSessionUpdate {
+            delay_ms,
+            session_update: "agent_message_chunk".to_string(),
+            content: Some("[calling create_task]".to_string()),
+            tool_title: None,
+            tool_result: None,
+            inject_mcp_tool_call: Some(MockMcpToolCall::CreateTask {
+                name: name.into(),
+                description: description.into(),
+                dependencies,
             }),
         });
         self
@@ -232,7 +282,33 @@ impl MockSessionBuilder {
             content: Some("[calling implement]".to_string()),
             tool_title: None,
             tool_result: None,
-            inject_mcp_tool_call: Some(MockMcpToolCall::SpawnAgents { task: task.into() }),
+            inject_mcp_tool_call: Some(MockMcpToolCall::SpawnAgents {
+                task: Some(task.into()),
+                agents: vec![],
+                wait: MockWaitMode::All,
+            }),
+        });
+        self
+    }
+
+    /// Add a multi-agent `spawn_agents` MCP tool call injection.
+    pub fn with_spawn_agents(
+        mut self,
+        agents: Vec<MockAgentSpec>,
+        wait: MockWaitMode,
+        delay_ms: u64,
+    ) -> Self {
+        self.updates.push(MockSessionUpdate {
+            delay_ms,
+            session_update: "agent_message_chunk".to_string(),
+            content: Some("[calling spawn_agents]".to_string()),
+            tool_title: None,
+            tool_result: None,
+            inject_mcp_tool_call: Some(MockMcpToolCall::SpawnAgents {
+                task: None,
+                agents,
+                wait,
+            }),
         });
         self
     }

@@ -34,8 +34,9 @@ mod unit_tests;
 
 // From types module
 pub use types::{
-    AgentType, MockAcpError, MockAcpResponse, MockAgentSession, MockMcpToolCall, MockSessionUpdate,
-    MockToolCallResponse, MockToolResponseData, MockToolResult, MockToolType,
+    AgentType, MockAcpError, MockAcpResponse, MockAgentSession, MockAgentSpec, MockMcpToolCall,
+    MockSessionUpdate, MockToolCallResponse, MockToolResponseData, MockToolResult, MockToolType,
+    MockWaitMode,
 };
 
 // From scenario module

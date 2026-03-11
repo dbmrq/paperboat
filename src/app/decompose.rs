@@ -95,10 +95,6 @@ impl App {
 
     /// Inner decompose logic that can fail.
     pub(crate) async fn handle_decompose_inner(&mut self, task: &str) -> Result<String> {
-        eprintln!(
-            "[handle_decompose_inner] START: {}",
-            truncate_for_log(task, 50)
-        );
         let start_time = std::time::Instant::now();
         let parent_depth = self.current_scope.depth();
         tracing::info!(
@@ -140,8 +136,7 @@ impl App {
             .context("Failed to create subtask planner writer")?;
 
         // 1. Spawn planner to create plan
-        let (planner_session, planner_model, planner_prompt) = match self.spawn_planner(task).await
-        {
+        let mut planner_spawn_result = match self.spawn_planner(task).await {
             Ok(result) => result,
             Err(e) => {
                 // Write error to planner log so it's not empty
@@ -164,6 +159,17 @@ impl App {
                 return Err(e);
             }
         };
+
+        // Extract session info and tool_rx
+        let planner_session = planner_spawn_result.session_id.clone();
+        let planner_model = planner_spawn_result.model.clone();
+        let planner_prompt = planner_spawn_result.prompt.clone();
+        let planner_tool_rx = planner_spawn_result.take_tool_rx();
+
+        // IMPORTANT: Keep planner_spawn_result alive until wait completes!
+        // The socket_handle inside it contains the listener task for MCP connections.
+        let _keep_planner_alive = planner_spawn_result;
+
         planner_writer.set_session_id(planner_session.clone());
         planner_writer.set_model(planner_model);
         if let Err(e) = planner_writer
@@ -176,17 +182,26 @@ impl App {
         planner_writer.emit_agent_started(task);
 
         // 2. Wait for planner to complete and collect output (with timeout)
-        eprintln!("[handle_decompose_inner] Waiting for sub-planner session: {planner_session}");
+        // Pass the planner's tool_rx so MCP tool calls are received from the correct socket
+        tracing::debug!(
+            "[L{}] Waiting for sub-planner session: {}",
+            child_depth,
+            planner_session
+        );
         let planner_output = match self
-            .wait_for_session_output(&planner_session, &mut planner_writer)
+            .wait_for_session_output_with_tool_rx(
+                &planner_session,
+                &mut planner_writer,
+                planner_tool_rx,
+            )
             .await
         {
             Ok(output) => {
-                eprintln!("[handle_decompose_inner] Sub-planner completed successfully");
+                tracing::debug!("[L{}] Sub-planner completed successfully", child_depth);
                 output
             }
             Err(e) => {
-                eprintln!("[handle_decompose_inner] Sub-planner FAILED: {e}");
+                tracing::error!("[L{}] Sub-planner failed: {}", child_depth, e);
                 // Finalize planner log with failure status before returning
                 tracing::error!(
                     "[L{}] ❌ Subtask planner session failed: {}",
@@ -243,17 +258,17 @@ impl App {
             .context("Failed to create subtask orchestrator writer")?;
 
         // 4. Spawn child orchestrator with clean plan (not full planner output)
-        eprintln!("[handle_decompose_inner] Starting sub-orchestrator with plan");
+        tracing::debug!("[L{}] Starting sub-orchestrator with plan", child_depth);
         let result = match self
             .run_orchestrator_with_writer(&plan_to_execute, &mut orchestrator_writer)
             .await
         {
             Ok(res) => {
-                eprintln!("[handle_decompose_inner] Sub-orchestrator completed successfully");
+                tracing::debug!("[L{}] Sub-orchestrator completed successfully", child_depth);
                 res
             }
             Err(e) => {
-                eprintln!("[handle_decompose_inner] Sub-orchestrator FAILED: {e}");
+                tracing::error!("[L{}] Sub-orchestrator failed: {}", child_depth, e);
                 // Finalize orchestrator log with failure status before returning
                 tracing::error!("[L{}] ❌ Subtask orchestrator failed: {}", child_depth, e);
                 if let Err(finalize_err) = orchestrator_writer.finalize(false).await {
@@ -324,7 +339,6 @@ impl App {
             );
         }
 
-        eprintln!("[handle_decompose_inner] DONE - returning");
         Ok(format!(
             "Decomposed and executed. Result: {}",
             if result.success { "success" } else { "failure" }

@@ -23,7 +23,7 @@ use super::agent_tree_state::{AgentNode, AgentTreeState};
 // Re-export for backward compatibility (used by app.rs)
 pub use super::model_config_update::ModelConfigUpdate;
 use super::task_list_state::TaskListState;
-use super::widgets::{create_app_logs_state, SettingsState};
+use super::widgets::{create_app_logs_state, BackendSelectionState, SettingsState};
 
 // ============================================================================
 // Focus Management
@@ -124,6 +124,11 @@ pub struct TuiState {
     pub pending_config_update: Option<ModelConfigUpdate>,
     /// Logger widget state for tui-logger (target selector, level filtering)
     pub logger_state: TuiWidgetState,
+    /// Backend selection state for startup backend choice
+    pub backend_selection_state: BackendSelectionState,
+    /// Whether backends have been received from the main app
+    /// (used to prevent splash auto-dismiss until backends are known)
+    pub backends_received: bool,
 }
 
 // Manual Debug implementation because TuiWidgetState doesn't implement Debug
@@ -150,6 +155,7 @@ impl std::fmt::Debug for TuiState {
             .field("available_tiers", &self.available_tiers)
             .field("pending_config_update", &self.pending_config_update)
             .field("logger_state", &"<TuiWidgetState>")
+            .field("backend_selection_state", &self.backend_selection_state)
             .finish()
     }
 }
@@ -185,6 +191,8 @@ impl TuiState {
             available_tiers: Vec::new(),
             pending_config_update: None,
             logger_state: create_app_logs_state(),
+            backend_selection_state: BackendSelectionState::new(),
+            backends_received: false,
         }
     }
 
@@ -217,6 +225,8 @@ impl TuiState {
             available_tiers,
             pending_config_update: None,
             logger_state: create_app_logs_state(),
+            backend_selection_state: BackendSelectionState::new(),
+            backends_received: false,
         }
     }
 
@@ -369,10 +379,14 @@ impl TuiState {
             LogEvent::TaskStateChanged {
                 task_id,
                 new_status,
+                depth,
                 ..
             } => {
-                self.task_list_state
-                    .handle_task_state_changed(&task_id, &new_status);
+                self.task_list_state.handle_task_state_changed_at_depth(
+                    &task_id,
+                    &new_status,
+                    depth,
+                );
             }
 
             // Tool events update the message buffer for the agent (standalone lines)

@@ -601,6 +601,20 @@ pub trait AgentTransport: Send + Sync {
     fn take_notification_rx(&mut self) -> Option<mpsc::Receiver<Value>> {
         None
     }
+
+    /// Returns the transport kind for this transport.
+    ///
+    /// This is used to detect which transport type is being used, allowing
+    /// the application to make transport-specific decisions (e.g., using
+    /// unique sockets for CLI transports to prevent MCP server caching).
+    ///
+    /// # Returns
+    ///
+    /// The `TransportKind` for this transport. Defaults to `Acp` for
+    /// backward compatibility.
+    fn kind(&self) -> TransportKind {
+        TransportKind::Acp
+    }
 }
 
 // ============================================================================

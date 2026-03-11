@@ -9,6 +9,8 @@ use crate::mcp_server::{ToolCall, ToolResponse};
 use anyhow::Result;
 use std::collections::VecDeque;
 
+const PENDING_APP_RESPONSE_ERROR: &str = "__pending_app_tool_response__";
+
 // ============================================================================
 // Mock Tool Interceptor
 // ============================================================================
@@ -18,8 +20,10 @@ use std::collections::VecDeque;
 pub struct MockToolInterceptor {
     /// Queue of tool responses to return (consumed in order).
     pub(crate) response_queue: VecDeque<(MockToolType, crate::testing::MockToolResponseData)>,
-    /// Captured tool calls for assertions.
+    /// Legacy captured tool calls based on scripted mock responses.
     captured_calls: Vec<CapturedToolCall>,
+    /// Captured tool calls with the actual responses returned by the app.
+    app_captured_calls: Vec<CapturedToolCall>,
     /// Counter for tracking exhaustion errors.
     exhausted_count: usize,
 }
@@ -36,6 +40,7 @@ impl MockToolInterceptor {
         Self {
             response_queue,
             captured_calls: Vec::new(),
+            app_captured_calls: Vec::new(),
             exhausted_count: 0,
         }
     }
@@ -45,6 +50,7 @@ impl MockToolInterceptor {
         Self {
             response_queue: VecDeque::new(),
             captured_calls: Vec::new(),
+            app_captured_calls: Vec::new(),
             exhausted_count: 0,
         }
     }
@@ -62,6 +68,46 @@ impl MockToolInterceptor {
     /// Get all captured tool calls.
     pub fn captured_calls(&self) -> &[CapturedToolCall] {
         &self.captured_calls
+    }
+
+    /// Get all tool calls captured with the actual app responses.
+    pub fn app_captured_calls(&self) -> &[CapturedToolCall] {
+        &self.app_captured_calls
+    }
+
+    /// Record a tool call before the app has produced a response.
+    pub fn begin_app_call(&mut self, call: ToolCall, request_id: String) {
+        self.app_captured_calls.push(CapturedToolCall {
+            call,
+            response: ToolResponse::failure(request_id, PENDING_APP_RESPONSE_ERROR.to_string()),
+        });
+    }
+
+    /// Update the captured actual response for a previously recorded app call.
+    pub fn finish_app_call(&mut self, request_id: &str, response: ToolResponse) {
+        if let Some(captured) = self
+            .app_captured_calls
+            .iter_mut()
+            .rev()
+            .find(|captured| captured.response.request_id == request_id)
+        {
+            captured.response = response;
+        } else {
+            tracing::warn!(
+                "Received app tool response for unknown request_id: {}",
+                request_id
+            );
+        }
+    }
+
+    /// Count app calls that have not yet received their final response.
+    pub fn pending_app_calls(&self) -> usize {
+        self.app_captured_calls
+            .iter()
+            .filter(|captured| {
+                captured.response.error.as_deref() == Some(PENDING_APP_RESPONSE_ERROR)
+            })
+            .count()
     }
 
     /// Get a response for a tool call, returning an error if exhausted.

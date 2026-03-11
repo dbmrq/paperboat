@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
+use tokio::time::sleep;
 
 // ============================================================================
 // Test Harness
@@ -175,9 +176,20 @@ impl TestHarness {
         // Shutdown the app to clean up resources
         app.shutdown().await.ok();
 
+        // Give the mock ACP response-recording tasks a brief chance to observe the
+        // app's final tool responses before we snapshot captured calls.
+        for _ in 0..20 {
+            let pending = self.tool_interceptor.lock().await.pending_app_calls();
+            if pending == 0 {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+
         // Collect captured data from the interceptor
         let interceptor = self.tool_interceptor.lock().await;
         let tool_calls = interceptor.captured_calls().to_vec();
+        let app_tool_calls = interceptor.app_captured_calls().to_vec();
 
         // Build list of sessions created
         let mut sessions_created = Vec::new();
@@ -197,6 +209,7 @@ impl TestHarness {
         Ok(TestRunResult {
             task_result,
             tool_calls,
+            app_tool_calls,
             prompts_sent: Vec::new(), // Would need to capture from mock clients
             sessions_created,
             final_tasks,

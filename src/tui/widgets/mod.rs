@@ -11,10 +11,12 @@
 //! - [`render_settings_overlay`] - Modal settings overlay for model configuration
 //! - [`render_app_logs`] - Application logs with tui-logger filtering and controls
 //! - [`render_splash_screen`] - Animated splash screen with paperboat ASCII art
+//! - [`render_backend_selection_popup`] - Backend selection popup for startup
 
 mod agent_output;
 mod agent_tree;
 mod app_logs;
+mod backend_selection;
 mod help;
 mod settings;
 mod splash;
@@ -27,6 +29,7 @@ pub use agent_output::{
 };
 pub use agent_tree::{handle_agent_tree_key, render_agent_tree};
 pub use app_logs::{create_app_logs_state, render_app_logs};
+pub use backend_selection::{render_backend_selection_popup, BackendSelectionState};
 pub use help::render_help_overlay;
 #[allow(unused_imports)] // Part of public API for widget extensibility
 pub use settings::{render_settings_overlay, SelectedAgentType, SettingsState};

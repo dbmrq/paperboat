@@ -93,6 +93,21 @@ pub fn is_transient_error(error: &anyhow::Error) -> bool {
     false
 }
 
+/// Check if an error indicates a model is not available.
+///
+/// This is used to trigger fallback to the next model in the chain.
+/// We detect phrases like "Cannot use this model" from Cursor.
+pub fn is_model_not_available_error(error: &anyhow::Error) -> bool {
+    let error_str = format!("{error:#}").to_lowercase();
+
+    error_str.contains("cannot use this model")
+        || error_str.contains("model not found")
+        || error_str.contains("model not available")
+        || error_str.contains("invalid model")
+        || error_str.contains("unknown model")
+        || error_str.contains("unsupported model")
+}
+
 /// Execute an async operation with retry logic.
 ///
 /// # Arguments

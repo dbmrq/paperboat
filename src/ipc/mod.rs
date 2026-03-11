@@ -105,8 +105,7 @@ pub(crate) mod windows;
 
 // Re-export public API
 pub use address::IpcAddress;
-pub use error::IpcError;
-pub use stream::{IpcListener, IpcReadHalf, IpcStream, IpcWriteHalf};
+pub use stream::{IpcListener, IpcStream};
 
 // Re-export platform-specific utilities
 #[cfg(unix)]

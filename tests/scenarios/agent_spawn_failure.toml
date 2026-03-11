@@ -1,0 +1,148 @@
+# ============================================================================
+# Agent Spawn Failure Scenario
+# ============================================================================
+#
+# Purpose: Tests behavior when agent spawn fails (model creation error,
+# session startup failure). The system should mark the task as failed
+# and allow the orchestrator to continue.
+#
+# Expected Flow:
+#   1. Planner creates 2 tasks
+#   2. Orchestrator spawns agent for task 1 - FAILS (simulated startup error)
+#   3. Task 1 is marked as failed
+#   4. Orchestrator handles failure, spawns agent for task 2
+#   5. Task 2 succeeds
+#   6. Orchestrator completes with partial success
+#
+# Test Assertions:
+#   - Task 1 status is "failed" after spawn error
+#   - Task 2 status is "completed"
+#   - Orchestrator receives error notification
+#   - System remains functional after spawn failure
+#
+# Sessions Defined: 1 planner, 1 orchestrator, 1 implementer
+# ============================================================================
+
+[scenario]
+name = "agent_spawn_failure"
+description = "Test handling when agent spawn fails at startup"
+
+# Planner session
+[[planner_sessions]]
+session_id = "planner-001"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Creating two tasks.\n"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Failing spawn task"
+description = "This agent will fail to spawn"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Second task]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Successful task"
+description = "This agent will succeed"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Done]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Plan created"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Orchestrator session
+[[orchestrator_sessions]]
+session_id = "orchestrator-001"
+
+# First spawn fails
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Spawning first agent (will fail)...\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "spawn_agents"
+task = "Failing spawn task"
+
+# Orchestrator handles failure, spawns second
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "First spawn failed, trying second task...\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "spawn_agents"
+task = "Successful task"
+
+# Complete with partial success
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Completing with 1/2 tasks successful.\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "1 task succeeded, 1 failed to spawn"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Only second implementer runs
+[[implementer_sessions]]
+session_id = "implementer-001"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Executing successful task.\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Done]"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Task completed"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Mock responses - first fails, second succeeds
+[[mock_tool_responses]]
+tool_type = "SpawnAgents"
+task_pattern = ".*Failing spawn.*"
+
+[mock_tool_responses.response]
+success = false
+error = "Model initialization failed: API key invalid"
+
+[[mock_tool_responses]]
+tool_type = "SpawnAgents"
+task_pattern = ".*Successful task.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Successful task completed"
+

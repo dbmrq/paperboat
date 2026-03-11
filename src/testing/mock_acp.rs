@@ -6,9 +6,9 @@
 
 use crate::acp::{AcpClientTrait, SessionMode, SessionNewResponse};
 use crate::app::ToolMessage;
-use crate::mcp_server::{ToolCall, ToolRequest};
+use crate::mcp_server::{AgentSpec, ToolCall, ToolRequest, ToolResponse, WaitMode};
 use crate::testing::{
-    AgentType, MockAgentSession, MockMcpToolCall, MockScenario, MockSessionUpdate,
+    AgentType, MockAcpResponse, MockAgentSession, MockMcpToolCall, MockScenario, MockSessionUpdate,
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -60,6 +60,9 @@ pub struct MockAcpClient {
     /// Track created sessions for test assertions.
     sessions_created: Vec<String>,
 
+    /// Scripted ACP method responses (for retry/fallback/error-path tests).
+    acp_responses: VecDeque<MockAcpResponse>,
+
     /// Flag indicating shutdown was called.
     shutdown_called: bool,
 
@@ -85,6 +88,7 @@ impl MockAcpClient {
             orchestrator_index: 0,
             implementer_index: 0,
             sessions_created: Vec::new(),
+            acp_responses: scenario.mock_acp_responses.clone().into(),
             shutdown_called: false,
             tool_tx: None,
             tool_interceptor: None,
@@ -156,6 +160,14 @@ impl MockAcpClient {
                 }
             }
         }
+    }
+
+    /// Consume the next scripted ACP response for a specific method.
+    fn take_acp_response(&mut self, method: &str) -> Option<MockAcpResponse> {
+        self.acp_responses
+            .iter()
+            .position(|response| response.method == method)
+            .and_then(|index| self.acp_responses.remove(index))
     }
 
     /// Determine agent type from model name and MCP server configuration.
@@ -268,20 +280,35 @@ impl MockAcpClient {
                         .collect()
                 }),
             },
-            MockMcpToolCall::SpawnAgents { task } => {
-                // Create a single-agent spawn for backward compatibility
-                ToolCall::SpawnAgents {
-                    agents: vec![crate::mcp_server::AgentSpec {
+            MockMcpToolCall::SpawnAgents { task, agents, wait } => ToolCall::SpawnAgents {
+                agents: if agents.is_empty() {
+                    vec![AgentSpec {
                         role: Some("implementer".to_string()),
-                        task: Some(task.clone()),
+                        task: task.clone(),
                         task_id: None,
                         prompt: None,
                         tools: None,
                         model_complexity: None,
-                    }],
-                    wait: crate::mcp_server::WaitMode::All,
-                }
-            }
+                    }]
+                } else {
+                    agents
+                        .iter()
+                        .map(|agent| AgentSpec {
+                            role: agent.role.clone(),
+                            task: agent.task.clone(),
+                            task_id: agent.task_id.clone(),
+                            prompt: agent.prompt.clone(),
+                            tools: agent.tools.clone(),
+                            model_complexity: agent.model_complexity,
+                        })
+                        .collect()
+                },
+                wait: match wait {
+                    crate::testing::MockWaitMode::All => WaitMode::All,
+                    crate::testing::MockWaitMode::Any => WaitMode::Any,
+                    crate::testing::MockWaitMode::None => WaitMode::None,
+                },
+            },
             MockMcpToolCall::Decompose { task } => ToolCall::Decompose {
                 task_id: None,
                 task: Some(task.clone()),
@@ -294,19 +321,31 @@ impl MockAcpClient {
 
         let request_id = uuid::Uuid::new_v4().to_string();
 
-        // Record the tool call in the interceptor (this captures it for assertions)
-        // For create_task and complete, the interceptor handles them specially.
-        // For spawn_agents/decompose, the interceptor returns a mock response.
+        // Record the tool call in the interceptor for legacy scripted assertions
+        // and for actual app-response assertions.
         {
             let mut guard = interceptor.lock().await;
-            // Just record the call - we don't need the response here since
-            // the App will handle it internally for create_task/complete
             let _ = guard.get_response(&tool_call, &request_id);
+            guard.begin_app_call(tool_call.clone(), request_id.clone());
         }
 
-        // Create a oneshot channel for the response
-        // We spawn a task to handle the response so we don't block
-        let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+        // Create a oneshot channel for the actual app response and record it asynchronously.
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let interceptor_for_response = Arc::clone(interceptor);
+        let request_id_for_response = request_id.clone();
+        tokio::spawn(async move {
+            let response = match response_rx.await {
+                Ok(response) => response,
+                Err(_) => ToolResponse::failure(
+                    request_id_for_response.clone(),
+                    "App dropped tool response channel".to_string(),
+                ),
+            };
+            interceptor_for_response
+                .lock()
+                .await
+                .finish_app_call(&request_id_for_response, response);
+        });
 
         // Send the tool request to the App
         let request = ToolRequest {
@@ -320,7 +359,19 @@ impl MockAcpClient {
                 request,
                 response_tx,
             })
-            .map_err(|e| anyhow!("Failed to send tool call (channel full or closed): {e}"))?;
+            .map_err(|e| {
+                let message = format!("Failed to send tool call (channel full or closed): {e}");
+                let interceptor = Arc::clone(interceptor);
+                let request_id = request_id.clone();
+                let message_for_task = message.clone();
+                tokio::spawn(async move {
+                    interceptor.lock().await.finish_app_call(
+                        &request_id,
+                        ToolResponse::failure(request_id.clone(), message_for_task),
+                    );
+                });
+                anyhow!(message)
+            })?;
 
         Ok(())
     }
@@ -365,7 +416,11 @@ fn mock_session_update_to_notification(session_id: &str, update: &MockSessionUpd
 #[async_trait]
 impl AcpClientTrait for MockAcpClient {
     async fn initialize(&mut self) -> Result<()> {
-        // Mock initialization always succeeds
+        if let Some(response) = self.take_acp_response("initialize") {
+            if let Some(error) = response.error {
+                return Err(anyhow!("Mock ACP initialize failed: {}", error.message));
+            }
+        }
         Ok(())
     }
 
@@ -376,6 +431,12 @@ impl AcpClientTrait for MockAcpClient {
         _cwd: &str,
         _mode: SessionMode,
     ) -> Result<SessionNewResponse> {
+        if let Some(response) = self.take_acp_response("session/new") {
+            if let Some(error) = response.error {
+                return Err(anyhow!("Mock ACP session/new failed: {}", error.message));
+            }
+        }
+
         // Determine agent type from model name and MCP server config
         let agent_type = self.agent_type_from_config(model, &mcp_servers);
 
@@ -399,6 +460,12 @@ impl AcpClientTrait for MockAcpClient {
     }
 
     async fn session_prompt(&mut self, session_id: &str, prompt: &str) -> Result<()> {
+        if let Some(response) = self.take_acp_response("session/prompt") {
+            if let Some(error) = response.error {
+                return Err(anyhow!("Mock ACP session/prompt failed: {}", error.message));
+            }
+        }
+
         // Capture the prompt for test assertions
         self.captured_prompts
             .push((session_id.to_string(), prompt.to_string()));
@@ -435,14 +502,8 @@ impl AcpClientTrait for MockAcpClient {
         // We use the LAST session in the stack - this is the most recently started session
         // which should be the one currently being processed
         let Some(current_session) = self.active_sessions.last().cloned() else {
-            eprintln!("[MockAcpClient::recv] No active session, stack empty");
             return Err(anyhow!("No active session"));
         };
-
-        eprintln!(
-            "[MockAcpClient::recv] session={}, stack={:?}",
-            current_session, self.active_sessions
-        );
 
         // Get the next update from the current session's queue
         let queue = self.session_queues.get_mut(&current_session);
@@ -481,9 +542,6 @@ impl AcpClientTrait for MockAcpClient {
                 && (session_update == "agent_turn_finished" || session_update == "session_finished")
             {
                 // This session is complete - remove it from active sessions
-                eprintln!(
-                    "[MockAcpClient::recv] Session {current_session} complete, removing from stack"
-                );
                 self.active_sessions.retain(|s| s != &current_session);
             }
 
@@ -590,5 +648,33 @@ mod tests {
         assert!(!client.shutdown_called);
         client.shutdown().await.unwrap();
         assert!(client.shutdown_called);
+    }
+
+    #[tokio::test]
+    async fn test_mock_acp_client_session_new_uses_scripted_error() {
+        let scenario = MockScenario {
+            mock_acp_responses: vec![MockAcpResponse {
+                method: "session/new".to_string(),
+                result: Value::Null,
+                error: Some(crate::testing::MockAcpError {
+                    code: -32000,
+                    message: "mcp server startup timeout".to_string(),
+                }),
+            }],
+            ..Default::default()
+        };
+
+        let mut client = MockAcpClient::from_scenario(&scenario);
+        client.initialize().await.unwrap();
+
+        let result = client
+            .session_new("implementer", vec![], "/tmp", SessionMode::Agent)
+            .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("mcp server startup timeout"));
     }
 }

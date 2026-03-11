@@ -1,0 +1,166 @@
+# ============================================================================
+# Wait Mode Any Scenario
+# ============================================================================
+#
+# Purpose: Tests spawn_agents with wait=any mode where the first agent to
+# complete determines the result, even if it fails.
+#
+# Expected Flow:
+#   1. Planner creates 2 tasks
+#   2. Orchestrator spawns 2 agents with wait=any
+#   3. First agent fails quickly
+#   4. wait=any returns immediately with failure result
+#   5. Second agent continues in background (but we don't wait for it)
+#   6. Orchestrator decides to complete with failure reported
+#
+# Test Assertions:
+#   - spawn_agents(wait=any) returns first completion (failure)
+#   - Second agent may or may not complete (background)
+#
+# Sessions Defined: 1 planner, 1 orchestrator, 2 implementers
+# ============================================================================
+
+[scenario]
+name = "wait_mode_any"
+description = "Test spawn_agents with wait=any returns first result"
+
+# Planner session
+[[planner_sessions]]
+session_id = "planner-001"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Creating parallel tasks.\n"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Quick task (fails fast)"
+description = "Task that fails quickly"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Creating second task]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Slow task (succeeds)"
+description = "Task that takes longer but succeeds"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Complete]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Plan created"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Orchestrator spawns both agents with wait=any
+[[orchestrator_sessions]]
+session_id = "orchestrator-001"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Spawning agents with wait=any...\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "spawn_agents"
+agents = [
+  { task_id = "task001" },
+  { task_id = "task002" }
+]
+wait = "any"
+
+# Skip remaining tasks and complete (regardless of wait=any result)
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "First agent result received, skipping remaining...\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "skip_tasks"
+task_ids = ["task001", "task002"]
+reason = "wait=any completed"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Complete]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Wait-any scenario complete"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# First implementer - fails fast
+[[implementer_sessions]]
+session_id = "implementer-001"
+
+[[implementer_sessions.updates]]
+delay_ms = 10
+session_update = "agent_message_chunk"
+content = "Quick failure!\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = false
+message = "Failed fast"
+
+[[implementer_sessions.updates]]
+delay_ms = 10
+session_update = "agent_turn_finished"
+
+# Second implementer - succeeds but is slower
+[[implementer_sessions]]
+session_id = "implementer-002"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "Taking more time...\n"
+
+[[implementer_sessions.updates]]
+delay_ms = 100
+session_update = "agent_message_chunk"
+content = "[Done]"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Slow success"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Mock responses - first fails, second succeeds
+[[mock_tool_responses]]
+tool_type = "SpawnAgents"
+task_pattern = ".*Quick task.*"
+
+[mock_tool_responses.response]
+success = false
+error = "Quick failure occurred"
+
+[[mock_tool_responses]]
+tool_type = "SpawnAgents"
+task_pattern = ".*Slow task.*"
+
+[mock_tool_responses.response]
+success = true
+summary = "Slow task completed"
+

@@ -1,0 +1,125 @@
+# ============================================================================
+# Early Socket Close Scenario
+# ============================================================================
+#
+# Purpose: Tests cleanup behavior when socket closes while agents are running.
+# The system should handle graceful shutdown without hanging.
+#
+# Expected Flow:
+#   1. Planner creates task
+#   2. Orchestrator spawns agent
+#   3. Implementer starts but socket closes early (simulated via error)
+#   4. System cleans up and reports appropriate status
+#
+# Test Assertions:
+#   - No hanging after socket close
+#   - Resources are cleaned up
+#   - Error is reported appropriately
+#
+# Sessions Defined: 1 planner, 1 orchestrator, 1 implementer (interrupted)
+# ============================================================================
+
+[scenario]
+name = "early_socket_close"
+description = "Test graceful handling of early socket close"
+
+# Planner session
+[[planner_sessions]]
+session_id = "planner-001"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Creating task.\n"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Socket close task"
+description = "Task that will be interrupted by socket close"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Done]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Plan created"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Orchestrator session
+[[orchestrator_sessions]]
+session_id = "orchestrator-001"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Spawning agent...\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "spawn_agents"
+task = "Socket close task"
+
+# Orchestrator handles disconnect, skips and completes
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Task interrupted, marking as skipped.\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "skip_tasks"
+task_ids = ["task001"]
+reason = "Socket disconnected"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Complete]"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = false
+message = "Socket closed early"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Implementer starts but encounters error during execution
+[[implementer_sessions]]
+session_id = "implementer-001"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Starting work...\n"
+
+# Simulated error during work - socket closes
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Connection lost"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = false
+message = "Connection closed unexpectedly"
+
+[[implementer_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Mock response (won't be reached due to error)
+[[mock_tool_responses]]
+tool_type = "SpawnAgents"
+task_pattern = ".*Socket close.*"
+
+[mock_tool_responses.response]
+success = false
+error = "Connection closed"
+

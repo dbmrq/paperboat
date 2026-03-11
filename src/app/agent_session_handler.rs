@@ -8,23 +8,26 @@ use super::router::SessionRouter;
 use super::socket::AgentSocketHandle;
 use super::spawn_config::AgentResult;
 use super::types::{format_duration_human, truncate_for_log};
-use crate::acp::{AcpClient, AcpClientTrait};
+use crate::backend::transport::AgentTransport;
 use crate::logging::AgentWriter;
 use crate::tasks::TaskManager;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
-/// Spawns a notification routing task for an agent's ACP client.
+/// Spawns a notification routing task for an agent transport.
 ///
-/// Routes messages from the agent's ACP client to the shared session router.
+/// Routes messages from the agent's transport to the shared session router.
 /// Returns true if the router was started successfully.
+///
+/// This works with any `AgentTransport` implementation (ACP or CLI),
+/// using the `take_notification_rx()` method which all transports implement.
 pub fn spawn_notification_router(
-    agent_acp: &mut AcpClient,
+    agent_transport: &mut dyn AgentTransport,
     session_router: Arc<RwLock<SessionRouter>>,
     agent_name: &str,
 ) -> bool {
-    let agent_notification_rx = agent_acp.take_notification_rx();
+    let agent_notification_rx = agent_transport.take_notification_rx();
     if let Some(notification_rx) = agent_notification_rx {
         let agent_id_for_log = agent_name.to_string();
         tokio::spawn(async move {
@@ -46,7 +49,7 @@ pub fn spawn_notification_router(
         true
     } else {
         tracing::warn!(
-            "[{}] Could not take notification channel from agent ACP client",
+            "[{}] Could not take notification channel from agent transport",
             agent_name
         );
         false
@@ -55,7 +58,9 @@ pub fn spawn_notification_router(
 
 /// Parameters for the agent handler task.
 pub struct AgentHandlerParams {
-    pub agent_acp: AcpClient,
+    /// The agent transport (boxed for ownership transfer to async task).
+    /// This is kept alive for the duration of the agent's execution.
+    pub agent_transport: Box<dyn AgentTransport>,
     pub socket_handle: AgentSocketHandle,
     pub session_rx: mpsc::Receiver<serde_json::Value>,
     pub timeout_duration: Duration,
@@ -72,7 +77,7 @@ pub struct AgentHandlerParams {
 /// Spawns the agent handler task that manages completion.
 pub fn spawn_agent_handler_task(params: AgentHandlerParams, mut impl_writer: AgentWriter) {
     let AgentHandlerParams {
-        agent_acp,
+        agent_transport,
         socket_handle,
         session_rx,
         timeout_duration,
@@ -87,8 +92,8 @@ pub fn spawn_agent_handler_task(params: AgentHandlerParams, mut impl_writer: Age
     } = params;
 
     tokio::spawn(async move {
-        // Keep agent_acp alive for the duration of the agent's execution.
-        let _agent_acp = agent_acp;
+        // Keep agent_transport alive for the duration of the agent's execution.
+        let _agent_transport = agent_transport;
 
         let start_time = std::time::Instant::now();
 
@@ -202,6 +207,137 @@ fn log_completion_status(
             role,
             elapsed_str,
             truncate_for_log(task, 80)
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::socket::setup_agent_socket;
+    use crate::logging::{AgentType, AgentWriter};
+    use crate::tasks::TaskStatus;
+    use crate::testing::MockTransport;
+    use tempfile::tempdir;
+    use tokio::sync::{broadcast, oneshot};
+
+    #[tokio::test]
+    async fn spawn_agent_handler_task_marks_task_failed_and_unregisters_session() {
+        let dir = tempdir().expect("create temp dir");
+        let log_path = dir.path().join("implementer-001.log");
+        let (event_tx, _) = broadcast::channel(16);
+        let writer = AgentWriter::new(
+            log_path,
+            AgentType::Implementer { index: 1 },
+            event_tx.clone(),
+            0,
+        )
+        .await
+        .expect("create writer");
+
+        let session_router = Arc::new(RwLock::new(SessionRouter::new()));
+        let task_manager = Arc::new(RwLock::new(TaskManager::new(event_tx)));
+
+        let task_id = {
+            let mut tm = task_manager.write().await;
+            let task_id = tm.create(
+                "Retry implementer startup",
+                "Propagate concurrent agent startup failures",
+                vec![],
+            );
+            tm.update_status(
+                &task_id,
+                &TaskStatus::InProgress {
+                    agent_session: Some("implementer-001".to_string()),
+                },
+            );
+            task_id
+        };
+
+        let session_id = "impl-session-001".to_string();
+        let session_rx = {
+            let mut router = session_router.write().await;
+            router.register(&session_id)
+        };
+
+        let socket_handle = setup_agent_socket("session-handler-failure")
+            .await
+            .expect("create socket");
+        let (result_tx, result_rx) = oneshot::channel();
+
+        spawn_agent_handler_task(
+            AgentHandlerParams {
+                agent_transport: Box::new(MockTransport::empty()),
+                socket_handle,
+                session_rx,
+                timeout_duration: Duration::from_secs(1),
+                role: "implementer".to_string(),
+                task: "Retry implementer startup".to_string(),
+                impl_name: "implementer-001".to_string(),
+                task_id: Some(task_id.clone()),
+                session_id: session_id.clone(),
+                session_router: Arc::clone(&session_router),
+                task_manager: Arc::clone(&task_manager),
+                result_tx,
+            },
+            writer,
+        );
+
+        let routed = {
+            let router = session_router.read().await;
+            router.route(serde_json::json!({
+                "method": "session/update",
+                "params": {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "session_finished"
+                    }
+                }
+            }))
+        };
+        assert!(routed, "session update should reach the registered handler");
+
+        let result = result_rx.await.expect("receive handler result");
+        assert!(!result.success);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("without calling complete()")
+        );
+
+        let task = task_manager
+            .read()
+            .await
+            .get(&task_id)
+            .cloned()
+            .expect("tracked task should remain available");
+        match task.status {
+            TaskStatus::Failed { error } => {
+                assert!(error.contains("without calling complete()"));
+            }
+            other => panic!("expected failed task status, got {other:?}"),
+        }
+
+        let routed_after_cleanup = {
+            let router = session_router.read().await;
+            router.route(serde_json::json!({
+                "method": "session/update",
+                "params": {
+                    "sessionId": "impl-session-001",
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {
+                            "text": "late message"
+                        }
+                    }
+                }
+            }))
+        };
+        assert!(
+            !routed_after_cleanup,
+            "session should be unregistered once the handler exits"
         );
     }
 }

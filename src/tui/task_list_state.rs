@@ -46,6 +46,11 @@ pub struct TaskListState {
 }
 
 impl TaskListState {
+    /// Build a stable internal key for a task occurrence in the hierarchy.
+    fn task_key(task_id: &str, depth: u32) -> String {
+        format!("{depth}:{task_id}")
+    }
+
     /// Creates a new empty task list state.
     #[must_use]
     pub fn new() -> Self {
@@ -70,13 +75,31 @@ impl TaskListState {
             depth,
         };
 
-        self.tasks.insert(task_id.clone(), task);
-        self.task_order.push(task_id);
+        let key = Self::task_key(&task_id, depth);
+        let is_new_task = self.tasks.insert(key.clone(), task).is_none();
+        if is_new_task {
+            self.task_order.push(key);
+        }
     }
 
-    /// Handles a `TaskStateChanged` event.
+    /// Handles a `TaskStateChanged` event at the default depth (0).
+    ///
+    /// This is a convenience wrapper for tasks without hierarchical depth.
+    /// For tasks with explicit depth, use [`handle_task_state_changed_at_depth`].
+    #[cfg(test)]
     pub fn handle_task_state_changed(&mut self, task_id: &str, new_status: &str) {
-        if let Some(task) = self.tasks.get_mut(task_id) {
+        self.handle_task_state_changed_at_depth(task_id, new_status, 0);
+    }
+
+    /// Handles a `TaskStateChanged` event for a task at a specific depth.
+    pub fn handle_task_state_changed_at_depth(
+        &mut self,
+        task_id: &str,
+        new_status: &str,
+        depth: u32,
+    ) {
+        let key = Self::task_key(task_id, depth);
+        if let Some(task) = self.tasks.get_mut(&key) {
             task.status = new_status.to_string();
         }
     }
@@ -106,7 +129,7 @@ impl TaskListState {
     #[cfg(test)]
     #[must_use]
     pub fn get_task(&self, task_id: &str) -> Option<&TaskDisplay> {
-        self.tasks.get(task_id)
+        self.tasks.values().find(|task| task.task_id == task_id)
     }
 
     /// Returns the currently selected task, if any.
@@ -178,6 +201,58 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_and_root_tasks_with_same_id_stay_distinct() {
+        let mut list = TaskListState::new();
+
+        list.handle_task_created(
+            "task001".to_string(),
+            "Root task".to_string(),
+            "Top-level work".to_string(),
+            vec![],
+            0,
+        );
+        list.handle_task_created(
+            "task001".to_string(),
+            "Nested task".to_string(),
+            "Child work".to_string(),
+            vec![],
+            1,
+        );
+
+        let tasks = list.tasks();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].name, "Root task");
+        assert_eq!(tasks[0].depth, 0);
+        assert_eq!(tasks[1].name, "Nested task");
+        assert_eq!(tasks[1].depth, 1);
+    }
+
+    #[test]
+    fn test_duplicate_task_created_same_depth_does_not_duplicate_order() {
+        let mut list = TaskListState::new();
+
+        list.handle_task_created(
+            "task001".to_string(),
+            "Original".to_string(),
+            "First version".to_string(),
+            vec![],
+            1,
+        );
+        list.handle_task_created(
+            "task001".to_string(),
+            "Updated".to_string(),
+            "Second version".to_string(),
+            vec![],
+            1,
+        );
+
+        let tasks = list.tasks();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].name, "Updated");
+        assert_eq!(tasks[0].depth, 1);
+    }
+
+    #[test]
     fn test_task_list_state_handle_state_changed() {
         let mut list = TaskListState::new();
 
@@ -193,6 +268,32 @@ mod tests {
 
         let task = list.get_task("task-1").unwrap();
         assert_eq!(task.status, "in_progress");
+    }
+
+    #[test]
+    fn test_task_state_change_uses_depth_to_update_correct_task() {
+        let mut list = TaskListState::new();
+
+        list.handle_task_created(
+            "task001".to_string(),
+            "Root task".to_string(),
+            "Top-level work".to_string(),
+            vec![],
+            0,
+        );
+        list.handle_task_created(
+            "task001".to_string(),
+            "Nested task".to_string(),
+            "Child work".to_string(),
+            vec![],
+            1,
+        );
+
+        list.handle_task_state_changed_at_depth("task001", "in_progress", 1);
+
+        let tasks = list.tasks();
+        assert_eq!(tasks[0].status, "pending");
+        assert_eq!(tasks[1].status, "in_progress");
     }
 
     #[test]

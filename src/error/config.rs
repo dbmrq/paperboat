@@ -8,10 +8,18 @@ use thiserror::Error;
 /// Known model aliases that can be used in configuration files.
 /// These are case-insensitive and will be resolved to actual model IDs.
 pub const KNOWN_MODEL_ALIASES: &[&str] = &[
-    "auto",   // Let the system choose
-    "opus",   // Highest capability
-    "sonnet", // Balanced
-    "haiku",  // Fastest/cheapest
+    "auto",         // Let the system choose
+    "opus",         // Highest capability
+    "sonnet",       // Balanced
+    "haiku",        // Fastest/cheapest
+    "gpt",          // OpenAI GPT (general)
+    "openai",       // Meta-tier for all OpenAI models
+    "codex",        // GPT Codex (coding)
+    "codex-mini",   // GPT Codex Mini
+    "gemini",       // Google Gemini Pro
+    "gemini-flash", // Google Gemini Flash
+    "grok",         // xAI Grok
+    "composer",     // Cursor Composer
     // Version-specific aliases
     "opus4",
     "opus4.5",

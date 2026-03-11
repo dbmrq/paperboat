@@ -23,72 +23,148 @@ use super::spawn_config::{build_custom_prompt, validate_no_unreplaced_placeholde
 use super::tool_filtering::{build_mcp_server_config, compute_removed_tools};
 use super::types::truncate_for_log;
 use super::App;
-use crate::acp::{AcpClientTrait, SessionMode};
-use crate::backend::transport::{SessionConfig, SessionInfo};
+use crate::acp::SessionMode;
+use crate::backend::transport::{
+    AgentTransport, AgentType, SessionConfig, SessionInfo, TransportKind,
+};
+use crate::backend::{Backend, TransportConfig};
 use crate::mcp_server::{AgentSpec, ResolvedAgentSpec, WaitMode};
 use crate::tasks::TaskStatus;
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-/// Spawn and initialize an ACP client with retry logic.
+/// Result of spawning an agent via sequential mode.
+pub struct AgentSession {
+    /// The session ID for the agent session
+    pub session_id: String,
+    /// The model used for this session
+    pub model: String,
+    /// The prompt sent to the agent
+    pub prompt: String,
+    /// Socket handle for CLI transport (must be kept alive during the session).
+    /// This field is intentionally not read directly - its presence keeps the socket listener
+    /// alive until the AgentSession is dropped.
+    #[allow(dead_code)]
+    socket_handle: Option<AgentSocketHandle>,
+    /// Tool receiver extracted from the socket handle (for passing to wait functions)
+    tool_rx: Option<super::types::ToolReceiver>,
+}
+
+impl AgentSession {
+    /// Take the tool receiver for use in wait_for_session_output.
+    /// Returns None if there's no CLI socket handle (e.g., ACP transport).
+    pub fn take_tool_rx(&mut self) -> Option<super::types::ToolReceiver> {
+        self.tool_rx.take()
+    }
+}
+
+/// Spawn and initialize an agent transport using the backend with model fallback.
 ///
-/// This function handles the common pattern of spawning an ACP client, initializing
-/// the connection, and creating a session - all with automatic retry for
-/// transient errors like MCP server startup failures.
-async fn spawn_acp_with_retry(
+/// This function handles the pattern of creating a transport via the backend,
+/// initializing it, and creating a session. It tries each model in the chain,
+/// with automatic retry for transient errors.
+///
+/// Returns (Box<dyn AgentTransport>, SessionInfo, actual_model_used) on success.
+async fn spawn_transport_with_retry(
+    backend: &dyn Backend,
+    transport_kind: TransportKind,
     request_timeout: Duration,
-    model: &str,
+    model_chain: &[String],
     mcp_servers: Vec<Value>,
     cwd: &str,
     agent_id: &str,
-) -> Result<(crate::acp::AcpClient, crate::acp::SessionNewResponse)> {
+) -> Result<(Box<dyn AgentTransport>, SessionInfo, String)> {
+    use super::retry::is_model_not_available_error;
+
     let retry_config = RetryConfig::from_env();
-    let operation_name = format!("spawn ACP session for {agent_id}");
 
-    retry_async(&retry_config, &operation_name, || {
-        let mcp_servers = mcp_servers.clone();
-        let model = model.to_string();
-        let cwd = cwd.to_string();
-        let agent_id = agent_id.to_string();
+    // Track the last error for reporting if all models fail
+    let mut last_error: Option<anyhow::Error> = None;
 
-        async move {
-            // Create a fresh ACP client instance
-            let mut agent_acp = crate::acp::AcpClient::spawn_with_timeout(
-                None, // Use default cache
-                request_timeout,
-            )
-            .await
-            .with_context(|| format!("Failed to spawn ACP client for agent_id={agent_id}"))?;
+    for model in model_chain {
+        let operation_name = format!(
+            "spawn {} session for {agent_id} with model {model}",
+            transport_kind.as_str()
+        );
 
-            // Initialize the ACP connection
-            agent_acp
-                .initialize()
-                .await
-                .with_context(|| format!("Failed to initialize ACP for agent_id={agent_id}"))?;
+        // Create transport config for this model
+        let config = TransportConfig::new(PathBuf::from(cwd))
+            .with_model(model.clone())
+            .with_request_timeout(request_timeout)
+            .with_mcp_servers(mcp_servers.clone());
 
-            // Create the session with MCP servers (Agent mode for full tool access)
-            let response = agent_acp
-                .session_new(&model, mcp_servers, &cwd, SessionMode::Agent)
-                .await
-                .with_context(|| format!("Failed to create ACP session for agent_id={agent_id}"))?;
+        // Try to create and initialize the transport
+        let result = retry_async(&retry_config, &operation_name, || {
+            let config = config.clone();
+            let model = model.clone();
+            let agent_id = agent_id.to_string();
 
-            Ok((agent_acp, response))
+            async move {
+                // Create a fresh transport instance via the backend
+                let mut transport = backend
+                    .create_transport(transport_kind, AgentType::Implementer, config.clone())
+                    .await
+                    .with_context(|| {
+                        format!("Failed to create transport for agent_id={agent_id}")
+                    })?;
+
+                // Initialize the transport connection
+                transport.initialize().await.with_context(|| {
+                    format!("Failed to initialize transport for agent_id={agent_id}")
+                })?;
+
+                // Create the session with MCP servers (Agent mode for full tool access)
+                let session_config =
+                    SessionConfig::new(model, config.workspace.to_string_lossy().to_string())
+                        .with_mcp_servers(config.mcp_servers)
+                        .with_mode(SessionMode::Agent);
+
+                let session_info = transport
+                    .create_session(session_config)
+                    .await
+                    .with_context(|| format!("Failed to create session for agent_id={agent_id}"))?;
+
+                Ok((transport, session_info))
+            }
+        })
+        .await;
+
+        match result {
+            Ok((transport, session_info)) => return Ok((transport, session_info, model.clone())),
+            Err(e) => {
+                if is_model_not_available_error(&e) {
+                    tracing::debug!(
+                        "Model '{}' not available for agent {}, trying next in chain...",
+                        model,
+                        agent_id
+                    );
+                    last_error = Some(e);
+                    continue; // Try next model
+                }
+                // Non-model error - propagate immediately
+                return Err(e);
+            }
         }
-    })
-    .await
+    }
+
+    // All models in the chain failed
+    Err(last_error
+        .unwrap_or_else(|| anyhow::anyhow!("No models in fallback chain"))
+        .context(format!(
+            "All models in fallback chain failed for agent {}: {:?}",
+            agent_id, model_chain
+        )))
 }
 
 impl App {
     /// Spawn an implementer agent (convenience wrapper for `spawn_agent_with_resolved_spec`).
-    /// Returns (`session_id`, `model`, `prompt`) so the model and prompt can be logged.
+    /// Returns an `AgentSession` containing session info and socket handle.
     #[tracing::instrument(skip(self), fields(agent_type = "implementer"))]
-    pub(crate) async fn spawn_implementer(
-        &mut self,
-        task: &str,
-    ) -> Result<(String, String, String)> {
+    pub(crate) async fn spawn_implementer(&mut self, task: &str) -> Result<AgentSession> {
         let spec = ResolvedAgentSpec {
             role: "implementer".to_string(),
             task: task.to_string(),
@@ -107,23 +183,44 @@ impl App {
     /// - Template roles (implementer, verifier, explorer): uses registry templates
     /// - Unknown roles: falls back to implementer behavior with warning
     ///
-    /// Returns (`session_id`, `model`, `prompt`) so the model and prompt can be logged.
+    /// Returns an `AgentSession` containing session info and socket handle.
+    /// The socket handle must be kept alive until the agent session completes.
     #[tracing::instrument(skip(self, spec), fields(agent_type = %spec.role, task_id = ?spec.task_id, session_id))]
     pub(crate) async fn spawn_agent_with_resolved_spec(
         &mut self,
         spec: &ResolvedAgentSpec,
-    ) -> Result<(String, String, String)> {
+    ) -> Result<AgentSession> {
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
-        // Get the path to the current binary and socket address
+        // Get the path to the current binary
         let binary_path =
             std::env::current_exe().context("Failed to get current executable path")?;
-        let socket_address_str = self
-            .socket_address
-            .as_ref()
-            .context("Socket not set up")?
-            .as_str()
-            .to_string();
+
+        // For CLI transport, create a unique socket to prevent MCP server caching.
+        // This ensures each agent session gets its own MCP server process with the
+        // correct agent type and tools.
+        let (socket_address_str, cli_socket_handle) =
+            if self.acp_worker.kind() == TransportKind::Cli {
+                let agent_id = format!("cli-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+                let socket_handle = setup_agent_socket(&agent_id).await.with_context(|| {
+                    format!("Failed to create unique socket for CLI agent: {agent_id}")
+                })?;
+                let addr = socket_handle.socket_address.as_str().to_string();
+                tracing::debug!(
+                    "🔌 Created unique socket for CLI worker: {} -> {}",
+                    agent_id,
+                    addr
+                );
+                (addr, Some(socket_handle))
+            } else {
+                let addr = self
+                    .socket_address
+                    .as_ref()
+                    .context("Socket not set up")?
+                    .as_str()
+                    .to_string();
+                (addr, None)
+            };
 
         // Determine prompt and removed_tools based on role
         // Note: context is empty string in sequential path (only used in concurrent spawning)
@@ -142,12 +239,12 @@ impl App {
         );
         let mcp_servers = vec![mcp_server];
 
-        // Resolve model: fallback chain -> tier -> auto resolution -> backend model string
-        let resolved_model_str = self.resolve_implementer_model(spec.model_complexity)?;
+        // Resolve model: fallback chain -> tier -> auto resolution -> backend model chain
+        let model_chain = self.resolve_implementer_model(spec.model_complexity)?;
 
-        // Create session with retry logic for transient MCP server startup errors
-        let response = self
-            .create_worker_session_with_retry(&resolved_model_str, mcp_servers, &cwd)
+        // Create session with retry logic and model fallback
+        let (response, actual_model) = self
+            .create_worker_session_with_retry(&model_chain, mcp_servers, &cwd)
             .await?;
 
         // Record session_id in the current span for tracing correlation
@@ -158,79 +255,129 @@ impl App {
             .send_prompt(&response.session_id, &prompt)
             .await?;
 
-        Ok((response.session_id, resolved_model_str, prompt))
+        // Extract tool_rx from the socket handle if present (for CLI transport)
+        let (socket_handle, tool_rx) = match cli_socket_handle {
+            Some(mut handle) => {
+                // Take the tool_rx out of the handle so we can pass it to wait_for_session_output
+                // We need to keep the handle alive (it has the listener task), but use its tool_rx
+                let rx = std::mem::replace(
+                    &mut handle.tool_rx,
+                    tokio::sync::mpsc::channel(1).1, // Replace with dummy receiver
+                );
+                (Some(handle), Some(rx))
+            }
+            None => (None, None),
+        };
+
+        Ok(AgentSession {
+            session_id: response.session_id,
+            model: actual_model,
+            prompt,
+            socket_handle,
+            tool_rx,
+        })
     }
 
-    /// Create a worker session with retry logic.
+    /// Create a worker session with model fallback chain and retry logic.
     ///
-    /// This handles transient MCP server startup errors by retrying the session
-    /// creation with exponential backoff.
+    /// This tries each model in the chain, and for each model:
+    /// - Handles transient MCP server startup errors with exponential backoff
+    /// - Falls back to the next model if "model not available" error occurs
+    ///
+    /// Returns (SessionInfo, actual_model_used) on success.
     async fn create_worker_session_with_retry(
         &mut self,
-        model: &str,
+        model_chain: &[String],
         mcp_servers: Vec<Value>,
         cwd: &str,
-    ) -> Result<SessionInfo> {
-        use super::retry::is_transient_error;
+    ) -> Result<(SessionInfo, String)> {
+        use super::retry::{is_model_not_available_error, is_transient_error};
 
         let retry_config = RetryConfig::from_env();
-        let mut attempt = 0;
-        let mut delay = retry_config.initial_delay;
 
-        loop {
-            attempt += 1;
+        // Track the last error for reporting if all models fail
+        let mut last_error: Option<anyhow::Error> = None;
 
-            // Create session config with Agent mode for full tool access
-            let config = SessionConfig::new(model, cwd)
-                .with_mcp_servers(mcp_servers.clone())
-                .with_mode(SessionMode::Agent);
+        for model in model_chain {
+            let mut attempt = 0;
+            let mut delay = retry_config.initial_delay;
 
-            match self.acp_worker.create_session(config).await {
-                Ok(response) => {
-                    if attempt > 1 {
-                        tracing::info!(
-                            "🔄 Worker create_session succeeded on attempt {}/{}",
-                            attempt,
-                            retry_config.max_retries + 1
-                        );
+            loop {
+                attempt += 1;
+
+                // Create session config with Agent mode for full tool access
+                let config = SessionConfig::new(model, cwd)
+                    .with_mcp_servers(mcp_servers.clone())
+                    .with_mode(SessionMode::Agent);
+
+                match self.acp_worker.create_session(config).await {
+                    Ok(response) => {
+                        if attempt > 1 {
+                            tracing::info!(
+                                "🔄 Worker create_session succeeded on attempt {}/{} with model {}",
+                                attempt,
+                                retry_config.max_retries + 1,
+                                model
+                            );
+                        }
+                        return Ok((response, model.clone()));
                     }
-                    return Ok(response);
-                }
-                Err(e) => {
-                    let is_transient = is_transient_error(&e);
-                    let can_retry = attempt <= retry_config.max_retries && is_transient;
+                    Err(e) => {
+                        // Check if model is not available - try next model
+                        if is_model_not_available_error(&e) {
+                            tracing::debug!(
+                                "Model '{}' not available, trying next in chain...",
+                                model
+                            );
+                            last_error = Some(e);
+                            break; // Move to next model in chain
+                        }
 
-                    if can_retry {
-                        tracing::warn!(
-                            "⚠️ Worker create_session failed (attempt {}/{}): {}. Retrying in {:?}...",
-                            attempt,
-                            retry_config.max_retries + 1,
-                            e,
-                            delay
-                        );
-                        tokio::time::sleep(delay).await;
+                        let is_transient = is_transient_error(&e);
+                        let can_retry = attempt <= retry_config.max_retries && is_transient;
 
-                        // Exponential backoff with cap
-                        delay = Duration::from_secs_f64(
-                            (delay.as_secs_f64() * retry_config.backoff_multiplier)
-                                .min(retry_config.max_delay.as_secs_f64()),
-                        );
-                    } else {
-                        let reason = if is_transient {
-                            "exhausted retries"
+                        if can_retry {
+                            tracing::warn!(
+                                "⚠️ Worker create_session failed (attempt {}/{}, model {}): {}. Retrying in {:?}...",
+                                attempt,
+                                retry_config.max_retries + 1,
+                                model,
+                                e,
+                                delay
+                            );
+                            tokio::time::sleep(delay).await;
+
+                            // Exponential backoff with cap
+                            delay = Duration::from_secs_f64(
+                                (delay.as_secs_f64() * retry_config.backoff_multiplier)
+                                    .min(retry_config.max_delay.as_secs_f64()),
+                            );
                         } else {
-                            "non-transient error"
-                        };
-                        tracing::error!(
-                            "❌ Worker create_session failed after {attempt} attempt(s) ({reason}): {e:#}",
-                        );
-                        return Err(e).context(format!(
-                            "Worker create_session failed after {attempt} attempt(s)"
-                        ));
+                            // Non-transient, non-model error - fail immediately
+                            let reason = if is_transient {
+                                "exhausted retries"
+                            } else {
+                                "non-transient error"
+                            };
+                            tracing::error!(
+                                "❌ Worker create_session failed after {attempt} attempt(s) ({reason}): {e:#}",
+                            );
+                            return Err(e).context(format!(
+                                "Worker create_session failed after {attempt} attempt(s)"
+                            ));
+                        }
                     }
                 }
             }
         }
+
+        // All models in the chain failed
+        Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("No models in fallback chain"))
+            .context(format!(
+                "All models in fallback chain failed: {:?}",
+                model_chain
+            )))
     }
 
     /// Spawn an agent with its own dedicated IPC endpoint.
@@ -238,11 +385,11 @@ impl App {
     /// This is used for concurrent agent execution where each agent needs
     /// its own IPC endpoint to receive tool call responses.
     ///
-    /// Returns (`session_id`, `model`, prompt, `AgentSocketHandle`, `AcpClient`) so the caller can:
+    /// Returns (`session_id`, `model`, prompt, `AgentSocketHandle`, `Box<dyn AgentTransport>`) so the caller can:
     /// - Log the model and prompt
     /// - Receive tool calls on the agent's dedicated socket
     /// - Clean up the socket when done
-    /// - Keep the `AcpClient` alive until the agent completes
+    /// - Keep the transport alive until the agent completes
     #[tracing::instrument(skip(self, spec, context), fields(agent_type = %spec.role, task_id = ?spec.task_id, session_id))]
     pub(crate) async fn spawn_agent_with_own_socket(
         &mut self,
@@ -253,7 +400,7 @@ impl App {
         String,
         String,
         AgentSocketHandle,
-        crate::acp::AcpClient,
+        Box<dyn AgentTransport>,
     )> {
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
@@ -310,13 +457,15 @@ impl App {
             socket_address_str
         );
 
-        // Resolve model: fallback chain -> tier -> auto resolution -> backend model string
-        let resolved_model_str = self.resolve_implementer_model(spec.model_complexity)?;
+        // Resolve model: fallback chain -> tier -> auto resolution -> backend model chain
+        let model_chain = self.resolve_implementer_model(spec.model_complexity)?;
 
-        // Spawn ACP client with retry logic for transient MCP server startup errors
-        let (mut agent_acp, response) = spawn_acp_with_retry(
+        // Spawn transport using the configured backend (respects cursor:cli vs auggie:acp)
+        let (mut agent_transport, session_info, actual_model) = spawn_transport_with_retry(
+            self.backend.as_ref(),
+            self.transport_kind,
             self.timeout_config.request_timeout,
-            &resolved_model_str,
+            &model_chain,
             mcp_servers,
             &cwd,
             &agent_id[..8],
@@ -324,7 +473,7 @@ impl App {
         .await?;
 
         // Record session_id in the current span for tracing correlation
-        tracing::Span::current().record("session_id", &response.session_id);
+        tracing::Span::current().record("session_id", &session_info.session_id);
         tracing::debug!(
             "🔨 {} prompt (with own socket, agent_id={}):\n{}",
             spec.role,
@@ -332,24 +481,24 @@ impl App {
             prompt
         );
 
-        agent_acp
-            .session_prompt(&response.session_id, &prompt)
+        agent_transport
+            .send_prompt(&session_info.session_id, &prompt)
             .await
             .with_context(|| {
                 format!(
                     "Failed to send prompt for agent_id={}, session_id={}",
                     &agent_id[..8],
-                    response.session_id
+                    session_info.session_id
                 )
             })?;
 
-        // Return the auggie instance so it stays alive while the agent runs
+        // Return the transport so it stays alive while the agent runs
         Ok((
-            response.session_id,
-            resolved_model_str,
+            session_info.session_id,
+            actual_model,
             prompt.clone(),
             socket_handle,
-            agent_acp,
+            agent_transport,
         ))
     }
 
@@ -567,29 +716,31 @@ impl App {
             tracing::warn!("Failed to write preliminary header: {}", e);
         }
 
-        // Spawn the agent with its own dedicated socket and auggie instance
+        // Spawn the agent with its own dedicated socket and transport
         let spawn_result = self.spawn_agent_with_own_socket(&resolved, context).await;
 
         // If spawn failed, log the error to the implementer log file before propagating
-        let (session_id, model, agent_prompt, socket_handle, mut agent_acp) = match spawn_result {
-            Ok(result) => result,
-            Err(e) => {
-                // Mark task as failed if spawn failed
-                if let Some(ref tid) = task_id {
-                    let mut tm = self.task_manager.write().await;
-                    tm.update_status(
-                        tid,
-                        &TaskStatus::Failed {
-                            error: format!("Agent spawn failed: {e}"),
-                        },
-                    );
+        let (session_id, model, agent_prompt, socket_handle, mut agent_transport) =
+            match spawn_result {
+                Ok(result) => result,
+                Err(e) => {
+                    // Mark task as failed if spawn failed
+                    if let Some(ref tid) = task_id {
+                        let mut tm = self.task_manager.write().await;
+                        tm.update_status(
+                            tid,
+                            &TaskStatus::Failed {
+                                // Use {:?} to include the full error chain
+                                error: format!("Agent spawn failed: {e:?}"),
+                            },
+                        );
+                    }
+                    // Write spawn error to the log file for debugging
+                    let _ = impl_writer.write_spawn_error(&e).await;
+                    let _ = impl_writer.finalize(false).await;
+                    return Err(e);
                 }
-                // Write spawn error to the log file for debugging
-                let _ = impl_writer.write_spawn_error(&e).await;
-                let _ = impl_writer.finalize(false).await;
-                return Err(e);
-            }
-        };
+            };
         impl_writer.set_session_id(session_id.clone());
         impl_writer.set_model(model);
         // Record session_id in the current span for tracing correlation
@@ -609,12 +760,16 @@ impl App {
         // Register session with router for ACP messages
         let session_rx = self.register_session(&session_id).await;
 
-        // Route agent ACP notifications to the session router
-        spawn_notification_router(&mut agent_acp, Arc::clone(&self.session_router), &impl_name);
+        // Route agent notifications to the session router
+        spawn_notification_router(
+            agent_transport.as_mut(),
+            Arc::clone(&self.session_router),
+            &impl_name,
+        );
 
         // Spawn handler task for this agent
         let handler_params = AgentHandlerParams {
-            agent_acp,
+            agent_transport,
             socket_handle,
             session_rx,
             timeout_duration: self.timeout_config.session_timeout,
@@ -690,16 +845,18 @@ impl App {
         }
     }
 
-    /// Resolve the implementer model configuration to an actual model string.
+    /// Resolve the implementer model configuration to a fallback chain of model strings.
     ///
     /// This method:
     /// 1. Resolves the fallback chain to a tier using `available_tiers`
     /// 2. If the tier is Auto, resolves it based on complexity
-    /// 3. Uses the backend to convert the tier to the actual model ID string
+    /// 3. Uses the backend to convert the tier to a list of model IDs to try
+    ///
+    /// Returns a vector of model strings to try in order (first is preferred).
     fn resolve_implementer_model(
         &self,
         complexity: Option<crate::mcp_server::ModelComplexity>,
-    ) -> Result<String> {
+    ) -> Result<Vec<String>> {
         // Step 1: Resolve fallback chain to a tier
         let tier = self
             .model_config
@@ -719,7 +876,430 @@ impl App {
             tier
         };
 
-        // Step 3: Convert tier to backend-specific model string
-        self.backend.resolve_tier(resolved_tier)
+        // Step 3: Convert tier to backend-specific model fallback chain with effort level
+        self.backend
+            .resolve_tier(resolved_tier, Some(self.model_config.implementer_effort))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::acp::AcpClientTrait;
+    use crate::backend::{AgentCacheType, Backend};
+    use crate::backend::transport::SessionUpdate;
+    use crate::logging::RunLogManager;
+    use crate::mcp_server::AgentSpec;
+    use crate::models::{EffortLevel, ModelConfig, ModelTier};
+    use crate::tasks::TaskStatus;
+    use crate::testing::{MockAcpClient, MockTransport};
+    use anyhow::{anyhow, Result};
+    use async_trait::async_trait;
+    use serial_test::serial;
+    use std::collections::{HashSet, VecDeque};
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum RecordedEvent {
+        CreateTransport { model: String },
+        Initialize { model: String },
+        CreateSession { model: String },
+    }
+
+    #[derive(Clone)]
+    struct TransportOutcome {
+        initialize_error: Option<&'static str>,
+        session_error: Option<&'static str>,
+        session_id: &'static str,
+    }
+
+    #[derive(Clone)]
+    enum AttemptOutcome {
+        CreateTransportError(&'static str),
+        Transport(TransportOutcome),
+    }
+
+    struct RecordingTransport {
+        model: String,
+        outcome: TransportOutcome,
+        events: Arc<Mutex<Vec<RecordedEvent>>>,
+    }
+
+    #[async_trait]
+    impl AgentTransport for RecordingTransport {
+        async fn initialize(&mut self) -> Result<()> {
+            self.events
+                .lock()
+                .expect("record initialize event")
+                .push(RecordedEvent::Initialize {
+                    model: self.model.clone(),
+                });
+
+            if let Some(error) = self.outcome.initialize_error {
+                return Err(anyhow!(error));
+            }
+
+            Ok(())
+        }
+
+        async fn create_session(&mut self, config: SessionConfig) -> Result<SessionInfo> {
+            self.events
+                .lock()
+                .expect("record create_session event")
+                .push(RecordedEvent::CreateSession {
+                    model: config.model.clone(),
+                });
+
+            if let Some(error) = self.outcome.session_error {
+                return Err(anyhow!(error));
+            }
+
+            Ok(SessionInfo::new(self.outcome.session_id))
+        }
+
+        async fn send_prompt(&mut self, _session_id: &str, _prompt: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn take_notifications(&mut self) -> Option<tokio::sync::mpsc::Receiver<SessionUpdate>> {
+            None
+        }
+
+        async fn respond_to_tool(
+            &mut self,
+            _session_id: &str,
+            _tool_use_id: &str,
+            _result: crate::backend::transport::ToolResult,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct RecordingBackend {
+        attempts: Arc<Mutex<VecDeque<AttemptOutcome>>>,
+        events: Arc<Mutex<Vec<RecordedEvent>>>,
+        fallback_chain: Vec<String>,
+    }
+
+    impl RecordingBackend {
+        fn new(attempts: Vec<AttemptOutcome>) -> Self {
+            Self {
+                attempts: Arc::new(Mutex::new(attempts.into())),
+                events: Arc::new(Mutex::new(Vec::new())),
+                fallback_chain: vec!["sonnet".to_string()],
+            }
+        }
+
+        fn with_fallback_chain(mut self, fallback_chain: Vec<String>) -> Self {
+            self.fallback_chain = fallback_chain;
+            self
+        }
+
+        fn events(&self) -> Vec<RecordedEvent> {
+            self.events.lock().expect("read recorded events").clone()
+        }
+    }
+
+    #[async_trait]
+    impl Backend for RecordingBackend {
+        fn name(&self) -> &'static str {
+            "recording"
+        }
+
+        fn check_auth(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn available_tiers(&self) -> Result<HashSet<ModelTier>> {
+            Ok([ModelTier::Sonnet].into_iter().collect())
+        }
+
+        fn resolve_tier(&self, _tier: ModelTier, _effort: Option<EffortLevel>) -> Result<Vec<String>> {
+            Ok(self.fallback_chain.clone())
+        }
+
+        async fn setup_mcp(&self, _socket_path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn cleanup_mcp(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn create_client(
+            &self,
+            _agent_type: AgentCacheType,
+            _cache_dir: Option<&str>,
+            _request_timeout: Duration,
+        ) -> Result<Box<dyn AcpClientTrait + Send>> {
+            Ok(Box::new(MockAcpClient::empty()))
+        }
+
+        fn setup_agent_cache(
+            &self,
+            _agent_type: AgentCacheType,
+            _removed_tools: &[&str],
+        ) -> Result<PathBuf> {
+            Ok(std::env::temp_dir())
+        }
+
+        async fn create_transport(
+            &self,
+            _kind: TransportKind,
+            _agent_type: AgentType,
+            config: TransportConfig,
+        ) -> Result<Box<dyn AgentTransport>> {
+            let model = config
+                .model
+                .clone()
+                .expect("transport model should be set for tests");
+
+            self.events
+                .lock()
+                .expect("record create_transport event")
+                .push(RecordedEvent::CreateTransport {
+                    model: model.clone(),
+                });
+
+            let outcome = self
+                .attempts
+                .lock()
+                .expect("pop scripted backend outcome")
+                .pop_front()
+                .expect("missing scripted backend attempt");
+
+            match outcome {
+                AttemptOutcome::CreateTransportError(error) => Err(anyhow!(error)),
+                AttemptOutcome::Transport(outcome) => Ok(Box::new(RecordingTransport {
+                    model,
+                    outcome,
+                    events: Arc::clone(&self.events),
+                })),
+            }
+        }
+
+        fn login_hint(&self) -> &'static str {
+            "recording login"
+        }
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn test_model_config() -> ModelConfig {
+        ModelConfig::new([ModelTier::Sonnet, ModelTier::Opus, ModelTier::Haiku].into_iter().collect())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn spawn_transport_retries_transient_session_creation_failure_in_order() {
+        let _retry_guard = EnvGuard::set("PAPERBOAT_SPAWN_RETRIES", "1");
+        let _delay_guard = EnvGuard::set("PAPERBOAT_SPAWN_RETRY_DELAY_MS", "0");
+
+        let backend = RecordingBackend::new(vec![
+            AttemptOutcome::Transport(TransportOutcome {
+                initialize_error: None,
+                session_error: Some("mcp server startup timeout"),
+                session_id: "unused-first",
+            }),
+            AttemptOutcome::Transport(TransportOutcome {
+                initialize_error: None,
+                session_error: None,
+                session_id: "worker-session-002",
+            }),
+        ]);
+
+        let (_transport, session, actual_model) = spawn_transport_with_retry(
+            &backend,
+            TransportKind::Acp,
+            Duration::from_secs(1),
+            &[String::from("sonnet")],
+            vec![],
+            "/tmp",
+            "agent-1234",
+        )
+        .await
+        .expect("transient create_session failure should retry");
+
+        assert_eq!(actual_model, "sonnet");
+        assert_eq!(session.session_id, "worker-session-002");
+        assert_eq!(
+            backend.events(),
+            vec![
+                RecordedEvent::CreateTransport {
+                    model: "sonnet".to_string(),
+                },
+                RecordedEvent::Initialize {
+                    model: "sonnet".to_string(),
+                },
+                RecordedEvent::CreateSession {
+                    model: "sonnet".to_string(),
+                },
+                RecordedEvent::CreateTransport {
+                    model: "sonnet".to_string(),
+                },
+                RecordedEvent::Initialize {
+                    model: "sonnet".to_string(),
+                },
+                RecordedEvent::CreateSession {
+                    model: "sonnet".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn spawn_transport_falls_back_to_next_model_without_retrying_same_model() {
+        let _retry_guard = EnvGuard::set("PAPERBOAT_SPAWN_RETRIES", "0");
+        let _delay_guard = EnvGuard::set("PAPERBOAT_SPAWN_RETRY_DELAY_MS", "0");
+
+        let backend = RecordingBackend::new(vec![
+            AttemptOutcome::Transport(TransportOutcome {
+                initialize_error: None,
+                session_error: Some("Cannot use this model"),
+                session_id: "unused-sonnet",
+            }),
+            AttemptOutcome::Transport(TransportOutcome {
+                initialize_error: None,
+                session_error: None,
+                session_id: "worker-session-opus",
+            }),
+        ]);
+
+        let (_transport, session, actual_model) = spawn_transport_with_retry(
+            &backend,
+            TransportKind::Cli,
+            Duration::from_secs(1),
+            &[String::from("sonnet"), String::from("opus")],
+            vec![],
+            "/tmp",
+            "agent-5678",
+        )
+        .await
+        .expect("model unavailability should fall back to the next model");
+
+        assert_eq!(actual_model, "opus");
+        assert_eq!(session.session_id, "worker-session-opus");
+        assert_eq!(
+            backend.events(),
+            vec![
+                RecordedEvent::CreateTransport {
+                    model: "sonnet".to_string(),
+                },
+                RecordedEvent::Initialize {
+                    model: "sonnet".to_string(),
+                },
+                RecordedEvent::CreateSession {
+                    model: "sonnet".to_string(),
+                },
+                RecordedEvent::CreateTransport {
+                    model: "opus".to_string(),
+                },
+                RecordedEvent::Initialize {
+                    model: "opus".to_string(),
+                },
+                RecordedEvent::CreateSession {
+                    model: "opus".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_async_marks_task_failed_and_logs_startup_error() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let run_dir = temp_dir.path().join("logs");
+        let log_manager =
+            Arc::new(RunLogManager::with_run_dir(run_dir.clone()).expect("create test run dir"));
+
+        let backend = RecordingBackend::new(vec![AttemptOutcome::CreateTransportError(
+            "backend session bootstrap exploded",
+        )])
+        .with_fallback_chain(vec!["sonnet".to_string()]);
+
+        let mut app = App::with_mock_transports(
+            Box::new(backend),
+            Box::new(MockTransport::empty()),
+            Box::new(MockTransport::empty()),
+            Box::new(MockTransport::empty()),
+            test_model_config(),
+            Arc::clone(&log_manager),
+        );
+
+        let task_id = {
+            let mut tm = app.task_manager.write().await;
+            tm.create("Tracked task", "Exercise startup failure propagation", vec![])
+        };
+
+        let spec = AgentSpec {
+            role: Some("implementer".to_string()),
+            task: None,
+            task_id: Some(task_id.clone()),
+            prompt: None,
+            tools: None,
+            model_complexity: None,
+        };
+
+        let error = app
+            .spawn_agent_async_with_context(&spec, "previous attempt failed")
+            .await
+            .expect_err("startup failure should propagate");
+
+        // Check if the error chain contains the expected message
+        let error_chain = format!("{error:?}");
+        assert!(
+            error_chain.contains("backend session bootstrap exploded"),
+            "Error chain should contain bootstrap failure: {error_chain}"
+        );
+
+        let task = app
+            .task_manager
+            .read()
+            .await
+            .get(&task_id)
+            .cloned()
+            .expect("tracked task should still exist");
+
+        match task.status {
+            TaskStatus::Failed { error } => {
+                assert!(error.contains("Agent spawn failed"));
+                assert!(error.contains("backend session bootstrap exploded"));
+            }
+            other => panic!("expected failed task status, got {other:?}"),
+        }
+
+        let implementer_log = run_dir.join("implementer-001.log");
+        let log_contents = std::fs::read_to_string(&implementer_log)
+            .expect("startup failure should still finalize an implementer log");
+        assert!(log_contents.contains("SPAWN FAILED"));
+        assert!(log_contents.contains("backend session bootstrap exploded"));
+        assert!(log_contents.contains("FAILURE"));
     }
 }

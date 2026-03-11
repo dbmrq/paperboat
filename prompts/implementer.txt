@@ -22,3 +22,5 @@ Use the custom MCP tool provided to signal completion, including:
   - Tests that should be added
 
 By leaving notes and suggesting tasks, you help the system continuously improve rather than just completing isolated work.
+
+If the main output of your task is information, make sure to write it to a file so that other agents can easily access it.

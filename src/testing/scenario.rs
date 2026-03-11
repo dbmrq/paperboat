@@ -60,6 +60,9 @@ pub struct ScenarioMetadata {
 impl MockScenario {
     /// Load a scenario from a TOML file.
     ///
+    /// For relative paths, resolves against `CARGO_MANIFEST_DIR` to ensure tests
+    /// work regardless of the current working directory.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
@@ -67,7 +70,18 @@ impl MockScenario {
     /// - The file contains invalid TOML syntax
     /// - The TOML does not conform to the expected scenario schema
     pub fn from_file(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path)?;
+        // Resolve relative paths against CARGO_MANIFEST_DIR to handle tests
+        // that may change the current working directory
+        let resolved_path = if path.is_relative() {
+            if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+                std::path::PathBuf::from(manifest_dir).join(path)
+            } else {
+                path.to_path_buf()
+            }
+        } else {
+            path.to_path_buf()
+        };
+        let content = std::fs::read_to_string(&resolved_path)?;
         Self::parse(&content)
     }
 

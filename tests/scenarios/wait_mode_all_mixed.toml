@@ -1,0 +1,167 @@
+# ============================================================================
+# Wait Mode All Mixed Success/Failure Scenario
+# ============================================================================
+#
+# Purpose: Tests spawn_agents with wait=all (default) mode where multiple
+# agents are spawned and we wait for all to complete. Tests mixed success
+# and failure results.
+#
+# Expected Flow:
+#   1. Planner creates 3 tasks
+#   2. Orchestrator spawns 3 agents with wait=all (default)
+#   3. Agent 1: succeeds
+#   4. Agent 2: fails
+#   5. Agent 3: succeeds
+#   6. wait=all returns with mixed results
+#   7. Orchestrator handles failures appropriately
+#
+# Test Assertions:
+#   - All 3 agents complete before spawn_agents returns
+#   - Mixed results are reported
+#   - Orchestrator can access each result individually
+#
+# Sessions Defined: 1 planner, 1 orchestrator, 3 implementers
+# ============================================================================
+
+[scenario]
+name = "wait_mode_all_mixed"
+description = "Test spawn_agents with wait=all under mixed success/failure"
+
+# Planner session
+[[planner_sessions]]
+session_id = "planner-001"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Creating three tasks for parallel execution.\n"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Task A (success)"
+description = "Task that succeeds"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Task B]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Task B (failure)"
+description = "Task that fails"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Task C]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "create_task"
+name = "Task C (success)"
+description = "Another task that succeeds"
+dependencies = []
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "[Done planning]"
+
+[planner_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Created 3 tasks"
+
+[[planner_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Orchestrator spawns all 3 agents with wait=all (implicit)
+[[orchestrator_sessions]]
+session_id = "orchestrator-001"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "Spawning 3 agents, waiting for all...\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "spawn_agents"
+agents = [
+  { task_id = "task001" },
+  { task_id = "task002" },
+  { task_id = "task003" }
+]
+# wait = "all" is the default
+
+# After all complete, orchestrator marks remaining as done
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_message_chunk"
+content = "All agents finished. Task B failed but we'll proceed.\n"
+
+[orchestrator_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "2/3 tasks succeeded, 1 failed"
+
+[[orchestrator_sessions.updates]]
+delay_ms = 50
+session_update = "agent_turn_finished"
+
+# Implementer A - succeeds
+[[implementer_sessions]]
+session_id = "implementer-001"
+
+[[implementer_sessions.updates]]
+delay_ms = 30
+session_update = "agent_message_chunk"
+content = "Task A complete.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Success A"
+
+[[implementer_sessions.updates]]
+delay_ms = 10
+session_update = "agent_turn_finished"
+
+# Implementer B - fails
+[[implementer_sessions]]
+session_id = "implementer-002"
+
+[[implementer_sessions.updates]]
+delay_ms = 30
+session_update = "agent_message_chunk"
+content = "Task B failed!\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = false
+message = "Failure B"
+
+[[implementer_sessions.updates]]
+delay_ms = 10
+session_update = "agent_turn_finished"
+
+# Implementer C - succeeds
+[[implementer_sessions]]
+session_id = "implementer-003"
+
+[[implementer_sessions.updates]]
+delay_ms = 30
+session_update = "agent_message_chunk"
+content = "Task C complete.\n"
+
+[implementer_sessions.updates.inject_mcp_tool_call]
+tool = "complete"
+success = true
+message = "Success C"
+
+[[implementer_sessions.updates]]
+delay_ms = 10
+session_update = "agent_turn_finished"
+

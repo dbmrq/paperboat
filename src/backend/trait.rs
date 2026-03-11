@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::acp::AcpClientTrait;
-use crate::models::ModelTier;
+use crate::models::{EffortLevel, ModelTier};
 
 use super::transport::{AgentTransport, AgentType, TransportKind};
 
@@ -229,14 +229,28 @@ pub trait Backend: Send + Sync {
     /// model version for that tier in this backend.
     async fn available_tiers(&self) -> Result<HashSet<ModelTier>>;
 
-    /// Resolve a model tier to the actual model ID string for this backend.
+    /// Resolve a model tier to a fallback chain of model IDs for this backend.
+    ///
+    /// Returns a list of model ID strings to try in order. The spawning code
+    /// should try each model until one succeeds or all fail.
     ///
     /// Each backend may use different model ID formats:
     /// - Auggie: "sonnet4.5", "opus4.5", "haiku4.5"
     /// - Cursor: "sonnet-4.6", "opus-4.6", "gpt-5.1-codex-mini"
     ///
-    /// Returns the model ID string to pass to `session_new()`.
-    fn resolve_tier(&self, tier: ModelTier) -> Result<String>;
+    /// # Effort Level
+    ///
+    /// The optional `effort` parameter affects which models are preferred in
+    /// the fallback chain. For example, with `High` effort:
+    /// - First try models with high effort variants (e.g., `gpt-5.4-high`)
+    /// - Then fall back to base models (e.g., `gpt-5.4`)
+    /// - Then try older versions (e.g., `gpt-5.3-high`, `gpt-5.3`)
+    ///
+    /// # Returns
+    ///
+    /// A vector of model ID strings to try, ordered by preference (best first).
+    /// Returns an error only if the tier is completely unavailable on this backend.
+    fn resolve_tier(&self, tier: ModelTier, effort: Option<EffortLevel>) -> Result<Vec<String>>;
 
     /// Set up MCP server configuration for this backend.
     ///

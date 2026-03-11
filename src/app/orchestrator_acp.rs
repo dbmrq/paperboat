@@ -27,8 +27,13 @@ impl App {
             return;
         };
 
-        let Some(session_update) = update.get("sessionUpdate").and_then(|v| v.as_str()) else {
-            tracing::trace!("📨 Orchestrator update missing sessionUpdate field");
+        // Support both ACP format (sessionUpdate) and CLI format (type)
+        let Some(session_update) = update
+            .get("sessionUpdate")
+            .or_else(|| update.get("type"))
+            .and_then(|v| v.as_str())
+        else {
+            tracing::trace!("📨 Orchestrator update missing sessionUpdate/type field");
             return;
         };
 
@@ -131,7 +136,11 @@ impl App {
                         continue;
                     };
 
-                    let msg_session_id = params.get("sessionId").and_then(|v| v.as_str());
+                    // Support both ACP format (sessionId) and CLI format (session_id)
+                    let msg_session_id = params
+                        .get("sessionId")
+                        .or_else(|| params.get("session_id"))
+                        .and_then(|v| v.as_str());
 
                     // Check if this message is for our session
                     if msg_session_id != Some(session_id) {
@@ -153,10 +162,15 @@ impl App {
                         continue;
                     };
 
-                    let session_update = update.get("sessionUpdate").and_then(|v| v.as_str());
+                    // Support both ACP format (sessionUpdate) and CLI format (type)
+                    let session_update = update
+                        .get("sessionUpdate")
+                        .or_else(|| update.get("type"))
+                        .and_then(|v| v.as_str());
 
                     match session_update {
-                        Some("session_finished" | "agent_turn_finished") => {
+                        // ACP: "session_finished", "agent_turn_finished", CLI: "complete"
+                        Some("session_finished" | "agent_turn_finished" | "complete") => {
                             tracing::debug!(
                                 "✅ Orchestrator session {} properly finished",
                                 session_id
@@ -184,5 +198,134 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::transport::{AgentTransport, SessionConfig, SessionInfo, SessionUpdate, ToolResult};
+    use crate::logging::{AgentType, RunLogManager};
+    use crate::models::{ModelConfig, ModelTier};
+    use crate::testing::{MockBackend, MockTransport};
+    use anyhow::{anyhow, Result};
+    use async_trait::async_trait;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use tempfile::tempdir;
+    use tokio::sync::mpsc;
+
+    struct QueueTransport {
+        messages: Arc<Mutex<VecDeque<serde_json::Value>>>,
+    }
+
+    impl QueueTransport {
+        fn new(messages: Vec<serde_json::Value>) -> Self {
+            Self {
+                messages: Arc::new(Mutex::new(messages.into())),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentTransport for QueueTransport {
+        async fn initialize(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn create_session(&mut self, _config: SessionConfig) -> Result<SessionInfo> {
+            Ok(SessionInfo::new("unused"))
+        }
+
+        async fn send_prompt(&mut self, _session_id: &str, _prompt: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn take_notifications(&mut self) -> Option<mpsc::Receiver<SessionUpdate>> {
+            None
+        }
+
+        async fn respond_to_tool(
+            &mut self,
+            _session_id: &str,
+            _tool_use_id: &str,
+            _result: ToolResult,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn recv(&mut self) -> Result<serde_json::Value> {
+            self.messages
+                .lock()
+                .expect("pop queued ACP message")
+                .pop_front()
+                .ok_or_else(|| anyhow!("No queued orchestrator messages"))
+        }
+    }
+
+    fn test_model_config() -> ModelConfig {
+        ModelConfig::new([ModelTier::Sonnet, ModelTier::Opus, ModelTier::Haiku].into_iter().collect())
+    }
+
+    #[tokio::test]
+    async fn drain_orchestrator_messages_stops_after_cross_session_message() {
+        let dir = tempdir().expect("create temp dir");
+        let run_dir = dir.path().join("logs");
+        let log_manager =
+            Arc::new(RunLogManager::with_run_dir(run_dir.clone()).expect("create run dir"));
+        let log_path = run_dir.join("orchestrator.log");
+
+        let queued_messages = vec![
+            serde_json::json!({
+                "method": "session/update",
+                "params": {
+                    "sessionId": "child-session",
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": { "text": "child output" }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "method": "session/update",
+                "params": {
+                    "sessionId": "parent-session",
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": { "text": "parent output" }
+                    }
+                }
+            }),
+        ];
+
+        let mut app = App::with_mock_transports(
+            Box::new(MockBackend::new()),
+            Box::new(QueueTransport::new(queued_messages)),
+            Box::new(MockTransport::empty()),
+            Box::new(MockTransport::empty()),
+            test_model_config(),
+            log_manager,
+        );
+
+        let (event_tx, _) = tokio::sync::broadcast::channel(8);
+        let mut writer = AgentWriter::new(log_path.clone(), AgentType::Orchestrator, event_tx, 0)
+            .await
+            .expect("create orchestrator writer");
+
+        app.drain_orchestrator_messages("child-session", &mut writer)
+            .await;
+        writer.finalize(true).await.expect("flush orchestrator log");
+
+        let log_contents =
+            std::fs::read_to_string(log_path).expect("read orchestrator log after drain");
+        assert!(log_contents.contains("child output"));
+        assert!(
+            !log_contents.contains("parent output"),
+            "drain should stop before logging another session's output"
+        );
     }
 }

@@ -85,7 +85,7 @@ mod tests {
         let listener = IpcListener::bind(&addr).await.unwrap();
 
         // Spawn server task
-        let server_addr = addr.clone();
+        let _server_addr = addr.clone(); // Keep addr clone for potential future debugging
         let server = tokio::spawn(async move {
             let stream = listener.accept().await.unwrap();
             let (reader, mut writer) = stream.into_split();

@@ -24,11 +24,13 @@ use super::events::{
 };
 use super::layout::calculate_layout;
 use super::state::{FocusedPanel, ModelConfigUpdate, TuiState};
+use super::widgets::BackendSelectionState;
 use super::widgets::{
-    render_agent_output, render_agent_tree, render_app_logs, render_help_overlay,
-    render_settings_overlay, render_splash_screen, render_status_bar, render_task_detail,
-    render_task_list,
+    render_agent_output, render_agent_tree, render_app_logs, render_backend_selection_popup,
+    render_help_overlay, render_settings_overlay, render_splash_screen, render_status_bar,
+    render_task_detail, render_task_list,
 };
+use crate::backend::BackendKind;
 use crate::logging::LogEvent;
 use crate::models::ModelConfig;
 
@@ -121,9 +123,10 @@ pub fn run_tui_with_config(
 /// struct containing all necessary channels for communication with the main app.
 ///
 /// The TUI will:
-/// 1. Start immediately and show a "loading" state
-/// 2. Wait for the initial model configuration via `initial_config_rx`
-/// 3. Display model config and handle updates via `config_update_tx`
+/// 1. Start immediately and show the splash screen
+/// 2. Check for available backends (if multiple, show selection popup over splash)
+/// 3. Wait for the initial model configuration via `initial_config_rx`
+/// 4. Display model config and handle updates via `config_update_tx`
 ///
 /// # Arguments
 ///
@@ -133,37 +136,20 @@ pub fn run_tui_with_config(
 ///
 /// Returns an error if terminal initialization or cleanup fails.
 pub fn run_tui_with_channels(channels: super::TuiThreadChannels) -> Result<()> {
-    use std::time::Duration;
-
     // Install panic hook to restore terminal on crash
     install_panic_hook();
 
     // Initialize terminal
     let mut terminal = init_terminal().context("Failed to initialize terminal")?;
 
-    // Wait for initial model config with timeout (10 seconds should be plenty)
-    // This allows the TUI to start immediately while model discovery happens in main
-    let model_config = match channels
-        .initial_config_rx
-        .recv_timeout(Duration::from_secs(30))
-    {
-        Ok(config) => Some(config),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            tracing::warn!("Timeout waiting for initial model config, starting with defaults");
-            None
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            tracing::warn!("Initial config channel disconnected, starting with defaults");
-            None
-        }
-    };
-
-    // Run the main event loop with config support
-    let result = run_event_loop(
+    // Run the main event loop with all channels
+    let result = run_event_loop_with_backend_selection(
         &mut terminal,
         channels.event_rx,
-        model_config,
-        Some(channels.config_update_tx),
+        channels.initial_config_rx,
+        channels.config_update_tx,
+        channels.available_backends_rx,
+        channels.selected_backend_tx,
     );
 
     // Always restore terminal, regardless of how we exit
@@ -367,6 +353,190 @@ fn run_event_loop(
     Ok(())
 }
 
+/// Main event loop with backend selection support.
+///
+/// This version handles the complete startup flow:
+/// 1. Shows splash screen immediately
+/// 2. Receives available backends and shows selection popup if multiple
+/// 3. Sends selected backend back to App
+/// 4. Receives model config and continues normal operation
+#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::too_many_arguments)]
+fn run_event_loop_with_backend_selection(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    event_rx: Receiver<LogEvent>,
+    initial_config_rx: Receiver<ModelConfig>,
+    config_tx: SyncSender<ModelConfigUpdate>,
+    available_backends_rx: Receiver<Vec<BackendKind>>,
+    selected_backend_tx: SyncSender<BackendKind>,
+) -> Result<()> {
+    // Initialize TUI state with splash visible
+    let mut state = TuiState::new();
+
+    // Track whether we've received model config yet
+    let mut model_config_received = false;
+
+    // Frame timing
+    let mut last_frame = Instant::now();
+
+    loop {
+        // =====================================================================
+        // 1. Check for available backends (non-blocking)
+        // =====================================================================
+        // Keep checking until we receive backends, even if splash is dismissed.
+        // This prevents a race condition where backends arrive right as splash
+        // auto-dismisses after 5 seconds.
+        if !state.backends_received && !state.backend_selection_state.visible {
+            if let Ok(backends) = available_backends_rx.try_recv() {
+                state.backends_received = true;
+                if backends.len() > 1 {
+                    // Multiple backends available - show selection popup
+                    // Also show splash again if it was dismissed (to show popup on top)
+                    if !state.splash_visible {
+                        state.splash_visible = true;
+                    }
+                    state.backend_selection_state = BackendSelectionState::with_backends(backends);
+                } else if let Some(&backend) = backends.first() {
+                    // Single backend - send it back immediately
+                    let _ = selected_backend_tx.try_send(backend);
+                }
+            }
+        }
+
+        // =====================================================================
+        // 2. Check for model config (non-blocking, keeps splash running)
+        // =====================================================================
+        if !model_config_received {
+            if let Ok(config) = initial_config_rx.try_recv() {
+                let available_tiers: Vec<_> = config.available_tiers.iter().copied().collect();
+                state.model_config = config;
+                state.available_tiers = available_tiers;
+                model_config_received = true;
+            }
+        }
+
+        // =====================================================================
+        // 3. Process all available LogEvents (non-blocking, batched)
+        // =====================================================================
+        let mut events_processed = 0;
+        while let Ok(log_event) = event_rx.try_recv() {
+            state.handle_event(log_event);
+            events_processed += 1;
+
+            if events_processed >= MAX_EVENTS_PER_FRAME {
+                break;
+            }
+        }
+
+        // =====================================================================
+        // 4. Poll for keyboard events (with short timeout for responsiveness)
+        // =====================================================================
+        let poll_timeout = Duration::from_millis(16);
+
+        if event::poll(poll_timeout).context("Failed to poll for events")? {
+            match event::read().context("Failed to read event")? {
+                CrosstermEvent::Key(key) => {
+                    if key.kind == KeyEventKind::Press {
+                        // Handle backend selection popup keys
+                        if state.backend_selection_state.visible {
+                            use crossterm::event::KeyCode;
+                            match key.code {
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    state.backend_selection_state.select_previous();
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    state.backend_selection_state.select_next();
+                                }
+                                KeyCode::Enter => {
+                                    if let Some(backend) =
+                                        state.backend_selection_state.confirm_selection()
+                                    {
+                                        let _ = selected_backend_tx.try_send(backend);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            // Normal key handling
+                            let layout = terminal
+                                .size()
+                                .map(|r| calculate_layout(Rect::new(0, 0, r.width, r.height)))
+                                .unwrap_or_default();
+
+                            match handle_key_event(&mut state, key, &layout) {
+                                EventResult::Quit => break,
+                                EventResult::Continue => {}
+                            }
+                        }
+                    }
+                }
+                CrosstermEvent::Resize(_width, _height) => {
+                    last_frame = Instant::now()
+                        .checked_sub(TARGET_FRAME_DURATION)
+                        .unwrap_or(last_frame);
+                }
+                CrosstermEvent::Mouse(mouse_event) => {
+                    if !state.backend_selection_state.visible {
+                        if let Ok(size) = terminal.size() {
+                            let area = Rect::new(0, 0, size.width, size.height);
+                            let layout = calculate_layout(area);
+
+                            match mouse_event.kind {
+                                event::MouseEventKind::Down(_) => {
+                                    handle_mouse_click(&mut state, mouse_event, &layout);
+                                }
+                                event::MouseEventKind::ScrollUp => {
+                                    handle_mouse_scroll(
+                                        &mut state,
+                                        mouse_event,
+                                        &layout,
+                                        ScrollDirection::Up,
+                                    );
+                                }
+                                event::MouseEventKind::ScrollDown => {
+                                    handle_mouse_scroll(
+                                        &mut state,
+                                        mouse_event,
+                                        &layout,
+                                        ScrollDirection::Down,
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // =====================================================================
+        // 5. Send pending config updates to the App
+        // =====================================================================
+        if let Some(update) = state.take_pending_config_update() {
+            if let Err(e) = config_tx.try_send(update) {
+                tracing::warn!("Failed to send model config update to App: {}", e);
+            }
+        }
+
+        // =====================================================================
+        // 6. Render frame (respecting frame rate limit)
+        // =====================================================================
+        if last_frame.elapsed() >= TARGET_FRAME_DURATION {
+            state.animation_frame = state.animation_frame.wrapping_add(1);
+
+            terminal
+                .draw(|frame| {
+                    render_ui_frame(frame, &mut state);
+                })
+                .context("Failed to draw frame")?;
+            last_frame = Instant::now();
+        }
+    }
+
+    Ok(())
+}
+
 /// Renders a complete UI frame with all widgets.
 ///
 /// This function orchestrates rendering of all panels:
@@ -381,12 +551,23 @@ fn render_ui_frame(frame: &mut Frame, state: &mut TuiState) {
     let area = frame.area();
 
     // Show splash screen if visible (replaces the entire UI)
-    // Auto-dismiss after 5 seconds (300 frames at 60fps)
+    // Auto-dismiss after 5 seconds (300 frames at 60fps), but only if backends have been received
     if state.splash_visible {
-        if state.animation_frame >= 300 {
+        // Always render the splash screen first
+        render_splash_screen(frame, area, state.animation_frame);
+
+        // If backend selection popup is visible, render it on top of splash
+        if state.backend_selection_state.visible {
+            render_backend_selection_popup(frame, area, &state.backend_selection_state);
+            return;
+        }
+
+        // Auto-dismiss splash after 5 seconds, but ONLY if backends have been received.
+        // This prevents the race condition where splash dismisses before we can show
+        // the backend selection popup.
+        if state.animation_frame >= 300 && state.backends_received {
             state.dismiss_splash();
         } else {
-            render_splash_screen(frame, area, state.animation_frame);
             return;
         }
     }
@@ -455,4 +636,63 @@ fn render_too_small_message(frame: &mut Frame, area: Rect) {
         .style(Style::default().fg(Color::Yellow));
 
     frame.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn render_ui_to_string(state: &mut TuiState, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| render_ui_frame(frame, state))
+            .expect("ui frame should render");
+        format!("{}", terminal.backend())
+    }
+
+    #[test]
+    fn test_render_ui_frame_keeps_splash_visible_until_backends_are_received() {
+        let mut state = TuiState::new();
+        state.animation_frame = 300;
+        state.backends_received = false;
+
+        render_ui_to_string(&mut state, 120, 40);
+
+        assert!(state.splash_visible);
+
+        state.backends_received = true;
+        render_ui_to_string(&mut state, 120, 40);
+
+        assert!(!state.splash_visible);
+    }
+
+    #[test]
+    fn test_render_ui_frame_backend_selection_takes_precedence_during_splash() {
+        let mut state = TuiState::new();
+        state.help_visible = true;
+        state.settings_visible = true;
+        state.backend_selection_state =
+            BackendSelectionState::with_backends(vec![BackendKind::Auggie, BackendKind::Cursor]);
+
+        let rendered = render_ui_to_string(&mut state, 120, 40);
+
+        assert!(rendered.contains("Select Backend"));
+        assert!(!rendered.contains("Keyboard Shortcuts"));
+        assert!(!rendered.contains("Model Settings"));
+    }
+
+    #[test]
+    fn test_render_ui_frame_settings_overlay_renders_above_help_overlay() {
+        let mut state = TuiState::new();
+        state.splash_visible = false;
+        state.help_visible = true;
+        state.settings_visible = true;
+
+        let rendered = render_ui_to_string(&mut state, 120, 40);
+
+        assert!(rendered.contains("Model Settings"));
+        assert!(!rendered.contains("Keyboard Shortcuts"));
+    }
 }

@@ -55,6 +55,9 @@ pub async fn discover_cursor_tiers() -> Result<HashSet<ModelTier>> {
 /// - `gemini-*-flash` → GeminiFlash
 /// - `grok*` → Grok
 /// - `composer-*` → Composer
+///
+/// Also adds meta-tiers:
+/// - If any GPT model is available → adds OpenAI meta-tier
 pub fn parse_cursor_tiers(output: &str) -> Result<HashSet<ModelTier>> {
     let mut tiers = HashSet::new();
 
@@ -75,6 +78,14 @@ pub fn parse_cursor_tiers(output: &str) -> Result<HashSet<ModelTier>> {
         }
     }
 
+    // Add meta-tiers: OpenAI is available if any GPT model is available
+    if tiers.contains(&ModelTier::Gpt)
+        || tiers.contains(&ModelTier::Codex)
+        || tiers.contains(&ModelTier::CodexMini)
+    {
+        tiers.insert(ModelTier::OpenAI);
+    }
+
     Ok(tiers)
 }
 
@@ -83,6 +94,7 @@ pub fn parse_cursor_tiers(output: &str) -> Result<HashSet<ModelTier>> {
 /// Examples:
 /// - "sonnet-4.6" → Sonnet
 /// - "opus-4.5-thinking" → Opus
+/// - "gpt-5.4-high" → Gpt
 /// - "gpt-5.1-codex-mini" → CodexMini
 /// - "gpt-5.3-codex" → Codex
 /// - "gemini-3.1-pro" → Gemini
@@ -100,12 +112,16 @@ fn extract_tier_from_cursor_id(id: &str) -> Option<ModelTier> {
         return Some(ModelTier::Opus);
     }
 
-    // GPT models - check for specific tiers
+    // GPT models - check for specific tiers first (most specific match)
     if lower.contains("codex-mini") {
         return Some(ModelTier::CodexMini);
     }
     if lower.contains("codex") {
         return Some(ModelTier::Codex);
+    }
+    // Generic GPT (not codex)
+    if lower.starts_with("gpt") {
+        return Some(ModelTier::Gpt);
     }
 
     // Gemini models
@@ -147,6 +163,8 @@ gpt-5.1-codex-mini - GPT-5.1 Codex Mini
         assert!(tiers.contains(&ModelTier::Sonnet));
         assert!(tiers.contains(&ModelTier::Opus));
         assert!(tiers.contains(&ModelTier::CodexMini));
+        // OpenAI meta-tier should be added when any GPT model is available
+        assert!(tiers.contains(&ModelTier::OpenAI));
     }
 
     #[test]
@@ -171,8 +189,29 @@ composer-1.5 - Composer 1.5
         assert!(tiers.contains(&ModelTier::GeminiFlash));
         assert!(tiers.contains(&ModelTier::Grok));
         assert!(tiers.contains(&ModelTier::Composer));
+        // OpenAI meta-tier should be added
+        assert!(tiers.contains(&ModelTier::OpenAI));
         // Haiku should NOT be present
         assert!(!tiers.contains(&ModelTier::Haiku));
+    }
+
+    #[test]
+    fn test_parse_cursor_tiers_openai_meta_tier() {
+        // Test that OpenAI is added when GPT is available
+        let output_with_gpt = r#"
+gpt-5.4 - GPT 5.4
+"#;
+        let tiers = parse_cursor_tiers(output_with_gpt).unwrap();
+        assert!(tiers.contains(&ModelTier::Gpt));
+        assert!(tiers.contains(&ModelTier::OpenAI));
+
+        // Test that OpenAI is NOT added when only Claude models are available
+        let output_without_gpt = r#"
+sonnet-4.6 - Claude 4.6 Sonnet
+opus-4.6 - Claude 4.6 Opus
+"#;
+        let tiers = parse_cursor_tiers(output_without_gpt).unwrap();
+        assert!(!tiers.contains(&ModelTier::OpenAI));
     }
 
     #[test]
