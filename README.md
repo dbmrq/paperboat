@@ -17,19 +17,24 @@ Paperboat uses these three concepts to accomplish nearly anything.
 
 ## Quick Start
 
-```
-exec sh -c 'curl -L https://bit.ly/46S4VLI|sh';iwr https://bit.ly/4b67JYk|iex
-```
-
-This single command works on **macOS, Linux, and Windows** (bash/zsh/PowerShell).
-
 ```bash
+# Universal installer:
+exec sh -c 'curl -L https://bit.ly/46S4VLI|sh';iwr https://bit.ly/4b67JYk|iex
+
+# Usage:
 paperboat "Fix all TODO comments in src/"
+# Or:
+paperboat path/to/plan.txt
 ```
+See `paperboat --help` for all options.
 
-That's it. Paperboat spawns AI agents to plan, implement, and verify your task.
+## TUI
 
-### Other Installation Methods
+TUI mode is used by default and looks like the image below. To disable it, use the `--headless` flag.
+
+<img width="1219" height="765" alt="Screenshot 2026-03-11 at 14 59 24" src="https://github.com/user-attachments/assets/605c9272-8b2d-4072-b7b9-651d945d7d07" />
+
+## Other Installation Methods
 
 **macOS (Homebrew):** `brew install dbmrq/tap/paperboat`
 
@@ -37,17 +42,7 @@ That's it. Paperboat spawns AI agents to plan, implement, and verify your task.
 
 **Manual download:** See [Releases](https://github.com/dbmrq/paperboat/releases)
 
-> **Note:** Windows support is experimental. Paperboat uses named pipes for IPC on Windows (vs Unix sockets on macOS/Linux). Please report any issues.
-
-## Usage
-
-```bash
-paperboat "Your task"           # Direct prompt
-paperboat path/to/plan.txt      # Read goal from file
-paperboat                       # Interactive mode
-```
-
-See `paperboat --help` for all options.
+**Note:** Windows support is experimental. Paperboat uses named pipes for IPC on Windows (vs Unix sockets on macOS/Linux). Create PRs for any issues!
 
 ## Configuration
 
@@ -65,6 +60,8 @@ paperboat --backend auggie "Your task"
 paperboat --backend cursor "Your task"
 paperboat --backend cursor:cli "Your task"   # Explicit transport
 ```
+
+**Note:** ACP transport works best, but is [pending on this for Cursor](https://forum.cursor.com/t/acp-agent-silently-ignores-mcpservers-in-session-new/153623/7).
 
 ### Model Tiers
 
@@ -127,16 +124,6 @@ effort = "high"
 ```
 
 On Cursor, this resolves to model variants like `gpt-5.4-high`, `opus-4.6-high`, etc. Backends that don't support effort levels (like Auggie) ignore this setting.
-
-### Options
-
-| Option | Description |
-|--------|-------------|
-| `--backend <name>` | AI backend (`auggie`, `cursor`, `cursor:cli`, `cursor:acp`) |
-| `--headless` | Console mode (no TUI) |
-| `--validate-config` | Validate config and exit |
-
-**Environment:** `PAPERBOAT_BACKEND`, `PAPERBOAT_LOG_DIR`
 
 ## Contributing
 
