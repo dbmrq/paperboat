@@ -44,6 +44,10 @@ use crate::backend::transport::{AgentTransport, AgentType, TransportKind};
 use crate::backend::{AgentCacheType, Backend, TransportConfig};
 use crate::models::ModelTier;
 
+fn static_chain(models: &[&str]) -> Vec<String> {
+    models.iter().map(|model| (*model).to_string()).collect()
+}
+
 /// Auggie CLI backend implementation.
 ///
 /// This is a zero-sized type that implements the [`Backend`] trait for
@@ -102,21 +106,23 @@ impl Backend for AuggieBackend {
         tier: ModelTier,
         _effort: Option<crate::models::EffortLevel>,
     ) -> Result<Vec<String>> {
-        // Auggie uses format like "haiku4.5", "sonnet4.5", "opus4.5"
+        // Auggie uses format like "haiku4.5", "sonnet4.6", "opus4.6", "gpt5.4"
         // Returns a fallback chain of versions to try (newest first)
         // Note: Auggie doesn't support effort levels - the parameter is ignored
         match tier {
             ModelTier::Auto => Ok(vec!["auto".to_string()]),
-            // Opus: try 4.5 (latest known)
-            ModelTier::Opus => Ok(vec!["opus4.5".to_string()]),
-            // Sonnet: try 4.5 (latest known)
-            ModelTier::Sonnet => Ok(vec!["sonnet4.5".to_string()]),
-            // Haiku: try 4.5 (latest known)
-            ModelTier::Haiku => Ok(vec!["haiku4.5".to_string()]),
+            // Opus: newest first, then older known versions
+            ModelTier::Opus => Ok(static_chain(&["opus4.6", "opus4.5"])),
+            // Sonnet: newest first, then older known versions
+            ModelTier::Sonnet => Ok(static_chain(&["sonnet4.6", "sonnet4.5", "sonnet4"])),
+            // Haiku: only 4.5 is currently exposed by Auggie
+            ModelTier::Haiku => Ok(static_chain(&["haiku4.5"])),
+            // GPT/OpenAI: newest first, then older known versions
+            ModelTier::Gpt | ModelTier::OpenAI => {
+                Ok(static_chain(&["gpt5.4", "gpt5.2", "gpt5.1", "gpt5"]))
+            }
             // Auggie doesn't have these tiers
-            ModelTier::Gpt
-            | ModelTier::OpenAI
-            | ModelTier::Codex
+            ModelTier::Codex
             | ModelTier::CodexMini
             | ModelTier::Gemini
             | ModelTier::GeminiFlash
@@ -286,6 +292,34 @@ mod tests {
         let backend = AuggieBackend::new();
         let transports = backend.supported_transports();
         assert!(!transports.contains(&TransportKind::Cli));
+    }
+
+    #[test]
+    fn test_auggie_resolve_tier_prefers_latest_known_versions() {
+        let backend = AuggieBackend::new();
+
+        assert_eq!(
+            backend.resolve_tier(ModelTier::Sonnet, None).unwrap(),
+            vec!["sonnet4.6", "sonnet4.5", "sonnet4"]
+        );
+        assert_eq!(
+            backend.resolve_tier(ModelTier::Opus, None).unwrap(),
+            vec!["opus4.6", "opus4.5"]
+        );
+        assert_eq!(
+            backend.resolve_tier(ModelTier::Gpt, None).unwrap(),
+            vec!["gpt5.4", "gpt5.2", "gpt5.1", "gpt5"]
+        );
+    }
+
+    #[test]
+    fn test_auggie_resolve_tier_openai_maps_to_gpt_family() {
+        let backend = AuggieBackend::new();
+
+        assert_eq!(
+            backend.resolve_tier(ModelTier::OpenAI, None).unwrap(),
+            vec!["gpt5.4", "gpt5.2", "gpt5.1", "gpt5"]
+        );
     }
 
     #[tokio::test]

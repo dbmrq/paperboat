@@ -538,6 +538,11 @@ pub fn parse_auggie_model_list(output: &str) -> Result<HashSet<ModelTier>> {
         }
     }
 
+    // Add meta-tier: OpenAI is available if any GPT model is available
+    if tiers.contains(&ModelTier::Gpt) {
+        tiers.insert(ModelTier::OpenAI);
+    }
+
     Ok(tiers)
 }
 
@@ -556,7 +561,7 @@ fn extract_tier_from_auggie_id(id: &str) -> Option<ModelTier> {
     } else if lower.starts_with("opus") {
         Some(ModelTier::Opus)
     } else if lower.starts_with("gpt") {
-        Some(ModelTier::Codex) // Map GPT models to Codex tier
+        Some(ModelTier::Gpt)
     } else if lower == "auto" {
         Some(ModelTier::Auto)
     } else {
@@ -871,16 +876,20 @@ mod tests {
     fn test_parse_auggie_model_list() {
         let output = r" - Haiku 4.5 [haiku4.5]
       Fast and efficient responses
- - Opus 4.5 [opus4.5]
+ - Claude Opus 4.6 [opus4.6]
       Best for complex tasks
- - Sonnet 4.5 [sonnet4.5]
-      Great for everyday tasks";
+ - Sonnet 4.6 [sonnet4.6]
+      Great for everyday tasks
+ - GPT-5.4 [gpt5.4]
+      Strong reasoning and planning";
 
         let tiers = parse_auggie_model_list(output).unwrap();
 
         assert!(tiers.contains(&ModelTier::Haiku));
         assert!(tiers.contains(&ModelTier::Opus));
         assert!(tiers.contains(&ModelTier::Sonnet));
+        assert!(tiers.contains(&ModelTier::Gpt));
+        assert!(tiers.contains(&ModelTier::OpenAI));
     }
 
     #[test]

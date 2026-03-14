@@ -62,7 +62,7 @@ fn handle_initialize(id: Option<&Value>) -> Value {
         },
         "serverInfo": {
             "name": "paperboat-orchestrator",
-            "version": "0.1.0"
+            "version": env!("CARGO_PKG_VERSION")
         }
     });
 
